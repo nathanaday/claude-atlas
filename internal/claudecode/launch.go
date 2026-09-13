@@ -23,9 +23,13 @@ const (
 	EnvSessionContext = "CLAUDE_ATLAS_SESSION_CONTEXT"
 )
 
+// IngestPrompt is the first message that starts an ingest of the inbox.
+const IngestPrompt = "/claude-atlas:wiki-ingest"
+
 // LaunchCommand builds the process that runs Claude Code in a vault, with the vault
-// selected explicitly so the plugin never has to guess.
-func LaunchCommand(cfg LaunchConfig, vault string) (*exec.Cmd, error) {
+// selected explicitly so the plugin never has to guess. prompt is the first message;
+// empty means the configured one, if any.
+func LaunchCommand(cfg LaunchConfig, vault, prompt string) (*exec.Cmd, error) {
 	command := cfg.Command
 	if command == "" {
 		command = "claude"
@@ -35,8 +39,11 @@ func LaunchCommand(cfg LaunchConfig, vault string) (*exec.Cmd, error) {
 		return nil, ErrNoClaude
 	}
 	args := append([]string{}, cfg.Args...)
-	if cfg.Prompt != "" {
-		args = append(args, cfg.Prompt)
+	if prompt == "" {
+		prompt = cfg.Prompt
+	}
+	if prompt != "" {
+		args = append(args, prompt)
 	}
 	cmd := exec.Command(path, args...)
 	cmd.Dir = vault

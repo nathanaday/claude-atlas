@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -26,7 +27,13 @@ type Hooks struct {
 	// Create makes or adopts a vault and registers it; it returns the project's rel.
 	Create func(AddVault) (string, error)
 	// Refresh rebuilds derived state for every project.
-	Refresh   func() error
+	Refresh func() error
+	// StagePlan says which files under a source are new to the project's vault; an empty
+	// source means its linked material folders.
+	StagePlan func(*tree.Project, string) (*capture.StagePlan, error)
+	// Stage copies a plan's files into the inbox and links new folders; it returns the
+	// folders it linked.
+	Stage     func(*tree.Project, *capture.StagePlan) (*capture.StageResult, []string, error)
 	VaultsDir string
 }
 

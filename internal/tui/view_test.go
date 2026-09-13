@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/capture"
+	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 )
 
@@ -111,7 +114,7 @@ func TestDownRevealsTheEndAndNeverWraps(t *testing.T) {
 
 func TestHintsFollowTheCursor(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
-	if out := v.View(); !strings.Contains(out, "o Obsidian · c Claude · e edit") {
+	if out := v.View(); !strings.Contains(out, "o Obsidian · c Claude · i ingest · e edit") {
 		t.Fatalf("project hints missing:\n%s", out)
 	}
 	v = pressV(v, tea.KeyDown) // engineering
@@ -313,7 +316,7 @@ func TestOpenFromDetail(t *testing.T) {
 
 func TestClaudeKeyHandsOffTheTerminal(t *testing.T) {
 	var got string
-	op := Opener{Claude: func(vault string) (*exec.Cmd, error) { got = vault; return exec.Command("true"), nil }}
+	op := Opener{Claude: func(vault, prompt string) (*exec.Cmd, error) { got = vault; return exec.Command("true"), nil }}
 	v := newView(sample(), op, Hooks{})
 	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
@@ -413,5 +416,79 @@ func TestRefreshKey(t *testing.T) {
 	none := keyV(newView(sample(), Opener{}, Hooks{}), "R")
 	if !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("R without hooks reports why")
+	}
+}
+
+func TestIngestFromTheTree(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "Papers")
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "a.pdf"), []byte("a"), 0o644)
+	var planned, staged []string
+	var launched string
+	hooks := Hooks{
+		Load: func() ([]*tree.Project, error) {
+			var ps []*tree.Project
+			for _, it := range sample() {
+				ps = append(ps, it.Project)
+			}
+			return ps, nil
+		},
+		StagePlan: func(p *tree.Project, source string) (*capture.StagePlan, error) {
+			if source == "" {
+				return nil, errors.New("name a file or folder to ingest")
+			}
+			planned = append(planned, source)
+			return &capture.StagePlan{Vault: p.VaultPath(), Sources: []string{source}, Dirs: []string{source},
+				New: []capture.Staged{{From: filepath.Join(source, "a.pdf"), To: "inbox/Papers/a.pdf"}}, Unchanged: []string{"x"}}, nil
+		},
+		Stage: func(p *tree.Project, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
+			staged = append(staged, plan.New[0].To)
+			return &capture.StageResult{Staged: plan.New}, plan.Dirs, nil
+		},
+	}
+	op := Opener{Claude: func(vault, prompt string) (*exec.Cmd, error) { launched = prompt; return exec.Command("true"), nil }}
+	v := newView(sample(), op, hooks)
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
+	v = keyV(v, "i")
+	if v.ingest == nil || !strings.Contains(v.View(), "Ingest into p3") {
+		t.Fatalf("i should open the ingest screen:\n%s", v.View())
+	}
+	v = pressV(v, tea.KeyEnter) // blank source is refused by the hook
+	if v.ingest == nil || v.ingest.err == "" || v.ingest.step != ingestPath {
+		t.Fatalf("blank source: %+v", v.ingest)
+	}
+	v = typeV(v, src)
+	v = pressV(v, tea.KeyEnter)
+	out := v.View()
+	if v.ingest.step != ingestConfirm || !strings.Contains(out, "1 file → inbox/") || !strings.Contains(out, "Papers/a.pdf") || !strings.Contains(out, "1 already ingested") || !strings.Contains(out, "becomes material") {
+		t.Fatalf("confirm step:\n%s", out)
+	}
+	v = pressV(v, tea.KeyEsc) // back to the path
+	if v.ingest.step != ingestPath {
+		t.Fatal("esc should go back to the path")
+	}
+	v = pressV(v, tea.KeyEnter, tea.KeyEnter) // plan again, then stage
+	if v.ingest == nil || v.ingest.step != ingestLaunch || len(staged) != 1 || !strings.Contains(v.View(), "Staged") {
+		t.Fatalf("launch step: ingest=%+v staged=%v", v.ingest, staged)
+	}
+	v = pressV(v, tea.KeyEsc) // later
+	if v.ingest != nil || !strings.Contains(v.status, "staged 1 file") || launched != "" || !v.changed {
+		t.Fatalf("later: status=%q launched=%q changed=%v", v.status, launched, v.changed)
+	}
+	// Once more, starting Claude Code this time.
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	v = keyV(v, "i")
+	v = typeV(v, src)
+	next, cmd := pressV(v, tea.KeyEnter, tea.KeyEnter).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v = next.(view)
+	if v.ingest != nil || cmd == nil || launched != claudecode.IngestPrompt {
+		t.Fatalf("start now: ingest=%v cmd=%v launched=%q", v.ingest, cmd, launched)
+	}
+	if len(planned) != 3 {
+		t.Fatalf("planned %v", planned)
+	}
+	none := keyV(pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown, tea.KeyDown, tea.KeyDown), "i")
+	if none.ingest != nil || !strings.Contains(none.errMsg, "not available") {
+		t.Fatal("i without hooks reports why")
 	}
 }

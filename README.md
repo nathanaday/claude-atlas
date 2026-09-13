@@ -72,8 +72,8 @@ pages; `/claude-atlas:wiki-query` answers from the vault. Claude shows a
 preview before every change, and `claude-atlas undo` takes one back.
 
 See every vault at once. The tree does everything the commands do: `o` opens
-a vault in Obsidian, `c` starts Claude Code in it, `e` edits its project page,
-`n` creates a vault, `a` adopts one, `R` refreshes:
+a vault in Obsidian, `c` starts Claude Code in it, `i` ingests sources, `e`
+edits its project page, `n` creates a vault, `a` adopts one, `R` refreshes:
 
 ```bash
 claude-atlas view

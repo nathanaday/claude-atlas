@@ -7,9 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/tree"
@@ -26,8 +28,9 @@ type Opener struct {
 	Status          func(vault string) (registered, running bool, err error)
 	Open            func(vault string) error
 	RegisterAndOpen func(vault string) error
-	// Claude builds the Claude Code process for a vault; the view hands it the terminal.
-	Claude func(vault string) (*exec.Cmd, error)
+	// Claude builds the Claude Code process for a vault, with prompt as the first
+	// message when not empty; the view hands it the terminal.
+	Claude func(vault, prompt string) (*exec.Cmd, error)
 }
 
 // claudeDoneMsg reports that a Claude Code session ended and the view has the terminal back.
@@ -139,6 +142,7 @@ type view struct {
 	hooks     Hooks
 	edit      *editor
 	add       *model // the add-vault or adopt screen while open
+	ingest    *ingestScreen
 	changed   bool
 	collapsed map[string]bool // category paths folded by the user
 	root      string
@@ -520,6 +524,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.add != nil {
 			return v.updateAdd(msg)
 		}
+		if v.ingest != nil {
+			return v.updateIngest(msg)
+		}
 		if msg.String() == "q" {
 			return v, tea.Quit
 		}
@@ -546,7 +553,7 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "R":
 			return v.refresh()
 		}
-		if key := msg.String(); key == "o" || key == "c" || key == "e" {
+		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" {
 			var item *Item
 			if v.detail != nil {
 				item = v.detail
@@ -558,9 +565,11 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			switch key {
 			case "c":
-				return v.claude(item)
+				return v.claude(item, "")
 			case "e":
 				return v.openEditor(item)
+			case "i":
+				return v.openIngest(item)
 			}
 			return v.open(item)
 		}
@@ -715,13 +724,56 @@ func (v view) updateEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, cmd
 }
 
+// openIngest starts the ingest screen for a project.
+func (v view) openIngest(item *Item) (tea.Model, tea.Cmd) {
+	if v.hooks.StagePlan == nil || v.hooks.Stage == nil {
+		v.errMsg = "ingesting is not available here"
+		return v, nil
+	}
+	s := newIngest(v.hooks, item)
+	v.ingest = &s
+	return v, textinput.Blink
+}
+
+// updateIngest forwards keys to the ingest screen and acts on how it ended.
+func (v view) updateIngest(msg tea.Msg) (tea.Model, tea.Cmd) {
+	s, cmd := v.ingest.update(msg)
+	switch s.outcome {
+	case ingestOpen:
+		v.ingest = &s
+		return v, cmd
+	case ingestCancelled:
+		v.ingest = nil
+		return v, nil
+	}
+	v.ingest = nil
+	item := s.item
+	if len(s.linked) > 0 {
+		keepDetail := v.detail != nil
+		v.changed = true
+		v.reload(item.Project.Rel)
+		if !keepDetail {
+			v.detail = nil
+		}
+	}
+	n := 0
+	if s.result != nil {
+		n = len(s.result.Staged)
+	}
+	if s.outcome == ingestStartNow {
+		return v.claude(item, claudecode.IngestPrompt)
+	}
+	v.status = fmt.Sprintf("staged %d file%s in inbox/; press c and run /claude-atlas:wiki-ingest when ready", n, plural(n))
+	return v, nil
+}
+
 // claude hands the terminal to a Claude Code session in the project's vault and resumes after.
-func (v view) claude(item *Item) (tea.Model, tea.Cmd) {
+func (v view) claude(item *Item, prompt string) (tea.Model, tea.Cmd) {
 	if v.opener.Claude == nil {
 		v.errMsg = "starting Claude Code is not available here"
 		return v, nil
 	}
-	cmd, err := v.opener.Claude(item.Project.VaultPath())
+	cmd, err := v.opener.Claude(item.Project.VaultPath(), prompt)
 	if err != nil {
 		v.errMsg = err.Error()
 		return v, nil
@@ -796,6 +848,9 @@ func (v view) View() string {
 	if v.add != nil {
 		return v.add.View()
 	}
+	if v.ingest != nil {
+		return v.ingest.view()
+	}
 	if v.detail != nil {
 		return v.viewDetail()
 	}
@@ -836,7 +891,7 @@ func (v view) treeHints() string {
 	if r := v.current(); r != nil {
 		switch r.kind {
 		case rowProject:
-			hints += " · Enter details · o Obsidian · c Claude · e edit · Space fold"
+			hints += " · Enter details · o Obsidian · c Claude · i ingest · e edit · Space fold"
 		case rowCategory:
 			if v.collapsed[r.path] {
 				hints += " · Enter unfold"
@@ -941,7 +996,7 @@ func (v view) viewDetail() string {
 			b.WriteString("    - " + t + "\n")
 		}
 	}
-	b.WriteString("\n" + v.footer("o Obsidian · c Claude Code · e edit · R refresh · Esc back · q quit"))
+	b.WriteString("\n" + v.footer("o Obsidian · c Claude Code · i ingest · e edit · R refresh · Esc back · q quit"))
 	return b.String()
 }
 

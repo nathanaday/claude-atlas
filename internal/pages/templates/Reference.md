@@ -46,7 +46,7 @@ claude-atlas open-vault my-project
 
 **View the atlas**
 
-> Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `e` edits it (or removes it with `r`); `n` creates a vault; `a` adopts one; `R` refreshes.
+> Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `e` edits it (or removes it with `r`); `n` creates a vault; `a` adopts one; `R` refreshes.
 
 ```bash
 claude-atlas view
@@ -100,6 +100,16 @@ claude-atlas info
 
 ```bash
 claude-atlas open-claude my-project
+```
+
+> Or stage a file or folder from anywhere and start the ingest in one step. Only files the vault has not seen are copied, so a growing folder can be ingested again and again; the folder is linked as material of the project, and `ingest` with no path stages what is new in every linked folder.
+
+```bash
+claude-atlas ingest my-project ~/Papers
+```
+
+```bash
+claude-atlas ingest my-project
 ```
 
 > The workflow, once inside: put a source in `inbox/`, ingest it, ask the vault questions, keep what matters.

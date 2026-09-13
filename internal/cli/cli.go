@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/console"
 	"github.com/nathanaday/claude-atlas/internal/gitx"
@@ -48,6 +49,7 @@ Vaults:
   adopt [PATH]           make an existing Obsidian or claude-obsidian vault a claude-atlas vault
   open-vault [NAME]      open the atlas, or a project's vault, in Obsidian
   open-claude NAME       start Claude Code inside a project's vault
+  ingest NAME [PATH...]  stage new files from outside the vault into its inbox, then ingest them
 
 The atlas:
   view                   the whole atlas as one interactive tree
@@ -133,6 +135,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.openVault(rest[1:])
 	case "open-claude":
 		code, err = e.openClaude(rest[1:])
+	case "ingest":
+		code, err = e.ingest(rest[1:])
 	case "link":
 		code, err = e.link(rest[1:])
 	case "unlink":
@@ -362,8 +366,75 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 		Unlink:    vaults.Unlink,
 		Create:    func(choice tui.AddVault) (string, error) { return e.createOrAdopt(cfg, choice) },
 		Refresh:   func() error { _, _, err := e.refreshAll(cfg); return err },
+		StagePlan: func(p *tree.Project, source string) (*capture.StagePlan, error) { return e.stagePlan(p, source) },
+		Stage: func(p *tree.Project, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
+			return e.stage(cfg, p, plan)
+		},
 		VaultsDir: cfg.VaultsDir,
 	}
+}
+
+// ingestSources are the paths an ingest reads: the given ones, or the project's linked
+// material folders when none is given.
+func ingestSources(p *tree.Project, given []string) ([]string, error) {
+	if len(given) > 0 {
+		out := make([]string, 0, len(given))
+		for _, g := range given {
+			out = append(out, home.Expand(g))
+		}
+		return out, nil
+	}
+	if len(p.Materials) == 0 {
+		return nil, fmt.Errorf("name a file or folder to ingest; %s has no linked material folders yet", p.Name)
+	}
+	out := make([]string, 0, len(p.Materials))
+	for _, m := range p.Materials {
+		out = append(out, home.Expand(m))
+	}
+	return out, nil
+}
+
+// stagePlan opens the project's vault and plans a staging from one source, or from the
+// linked material folders when source is empty.
+func (e *env) stagePlan(p *tree.Project, source string) (*capture.StagePlan, error) {
+	var given []string
+	if strings.TrimSpace(source) != "" {
+		given = []string{strings.TrimSpace(source)}
+	}
+	sources, err := ingestSources(p, given)
+	if err != nil {
+		return nil, err
+	}
+	v, err := vault.Open(p.VaultPath())
+	if err != nil {
+		return nil, err
+	}
+	return capture.PlanStage(v, sources, time.Now())
+}
+
+// stage copies a plan into the inbox and links every source folder that is not yet
+// material of the project, so a later ingest with no path picks up what is new.
+func (e *env) stage(cfg *home.Config, p *tree.Project, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
+	v, err := vault.Open(p.VaultPath())
+	if err != nil {
+		return nil, nil, err
+	}
+	res, err := capture.ApplyStage(v, plan, time.Now())
+	if err != nil {
+		return res, nil, err
+	}
+	var linked []string
+	for _, dir := range plan.Dirs {
+		if err := vaults.AddLink(p, links.Materials, dir); err == nil {
+			linked = append(linked, dir)
+		}
+	}
+	if len(linked) > 0 {
+		if _, _, err := e.refreshAll(cfg); err != nil {
+			return res, linked, err
+		}
+	}
+	return res, linked, nil
 }
 
 // adoptPath makes a directory a claude-atlas vault, registers it, and refreshes.
@@ -502,7 +573,9 @@ func (e *env) view(args []string) (int, error) {
 		Status:          obsidian.Status,
 		Open:            obsidian.Open,
 		RegisterAndOpen: obsidian.RegisterAndOpen,
-		Claude:          func(vault string) (*exec.Cmd, error) { return claudecode.LaunchCommand(cfg.ClaudeCode, vault) },
+		Claude: func(vault, prompt string) (*exec.Cmd, error) {
+			return claudecode.LaunchCommand(cfg.ClaudeCode, vault, prompt)
+		},
 	}
 	changed, err := tui.RunView(items, opener, e.hooks(cfg))
 	if err != nil {
@@ -655,7 +728,7 @@ func (e *env) openClaude(args []string) (int, error) {
 	if vault.IsLegacy(project.VaultPath()) {
 		e.console.Say("  %s is a claude-obsidian vault; adopt it first: claude-atlas adopt %s", project.Name, home.Display(project.VaultPath()))
 	}
-	cmd, err := claudecode.LaunchCommand(cfg.ClaudeCode, project.VaultPath())
+	cmd, err := claudecode.LaunchCommand(cfg.ClaudeCode, project.VaultPath(), "")
 	if err != nil {
 		return 1, err
 	}
@@ -670,6 +743,117 @@ func (e *env) openClaude(args []string) (int, error) {
 		return 1, err
 	}
 	return 0, nil
+}
+
+func (e *env) ingest(args []string) (int, error) {
+	fs := newFlags("ingest", e.stderr)
+	dryRun := fs.Bool("dry-run", false, "show what would be staged and stop")
+	noClaude := fs.Bool("no-claude", false, "stage the files but do not start Claude Code")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) == 0 {
+		return 2, errors.New("usage: claude-atlas ingest NAME [PATH ...] [--dry-run] [--no-claude]")
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	p, err := e.project(cfg, positional[0])
+	if err != nil {
+		return 1, err
+	}
+	sources, err := ingestSources(p, positional[1:])
+	if err != nil {
+		return 1, err
+	}
+	v, err := vault.Open(p.VaultPath())
+	if err != nil {
+		return 1, err
+	}
+	plan, err := capture.PlanStage(v, sources, time.Now())
+	if err != nil {
+		return 1, err
+	}
+	c := e.console
+	for _, src := range plan.Sources {
+		c.Say("  %-10s %s", "source", home.Display(src))
+	}
+	for _, f := range plan.New {
+		c.Say("  %-10s %s", "new", strings.TrimPrefix(f.To, "inbox/"))
+	}
+	if n := len(plan.Unchanged); n > 0 {
+		c.Say("  %-10s %d file%s already ingested or waiting", "unchanged", n, plural(n))
+	}
+	for _, sk := range plan.Skipped {
+		c.Say("  %-10s %s (%s)", "skipped", home.Display(sk.From), sk.Reason)
+	}
+	if len(plan.New) == 0 {
+		c.Say("  nothing new to ingest")
+		return 0, nil
+	}
+	if *dryRun {
+		return 0, nil
+	}
+	question := fmt.Sprintf("Stage %d file%s into inbox/", len(plan.New), plural(len(plan.New)))
+	var toLink []string
+	for _, dir := range plan.Dirs {
+		if !linkedMaterial(p, dir) {
+			toLink = append(toLink, home.Display(dir))
+		}
+	}
+	if len(toLink) > 0 {
+		question += " and link " + strings.Join(toLink, ", ") + " as material of " + p.Name
+	}
+	ok, err := c.Confirm(question+"?", true)
+	if err != nil {
+		return 1, err
+	}
+	if !ok {
+		return 1, vaults.ErrCancelled
+	}
+	res, linked, err := e.stage(cfg, p, plan)
+	if err != nil {
+		return 1, err
+	}
+	c.Step(console.OK, "staged", fmt.Sprintf("%d file%s in %s", len(res.Staged), plural(len(res.Staged)), home.Display(v.Path("inbox"))))
+	for _, dir := range linked {
+		c.Step(console.OK, "linked", home.Display(dir)+" as material; `claude-atlas ingest "+p.Rel+"` stages what is new next time")
+	}
+	if *noClaude || !c.Interactive() {
+		c.Say("  Next: claude-atlas open-claude %s, then /claude-atlas:wiki-ingest", p.Rel)
+		return 0, nil
+	}
+	ok, err = c.Confirm("Start Claude Code now and run /claude-atlas:wiki-ingest?", true)
+	if err != nil {
+		return 1, err
+	}
+	if !ok {
+		c.Say("  Next: claude-atlas open-claude %s, then /claude-atlas:wiki-ingest", p.Rel)
+		return 0, nil
+	}
+	cmd, err := claudecode.LaunchCommand(cfg.ClaudeCode, p.VaultPath(), claudecode.IngestPrompt)
+	if err != nil {
+		return 1, err
+	}
+	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return exit.ExitCode(), nil
+		}
+		return 1, err
+	}
+	return 0, nil
+}
+
+func linkedMaterial(p *tree.Project, dir string) bool {
+	for _, m := range p.Materials {
+		if filepath.Clean(home.Expand(m)) == dir {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *env) project(cfg *home.Config, name string) (*tree.Project, error) {

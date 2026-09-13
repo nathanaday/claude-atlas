@@ -240,3 +240,36 @@ func TestShowEditRemove(t *testing.T) {
 		t.Fatal("removed project should be gone")
 	}
 }
+
+func TestIngestStagesNewFilesAndLinksTheFolder(t *testing.T) {
+	h, vaults := setup(t)
+	src := filepath.Join(filepath.Dir(vaults), "Papers")
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "a.md"), []byte("aaa"), 0o644)
+	if code := h.run("ingest", "welcome"); code != 1 || !strings.Contains(h.err.String(), "no linked material") {
+		t.Fatalf("no sources: exit %d err %s", code, h.err.String())
+	}
+	if code := h.run("ingest", "welcome", src, "--dry-run"); code != 0 || !strings.Contains(h.out.String(), "new        Papers/a.md") {
+		t.Fatalf("dry run exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(vaults, "welcome", "inbox", "Papers", "a.md")); err == nil {
+		t.Fatal("dry run must not stage")
+	}
+	if code := h.run("ingest", "welcome", src, "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "staged") || !strings.Contains(h.out.String(), "linked") || !strings.Contains(h.out.String(), "wiki-ingest") {
+		t.Fatalf("ingest exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if data, _ := os.ReadFile(filepath.Join(vaults, "welcome", "inbox", "Papers", "a.md")); string(data) != "aaa" {
+		t.Fatal("file not staged")
+	}
+	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "materials") {
+		t.Fatalf("folder should be linked:\n%s", h.out.String())
+	}
+	// With no path, the linked folder is the source; nothing is new yet.
+	if code := h.run("ingest", "welcome", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "nothing new") {
+		t.Fatalf("second ingest exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	os.WriteFile(filepath.Join(src, "b.md"), []byte("bbb"), 0o644)
+	if code := h.run("ingest", "welcome", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "new        Papers/b.md") || strings.Contains(h.out.String(), "new        Papers/a.md") {
+		t.Fatalf("third ingest exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+}

@@ -16,6 +16,7 @@ does is also one command, so scripts and muscle memory both work:
 | Enter on a project | `show NAME` |
 | `o` open in Obsidian | `open-vault NAME` |
 | `c` start Claude Code | `open-claude NAME` |
+| `i` ingest sources | `ingest NAME [PATH...]` |
 | `R` refresh | `refresh` |
 | Repos and Materials in the editor | `link`, `unlink`, `links` |
 
@@ -80,6 +81,27 @@ In the session, the skills are on the slash menu:
 Claude shows a preview of every change before it applies it. Each applied
 change is one git commit in the vault.
 
+## Ingest a folder of sources
+
+Point a project at a file or folder outside its vault. What is new is copied
+into the vault's `inbox/`; the originals stay where they are. A file whose
+bytes the vault already holds, ingested earlier or still waiting in the inbox,
+is skipped, so a folder that grows over time can be ingested again and only its
+new files cost anything. A folder is linked as material of the project, and an
+`ingest` with no path stages what is new in every linked folder.
+
+```bash
+claude-atlas ingest sensor-triage ~/Papers
+claude-atlas ingest sensor-triage ~/Papers/dinov2.pdf
+claude-atlas ingest sensor-triage                # every linked material folder
+claude-atlas ingest sensor-triage ~/Papers --dry-run
+claude-atlas ingest sensor-triage ~/Papers --no-claude
+```
+
+After staging, the command offers to start Claude Code with
+`/claude-atlas:wiki-ingest` as its first message, so the review and the
+apply happen in the session. `--no-claude` stages and stops.
+
 ## History and undo
 
 ```bash
@@ -141,8 +163,8 @@ claude-atlas open-vault
 `view` is an interactive tree of every project, three category layers at a
 time. Space folds or unfolds the branch under the cursor; `-` and `+` fold and
 unfold every category. Enter shows everything the atlas knows about a project,
-`o` opens its vault in Obsidian, `c` starts Claude Code in it, and `e` edits
-its page: name, purpose, category, priority, state, what it is blocked on, a
+`o` opens its vault in Obsidian, `c` starts Claude Code in it, `i` ingests a
+file or folder into it, and `e` edits its page: name, purpose, category, priority, state, what it is blocked on, a
 review date, what finished looks like, its vault path, and linked repos and
 material, or `r` to remove it from the atlas. `n` creates a vault, `a` adopts
 one, and `R` refreshes every vault in the background. Removing never touches
