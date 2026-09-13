@@ -203,3 +203,13 @@ func TestStateRoundTripMirrorsTree(t *testing.T) {
 		t.Fatal("expected error for missing state")
 	}
 }
+
+func TestCategoriesMayContainDotsButNotClimb(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Create(root, ProjectOptions{ID: "a", Name: "A", Vault: "/v/a", Category: "v1..v2"}); err != nil {
+		t.Fatalf("dots inside a name are fine: %v", err)
+	}
+	if _, err := Create(root, ProjectOptions{ID: "b", Name: "B", Vault: "/v/b", Category: "../outside"}); err == nil {
+		t.Fatal("a category must not climb out of the tree")
+	}
+}

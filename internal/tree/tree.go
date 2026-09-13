@@ -81,6 +81,17 @@ func Slugify(name string) (string, error) {
 	return slug, nil
 }
 
+// hasParentSegment reports whether a slash path climbs with a ".." segment. A name that
+// only contains dots, like "v1..v2", is allowed.
+func hasParentSegment(rel string) bool {
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 func contains(list []string, value string) bool {
 	for _, item := range list {
 		if item == value {
@@ -252,7 +263,7 @@ func Create(root string, opts ProjectOptions) (string, error) {
 		return "", fmt.Errorf("priority must be one of %s", strings.Join(Priorities, ", "))
 	}
 	category := strings.Trim(filepath.ToSlash(opts.Category), "/")
-	if strings.Contains(category, "..") {
+	if hasParentSegment(category) {
 		return "", fmt.Errorf("category %q must stay inside the tree", opts.Category)
 	}
 	dir := filepath.Join(root, filepath.FromSlash(category))

@@ -156,16 +156,18 @@ func resolveInbox(v *vault.Vault, arg string) (string, error) {
 	p := arg
 	if filepath.IsAbs(p) {
 		rel, err := filepath.Rel(v.Root, p)
-		if err != nil || strings.HasPrefix(rel, "..") {
+		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 			return "", fmt.Errorf("%s is outside the vault; place sources in %s/ first", arg, vault.InboxDir)
 		}
 		p = filepath.ToSlash(rel)
 	}
+	// Clean resolves any ".." segment, so a path that still leaves inbox/ afterwards
+	// is a traversal; a name that merely contains dots, like "Cont..md", is fine.
 	p = path.Clean(p)
 	if !strings.HasPrefix(p, vault.InboxDir+"/") {
-		p = vault.InboxDir + "/" + p
+		p = path.Clean(vault.InboxDir + "/" + p)
 	}
-	if strings.Contains(p, "..") {
+	if !strings.HasPrefix(p, vault.InboxDir+"/") {
 		return "", fmt.Errorf("%s is not a path inside %s/", arg, vault.InboxDir)
 	}
 	info, err := os.Lstat(v.Path(p))

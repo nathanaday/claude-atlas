@@ -97,7 +97,7 @@ func scalar(value any) *yaml.Node {
 // Move files a project page under another category and returns the new path.
 func Move(root string, p *Project, category string) (string, error) {
 	category = strings.Trim(filepath.ToSlash(category), "/")
-	if strings.Contains(category, "..") {
+	if hasParentSegment(category) {
 		return "", fmt.Errorf("category %q must stay inside the tree", category)
 	}
 	dir := filepath.Join(root, filepath.FromSlash(category))
