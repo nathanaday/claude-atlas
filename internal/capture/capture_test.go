@@ -81,3 +81,27 @@ func TestListAndCapture(t *testing.T) {
 		t.Fatal("absolute paths outside the vault must fail")
 	}
 }
+
+func TestCaptureAcceptsDotsInNamesAndRefusesTraversal(t *testing.T) {
+	v := newVault(t)
+	name := "L3.1 - Dynamical Sys Cont..md"
+	os.WriteFile(v.Path("inbox/"+name), []byte("lecture"), 0o644)
+	res, err := Capture(v, []string{name}, now)
+	if err != nil {
+		t.Fatalf("a name with consecutive dots must capture: %v", err)
+	}
+	if len(res.Sources) != 1 || res.Sources[0].Path != "inbox/"+name || !strings.HasSuffix(res.Sources[0].StoredPath, ".md") {
+		t.Fatalf("result %+v", res.Sources)
+	}
+	if _, err := Capture(v, []string{"inbox/" + name}, now); err != nil {
+		t.Fatalf("vault-relative form: %v", err)
+	}
+	if _, err := Capture(v, []string{v.Path("inbox/" + name)}, now); err != nil {
+		t.Fatalf("absolute form: %v", err)
+	}
+	for _, bad := range []string{"../wiki/index.md", "inbox/../wiki/index.md", "inbox/../../etc/passwd", filepath.Join(v.Root, "wiki", "index.md")} {
+		if _, err := Capture(v, []string{bad}, now); err == nil {
+			t.Fatalf("%q must be refused", bad)
+		}
+	}
+}
