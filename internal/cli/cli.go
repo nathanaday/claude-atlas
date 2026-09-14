@@ -1789,6 +1789,7 @@ func (e *env) upgrade(args []string) (int, error) {
 		}
 		roots = []string{v.Root}
 	}
+	restyled := false
 	for _, root := range roots {
 		written, err := vault.Upgrade(root, time.Now())
 		if err != nil {
@@ -1799,6 +1800,14 @@ func (e *env) upgrade(args []string) (int, error) {
 			continue
 		}
 		e.console.Step(console.OK, home.Display(root), "added "+strings.Join(written, ", "))
+		for _, rel := range written {
+			if strings.HasPrefix(rel, ".obsidian/snippets/") {
+				restyled = true
+			}
+		}
+	}
+	if restyled {
+		e.console.Say("  The folder colors come from .obsidian/snippets/claude-atlas.css, enabled in each vault's appearance settings; reload Obsidian (Cmd+R) to see them. An older vault-colors.css may stay; the new snippet takes precedence.")
 	}
 	return 0, nil
 }

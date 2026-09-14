@@ -325,6 +325,16 @@ func writeMissing(root string, mode Mode, now time.Time, overwrite bool) ([]stri
 			}
 			continue
 		}
+		if rel == AppearanceFile && !overwrite {
+			changed, err := mergeAppearance(root, data)
+			if err != nil {
+				return nil, err
+			}
+			if changed {
+				written = append(written, rel)
+			}
+			continue
+		}
 		if err := put(rel, data); err != nil {
 			return nil, err
 		}
@@ -407,6 +417,45 @@ func Ignore(root, pattern string, now time.Time) (bool, error) {
 	}
 	_, err = repo.Commit(CommitMessage("setup", "ignore the mounted repository "+pattern, NewOperationID("setup", now)))
 	return true, err
+}
+
+// AppearanceFile is Obsidian's appearance settings, where CSS snippets are enabled.
+const AppearanceFile = ".obsidian/appearance.json"
+
+// SnippetName is the vault's own CSS snippet, .obsidian/snippets/claude-atlas.css.
+const SnippetName = "claude-atlas"
+
+// mergeAppearance enables the vault's snippet in an existing appearance file, keeping
+// every other setting, and writes the template when there is none. It reports whether
+// the file changed.
+func mergeAppearance(root string, template []byte) (bool, error) {
+	path := filepath.Join(root, filepath.FromSlash(AppearanceFile))
+	existing, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, writeFile(root, AppearanceFile, template)
+	}
+	if err != nil {
+		return false, err
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(existing, &settings); err != nil || settings == nil {
+		settings = map[string]any{}
+	}
+	var enabled []any
+	if list, ok := settings["enabledCssSnippets"].([]any); ok {
+		enabled = list
+	}
+	for _, item := range enabled {
+		if item == SnippetName {
+			return false, nil
+		}
+	}
+	settings["enabledCssSnippets"] = append(enabled, SnippetName)
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
 // mergeGitignore appends the lines of the template ignore file that are missing.

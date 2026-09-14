@@ -90,7 +90,7 @@ A commit in a mounted repository counts as touching the project, so its heat ref
 
 ## The wiki and the repository
 
-The vault is memory and thinking: the wiki, the hot cache, the tasks, structured and reviewed one operation at a time. A repository is where the deliverables are made: code, a paper, a deck, a report, in whatever shape the work needs, with its own git history. Mounting it on a project gives a session started inside it the vault and its tasks, and gives the atlas its branch and last commit. A repository created beside the wiki in the vault's folder is ignored by the vault's git, so the two histories stay apart.
+The vault is memory and thinking: the wiki, the hot cache, the tasks, structured and reviewed one operation at a time. A repository is where the deliverables are made: code, a paper, a deck, a report, in whatever shape the work needs, with its own git history. Mounting it on a project gives a session started inside it the vault and its tasks, and gives the atlas its branch and last commit. A repository created beside the wiki in the vault's folder is ignored by the vault's git, so the two histories stay apart, and the vault's CSS snippet shows it in its own color in the file explorer.
 
 ## The graph
 

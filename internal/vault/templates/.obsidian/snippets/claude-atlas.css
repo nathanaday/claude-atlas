@@ -1,0 +1,50 @@
+/* claude-atlas: one color per kind of place in the vault.
+   Written by claude-atlas; safe to replace with the next upgrade. Selectors carry
+   .nav-files-container so they win over an older vault-colors.css. */
+
+:root {
+  --atlas-wiki: #4fc1ff;        /* the wiki and its meta pages */
+  --atlas-sources: #ce9178;
+  --atlas-entities: #c586c0;
+  --atlas-concepts: #dcdcaa;
+  --atlas-questions: #6a9955;
+  --atlas-sessions: #9cdcfe;
+  --atlas-tasks: #f28b82;       /* tasks, open and archived, and task notes */
+  --atlas-canvases: #b5cea8;
+  --atlas-inbox: #e5c07b;       /* sources waiting to be ingested */
+  --atlas-ideas: #d7ba7d;       /* your scratch notes */
+  --atlas-repo: #4ec9b0;        /* a mounted repository: deliverables, not wiki */
+}
+
+/* The wiki: memory, thinking, triage. */
+.nav-files-container .nav-folder-title[data-path="wiki"],
+.nav-files-container .nav-folder-title[data-path^="wiki/meta"],
+.nav-files-container .nav-folder-title[data-path^="wiki/mocs"]     { color: var(--atlas-wiki); }
+.nav-files-container .nav-folder-title[data-path^="wiki/sources"]  { color: var(--atlas-sources); }
+.nav-files-container .nav-folder-title[data-path^="wiki/entities"] { color: var(--atlas-entities); }
+.nav-files-container .nav-folder-title[data-path^="wiki/concepts"],
+.nav-files-container .nav-folder-title[data-path^="wiki/notes"]    { color: var(--atlas-concepts); }
+.nav-files-container .nav-folder-title[data-path^="wiki/questions"] { color: var(--atlas-questions); }
+.nav-files-container .nav-folder-title[data-path^="wiki/sessions"] { color: var(--atlas-sessions); }
+.nav-files-container .nav-folder-title[data-path^="wiki/tasks"]    { color: var(--atlas-tasks); }
+.nav-files-container .nav-folder-title[data-path^="wiki/canvases"] { color: var(--atlas-canvases); }
+
+/* What flows in. */
+.nav-files-container .nav-folder-title[data-path="inbox"]          { color: var(--atlas-inbox); }
+.nav-files-container .nav-folder-title[data-path^="inbox/tasks"]   { color: var(--atlas-tasks); }
+.nav-files-container .nav-folder-title[data-path="ideas"]          { color: var(--atlas-ideas); }
+
+/* A mounted repository sits beside the wiki with its own git history. Any top-level
+   folder that is not the vault's own is one, and so is everything under it. */
+.nav-files-container .nav-folder-title:not([data-path^="wiki"]):not([data-path^="inbox"]):not([data-path^="ideas"]) {
+  color: var(--atlas-repo);
+}
+.nav-files-container .nav-folder-title:not([data-path*="/"]):not([data-path="wiki"]):not([data-path="inbox"]):not([data-path="ideas"]) {
+  font-weight: 600;
+}
+
+/* Callouts the wiki pages use. */
+.callout[data-callout='contradiction'] { --callout-color: 209, 105, 105; --callout-icon: lucide-alert-triangle; }
+.callout[data-callout='gap']           { --callout-color: 220, 220, 170; --callout-icon: lucide-help-circle; }
+.callout[data-callout='key-insight']   { --callout-color: 79, 193, 255;  --callout-icon: lucide-lightbulb; }
+.callout[data-callout='stale']         { --callout-color: 128, 128, 128; --callout-icon: lucide-clock; }

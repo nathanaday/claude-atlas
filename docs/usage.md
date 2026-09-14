@@ -134,12 +134,19 @@ Obsidian. `T` shows every project's open tasks on one board. The overview
 lists open tasks across projects, and signals blocked tasks and stale ones,
 active but untouched for 14 days.
 
-Vaults made before tasks existed gain the folders and the index with:
+Vaults made by an older version gain the task folders, the index, and the
+vault's CSS snippet with:
 
 ```bash
 claude-atlas upgrade sensor-triage
 claude-atlas upgrade --all
 ```
+
+The snippet, `.obsidian/snippets/claude-atlas.css`, colors the file explorer
+by kind of place: the wiki and each of its folders, `inbox/`, `ideas/`, and
+every mounted repository beside the wiki in its own color, so the split
+between memory and deliverables shows at a glance. Upgrade enables it in the
+vault's appearance settings; reload Obsidian to see it.
 
 ## A repo reaches its vault
 

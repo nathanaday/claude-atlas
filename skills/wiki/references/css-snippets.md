@@ -4,57 +4,18 @@ Apply during scaffold. This makes the file explorer color-coded by folder type a
 
 ---
 
-## CSS Snippet
+## The vault's snippet
 
-Create this file at `.obsidian/snippets/vault-colors.css` inside the vault:
+Every claude-atlas vault carries `.obsidian/snippets/claude-atlas.css`, enabled in
+`.obsidian/appearance.json`, and `claude-atlas upgrade` adds both to older vaults.
+It gives one color to each kind of place: the wiki and each of its folders,
+`inbox/`, `ideas/`, and every mounted repository beside the wiki, so the
+distinction between memory and deliverables shows in the file explorer. It also
+defines the four custom callouts below. Do not create a second snippet for the
+same folders; to change a color, edit the variables at the top of that file.
 
-```css
-:root {
-  --wiki-1: #4fc1ff;
-  --wiki-2: #c586c0;
-  --wiki-3: #dcdcaa;
-  --wiki-4: #ce9178;
-  --wiki-5: #6a9955;
-  --wiki-6: #d16969;
-  --wiki-7: #569cd6;
-}
-
-/* Folder colors in file explorer */
-.nav-folder-title[data-path^="wiki/domains"]     { color: var(--wiki-1); }
-.nav-folder-title[data-path^="wiki/entities"]    { color: var(--wiki-2); }
-.nav-folder-title[data-path^="wiki/concepts"]    { color: var(--wiki-3); }
-.nav-folder-title[data-path^="wiki/sources"]     { color: var(--wiki-4); }
-.nav-folder-title[data-path^="wiki/questions"]   { color: var(--wiki-5); }
-.nav-folder-title[data-path^="wiki/comparisons"] { color: var(--wiki-6); }
-.nav-folder-title[data-path^="wiki/meta"]        { color: var(--wiki-7); }
-.nav-folder-title[data-path=".raw"]              { color: #808080; opacity: 0.6; }
-
-/* Custom callouts */
-.callout[data-callout='contradiction'] {
-  --callout-color: 209, 105, 105;
-  --callout-icon: lucide-alert-triangle;
-}
-.callout[data-callout='gap'] {
-  --callout-color: 220, 220, 170;
-  --callout-icon: lucide-help-circle;
-}
-.callout[data-callout='key-insight'] {
-  --callout-color: 79, 193, 255;
-  --callout-icon: lucide-lightbulb;
-}
-.callout[data-callout='stale'] {
-  --callout-color: 128, 128, 128;
-  --callout-icon: lucide-clock;
-}
-```
-
----
-
-## Enable the Snippet
-
-Tell the user: Settings > Appearance > CSS Snippets > open folder > paste the file > click the refresh icon > toggle it on.
-
----
+If the file explorer shows no colors, tell the user: Settings > Appearance > CSS
+snippets, toggle `claude-atlas` on, or reload Obsidian (Cmd+R) after an upgrade.
 
 ## Graph View Groups
 

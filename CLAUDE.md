@@ -113,7 +113,9 @@ the vaults directory (default `~/Documents/Vaults`).
   the binary should match; `status` and `doctor` warn on a mismatch.
 - Every write path goes through `txn.Prepare` and `txn.Apply`. `vault.Init`,
   `vault.Adopt`, and `vault.Upgrade` are the only code that writes vault files
-  directly, and only before or outside an operation.
+  directly, and only before or outside an operation. The template includes the
+  vault's CSS snippet and an appearance file that enables it; upgrade merges
+  the snippet into an existing appearance file.
 - A kind bounds a plan's writes (`txn.allowed`). Reserved everywhere:
   `wiki/log.md`, both ledgers, `wiki/tasks/index.md`, `.git`, `.vault-meta`,
   `.obsidian`, `.raw` except through capture, `inbox` except deletes in an
