@@ -5,7 +5,7 @@ Knowledge vaults for Claude Code, and one view across all of them.
 [![License: MIT](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](.claude-plugin/plugin.json)
-[![Version](https://img.shields.io/badge/version-0.3.0-d97745.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.3.1-d97745.svg)](.claude-plugin/plugin.json)
 
 ## About
 
@@ -74,7 +74,7 @@ preview before every change, and `claude-atlas undo` takes one back.
 
 See every vault at once. The tree does everything the commands do: `o` opens
 a vault in Obsidian, `c` starts Claude Code in it, `i` ingests sources, `l`
-links a repo or a folder, `e` edits its project page, `n` creates a vault,
+shows and edits its linked repos and folders, `e` edits its project page, `n` creates a vault,
 `a` adopts one, `R` refreshes:
 
 ```bash

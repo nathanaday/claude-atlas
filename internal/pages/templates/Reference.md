@@ -46,7 +46,7 @@ claude-atlas open-vault my-project
 
 **View the atlas**
 
-> Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `l` links a folder to it; `e` edits it (or removes it with `r`); `n` creates a vault; `a` adopts one; `R` refreshes. Paths complete with Tab.
+> Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `l` shows its linked folders, where `a` adds, `e` edits, and `u` unlinks one; `e` edits it (or removes it with `r`); `n` creates a vault; `a` adopts one; `R` refreshes. Paths complete with Tab.
 
 ```bash
 claude-atlas view
@@ -174,6 +174,12 @@ claude-atlas links
 
 ```bash
 claude-atlas unlink my-project my-project
+```
+
+> Rename a page, change its kind, or point it at a folder that moved. Every project that links it is rewritten.
+
+```bash
+claude-atlas edit-link my-project --name "My project" --path ~/code/my-project
 ```
 
 ## Relating projects

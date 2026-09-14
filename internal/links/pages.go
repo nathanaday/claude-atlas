@@ -149,6 +149,33 @@ func FindByName(pages []Page, kind, name string) *Page {
 	return nil
 }
 
+// FindPage returns the page a user names: "repos/code", "materials/Slides", or a bare
+// name when only one kind has it.
+func FindPage(pages []Page, target string) (*Page, error) {
+	target = strings.TrimSuffix(strings.TrimSpace(target), ".md")
+	if dir, name, ok := strings.Cut(target, "/"); ok {
+		for _, kind := range []string{Repo, Materials} {
+			if dir == Dir(kind) {
+				if page := FindByName(pages, kind, name); page != nil {
+					return page, nil
+				}
+				return nil, fmt.Errorf("no page %s/%s.md", dir, name)
+			}
+		}
+		return nil, fmt.Errorf("%s is not a page under repos/ or materials/", target)
+	}
+	repo, material := FindByName(pages, Repo, target), FindByName(pages, Materials, target)
+	switch {
+	case repo != nil && material != nil:
+		return nil, fmt.Errorf("both repos/%s.md and materials/%s.md exist; name one with its folder", target, target)
+	case repo != nil:
+		return repo, nil
+	case material != nil:
+		return material, nil
+	}
+	return nil, fmt.Errorf("no page named %q under repos/ or materials/", target)
+}
+
 var wikilinkPattern = regexp.MustCompile(`^\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]$`)
 
 // ParseWikilink splits "[[target|alias]]"; ok is false when s is not a wikilink.
@@ -182,17 +209,23 @@ func Resolve(pages []Page, kind, entry string) (*Page, bool) {
 
 var badNameChars = regexp.MustCompile(`[\\/:*?"<>|#^\[\]]+`)
 
+// CleanName makes a page name safe for Obsidian and for wikilinks; empty when nothing
+// usable is left.
+func CleanName(name string) string {
+	return strings.Trim(badNameChars.ReplaceAllString(name, "-"), " .-")
+}
+
 // PageName picks a file name for a folder: its base name, made safe for Obsidian, and
 // suffixed with the parent's name when another page of the kind already uses it.
 func PageName(path string, taken func(string) bool) string {
-	base := strings.Trim(badNameChars.ReplaceAllString(filepath.Base(path), "-"), " .-")
+	base := CleanName(filepath.Base(path))
 	if base == "" {
 		base = "folder"
 	}
 	if !taken(base) {
 		return base
 	}
-	parent := strings.Trim(badNameChars.ReplaceAllString(filepath.Base(filepath.Dir(path)), "-"), " .-")
+	parent := CleanName(filepath.Base(filepath.Dir(path)))
 	if parent == "" {
 		parent = "2"
 	}

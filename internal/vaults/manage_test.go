@@ -197,6 +197,69 @@ func TestLinkPageDecidesTheKind(t *testing.T) {
 	}
 }
 
+func TestUpdateLinkRenamesMovesAndRepoints(t *testing.T) {
+	cfg, p := setup(t)
+	docs := filepath.Join(cfg.VaultsDir, "docs")
+	os.MkdirAll(filepath.Join(docs, ".git"), 0o755)
+	page, err := AddLink(cfg, p, links.Materials, docs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, _ := Register(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "b")), RegisterOptions{Name: "B"})
+	if _, err := AddLink(cfg, q, "", "docs"); err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := UpdateLink(cfg, page, LinkEdit{Name: "Course notes"})
+	if err != nil || renamed.Name != "Course notes" || renamed.Rel() != "materials/Course notes" {
+		t.Fatalf("rename: %+v %v", renamed, err)
+	}
+	if _, err := os.Stat(page.File); err == nil {
+		t.Fatal("old page should be gone")
+	}
+	for _, proj := range []*tree.Project{p, q} {
+		proj = reload(t, cfg, proj)
+		if len(proj.Materials) != 1 || proj.Materials[0] != "[[materials/Course notes|Course notes]]" || proj.Linked[0].Path != docs {
+			t.Fatalf("%s after rename: %v %+v", proj.Name, proj.Materials, proj.Linked)
+		}
+	}
+	moved, err := UpdateLink(cfg, renamed, LinkEdit{Kind: links.Repo})
+	if err != nil || moved.Kind != links.Repo || moved.File != filepath.Join(cfg.AtlasVault, "repos", "Course notes.md") {
+		t.Fatalf("move: %+v %v", moved, err)
+	}
+	p = reload(t, cfg, p)
+	if len(p.Repos) != 1 || len(p.Materials) != 0 || p.Repos[0] != "[[repos/Course notes|Course notes]]" {
+		t.Fatalf("after move: repos=%v materials=%v", p.Repos, p.Materials)
+	}
+	other := filepath.Join(cfg.VaultsDir, "other")
+	os.MkdirAll(other, 0o755)
+	repointed, err := UpdateLink(cfg, moved, LinkEdit{Path: other})
+	if err != nil || repointed.Path != other {
+		t.Fatalf("repoint: %+v %v", repointed, err)
+	}
+	p = reload(t, cfg, p)
+	if p.Linked[0].Path != other {
+		t.Fatalf("project should see the new folder: %+v", p.Linked)
+	}
+	text, _ := os.ReadFile(repointed.File)
+	if !strings.Contains(string(text), "path: "+other) {
+		t.Fatalf("page text:\n%s", text)
+	}
+	if _, err := UpdateLink(cfg, repointed, LinkEdit{Path: filepath.Join(cfg.VaultsDir, "nope")}); err == nil {
+		t.Fatal("missing folder should fail")
+	}
+	if _, err := UpdateLink(cfg, repointed, LinkEdit{Name: "///"}); err == nil {
+		t.Fatal("unusable name should fail")
+	}
+	file := filepath.Join(cfg.VaultsDir, "paper.pdf")
+	os.WriteFile(file, []byte("x"), 0o644)
+	if _, err := UpdateLink(cfg, repointed, LinkEdit{Path: file}); err == nil {
+		t.Fatal("a repo cannot be a file")
+	}
+	if _, err := UpdateLink(cfg, repointed, LinkEdit{Kind: links.Materials, Path: file}); err != nil {
+		t.Fatal("material may be a file:", err)
+	}
+}
+
 func TestUpgradeLinksGivesPlainPathsPages(t *testing.T) {
 	cfg, p := setup(t)
 	repo := filepath.Join(cfg.VaultsDir, "code")

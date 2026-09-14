@@ -17,7 +17,7 @@ does is also one command, so scripts and muscle memory both work:
 | `o` open in Obsidian | `open-vault NAME` |
 | `c` start Claude Code | `open-claude NAME` |
 | `i` ingest sources | `ingest NAME [PATH...]` |
-| `l` link a folder | `link NAME PATH`, `unlink`, `links` |
+| `l` links: add, edit, unlink | `link NAME PATH`, `edit-link PAGE`, `unlink`, `links` |
 | Related in the editor | `relate NAME OTHER`, `unrelate` |
 | `R` refresh | `refresh` |
 
@@ -170,10 +170,10 @@ claude-atlas open-vault
 time. Space folds or unfolds the branch under the cursor; `-` and `+` fold and
 unfold every category. Enter shows everything the atlas knows about a project,
 `o` opens its vault in Obsidian, `c` starts Claude Code in it, `i` ingests a
-file or folder into it, `l` links a folder to it, and `e` edits its page:
-name, purpose, category, priority, state, what it is blocked on, a review
-date, what finished looks like, its vault path, linked folders, and related
-projects, or `r` to remove it from the atlas. `n` creates a vault, `a` adopts
+file or folder into it, `l` shows its linked repos and folders, and `e` edits
+its page: name, purpose, category, priority, state, what it is blocked on, a
+review date, what finished looks like, its vault path, and related projects,
+or `r` to remove it from the atlas. `n` creates a vault, `a` adopts
 one, and `R` refreshes every vault in the background. Removing never touches
 the vault on disk.
 
@@ -223,10 +223,22 @@ page no project links shows up as a signal on the overview until you link it
 again or delete it. A page decides its own kind: move it between `repos/` and
 `materials/` to change it.
 
-In `view`, `l` opens the project's links with the cursor ready to add one.
-Type a path, with Tab completion, or the name of an existing page; the kind
-is detected. In Obsidian, type `[[` in the `repos` or `materials` property of
-a project page and pick a page.
+Rename a page, move it between `repos/` and `materials/`, or point it at a
+folder that moved. Every project that links the page is rewritten.
+
+```bash
+claude-atlas edit-link sensor-datasheets --name "Sensor datasheets"
+claude-atlas edit-link sensor-triage --kind materials
+claude-atlas edit-link Course --path ~/Documents/CS566/Course
+```
+
+In `view`, `l` shows the project's links, one box per linked folder with the
+page name, the kind, the path, what the last refresh found, and the other
+projects that share it. `a` adds one: type a path, with Tab completion, or
+the name of an existing page; the kind is detected. `e` edits the page's
+name, kind, and path. `u` unlinks it after asking. Each action takes effect at
+once and refreshes the atlas in the background. In Obsidian, type `[[` in the
+`repos` or `materials` property of a project page and pick a page.
 
 ### Relate projects
 

@@ -45,6 +45,12 @@ func fakeAtlas(t *testing.T) (*home.Config, Hooks) {
 			pages, _, _ := links.Walk(cfg.AtlasVault)
 			return pages
 		},
+		AddLink:    func(p *tree.Project, target string) (links.Page, error) { return vaults.AddLink(cfg, p, "", target) },
+		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
+		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
+			return vaults.UpdateLink(cfg, page, edit)
+		},
+		Refresh: func() error { return nil },
 	}
 	return cfg, hooks
 }
@@ -174,76 +180,6 @@ func TestMoveVaultAsksFirst(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(target, ".claude-atlas.json")); err != nil {
 		t.Fatal("vault not moved")
-	}
-}
-
-func TestEditLinksThroughTheListEditor(t *testing.T) {
-	cfg, v := atlasView(t)
-	repo := filepath.Join(cfg.VaultsDir, "code")
-	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
-	v = keyV(v, "l") // straight into the links list
-	if v.edit == nil || v.edit.mode != editList || v.edit.field != fieldLinks {
-		t.Fatalf("l should open the links list: %+v", v.edit)
-	}
-	v = keyV(v, "a")
-	v.edit.path.setValue(filepath.Join(cfg.VaultsDir, "missing"))
-	v = pressV(v, tea.KeyEnter)
-	if v.edit.mode != editListPath || v.edit.err == "" {
-		t.Fatalf("missing folder should be refused: mode=%d err=%q", v.edit.mode, v.edit.err)
-	}
-	v.edit.path.setValue(repo)
-	v = pressV(v, tea.KeyEnter)
-	if v.edit.mode != editList || len(v.edit.draft.Links) != 1 || v.edit.draft.Links[0].Path != repo || v.edit.draft.Links[0].Kind != "repo" {
-		t.Fatalf("add failed: mode=%d links=%v", v.edit.mode, v.edit.draft.Links)
-	}
-	if !strings.Contains(v.View(), "new page") {
-		t.Fatalf("a folder without a page says so:\n%s", v.View())
-	}
-	v = pressV(v, tea.KeyEsc)
-	if !v.edit.dirty() {
-		t.Fatal("adding a link should dirty the draft")
-	}
-	v = keyV(v, "s")
-	if v.edit != nil || v.errMsg != "" {
-		t.Fatalf("save: edit=%v err=%q", v.edit, v.errMsg)
-	}
-	projects, _, _ := tree.Walk(cfg.TreeRoot())
-	p := tree.FindByRel(projects, "personal/reading")
-	if len(p.Linked) != 1 || p.Linked[0].Name != "code" || p.Linked[0].Path != repo {
-		t.Fatalf("page not updated: %+v", p.Linked)
-	}
-	// Link the same page to another project by name, then remove it from the first.
-	v = pressV(v, tea.KeyUp, tea.KeyUp) // welcome
-	v = keyV(v, "l")
-	if !strings.Contains(v.View(), "none yet") {
-		t.Fatalf("welcome has no links:\n%s", v.View())
-	}
-	v = keyV(v, "a")
-	if !strings.Contains(v.View(), "code") {
-		t.Fatalf("known pages should be offered:\n%s", v.View())
-	}
-	v = typeV(v, "code")
-	v = pressV(v, tea.KeyEnter)
-	if len(v.edit.draft.Links) != 1 || v.edit.draft.Links[0].Name != "code" {
-		t.Fatalf("link by name: %+v err=%q", v.edit.draft.Links, v.edit.err)
-	}
-	v = pressV(v, tea.KeyEsc)
-	v = keyV(v, "s")
-	projects, _, _ = tree.Walk(cfg.TreeRoot())
-	if w := tree.FindByRel(projects, "welcome"); len(w.Linked) != 1 || w.Linked[0].Path != repo {
-		t.Fatalf("welcome not linked: %+v", w.Linked)
-	}
-	v = pressV(v, tea.KeyDown, tea.KeyDown) // reading
-	v = keyV(v, "l")
-	v = keyV(v, "d")
-	v = pressV(v, tea.KeyEsc)
-	v = keyV(v, "s")
-	projects, _, _ = tree.Walk(cfg.TreeRoot())
-	if p := tree.FindByRel(projects, "personal/reading"); len(p.Linked) != 0 {
-		t.Fatalf("remove failed: %+v", p.Linked)
-	}
-	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, "repos", "code.md")); err != nil {
-		t.Fatal("the page stays for the other project")
 	}
 }
 

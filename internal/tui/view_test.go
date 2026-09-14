@@ -399,10 +399,17 @@ func TestNewAndAdoptFromTheTree(t *testing.T) {
 func TestRefreshKey(t *testing.T) {
 	calls := 0
 	hooks := Hooks{
-		Load:    func() ([]*tree.Project, error) { return nil, nil },
+		Load: func() ([]*tree.Project, error) {
+			var ps []*tree.Project
+			for _, it := range sample() {
+				ps = append(ps, it.Project)
+			}
+			return ps, nil
+		},
 		Refresh: func() error { calls++; return nil },
 	}
 	v := newView(sample(), Opener{}, hooks)
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
 	v = next.(view)
 	if cmd == nil || v.busy == "" {
@@ -412,6 +419,15 @@ func TestRefreshKey(t *testing.T) {
 	v = next.(view)
 	if calls != 1 || v.busy != "" || v.status != "refreshed" || v.errMsg != "" {
 		t.Fatalf("after refresh: calls=%d busy=%q status=%q err=%q", calls, v.busy, v.status, v.errMsg)
+	}
+	if v.detail != nil || v.current() == nil || v.current().item.Project.ID() != "p3" {
+		t.Fatalf("a refresh from the tree stays in the tree, cursor kept: detail=%v", v.detail)
+	}
+	v = pressV(v, tea.KeyEnter) // details, then refresh from there
+	next, cmd = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	next, _ = next.(view).Update(cmd())
+	if v = next.(view); v.detail == nil || v.detail.Project.ID() != "p3" {
+		t.Fatal("a refresh from the details keeps them open")
 	}
 	none := keyV(newView(sample(), Opener{}, Hooks{}), "R")
 	if !strings.Contains(none.errMsg, "not available") {

@@ -13,7 +13,6 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 )
@@ -144,6 +143,7 @@ type view struct {
 	edit      *editor
 	add       *model // the add-vault or adopt screen while open
 	ingest    *ingestScreen
+	links     *linksScreen
 	changed   bool
 	collapsed map[string]bool // category paths folded by the user
 	root      string
@@ -183,6 +183,15 @@ func (v *view) stamp() {
 		if it.State != nil && it.State.GeneratedAt > v.refreshed {
 			v.refreshed = it.State.GeneratedAt
 		}
+	}
+}
+
+// reloadKeeping is reload, with the details panel left as it was: open or closed.
+func (v *view) reloadKeeping(rel string) {
+	keep := v.detail != nil
+	v.reload(rel)
+	if !keep {
+		v.detail = nil
 	}
 }
 
@@ -482,6 +491,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		v.width, v.height = msg.Width, msg.Height
+		if v.links != nil {
+			v.links.width = msg.Width
+		}
 		v.layout()
 		v.ensureVisible()
 		return v, nil
@@ -512,8 +524,12 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if r := v.current(); r != nil && r.kind == rowProject {
 			rel = r.item.Project.Rel
 		}
-		v.reload(rel)
+		v.reloadKeeping(rel)
 		v.status = "refreshed"
+		if v.links != nil {
+			v.links.reload(v.items, v.links.item.Project.Rel)
+			v.links.status = "refreshed"
+		}
 		return v, nil
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
@@ -527,6 +543,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if v.ingest != nil {
 			return v.updateIngest(msg)
+		}
+		if v.links != nil {
+			return v.updateLinks(msg)
 		}
 		if msg.String() == "q" {
 			return v, tea.Quit
@@ -703,17 +722,39 @@ func (v view) openEditor(item *Item) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-// openLinks starts the editor on the project's links, ready to add one.
+// openLinks shows the project's linked folders as boxes.
 func (v view) openLinks(item *Item) (tea.Model, tea.Cmd) {
-	if v.hooks.Load == nil || v.hooks.Update == nil {
-		v.errMsg = "editing is not available here"
+	if v.hooks.Load == nil || v.hooks.AddLink == nil {
+		v.errMsg = "linking is not available here"
 		return v, nil
 	}
-	ed := newEditor(v.hooks, item.Project)
-	ed.field = fieldLinks
-	ed.mode = editList
-	v.edit = &ed
+	s := newLinks(v.hooks, item, v.items, v.width)
+	v.links = &s
 	return v, nil
+}
+
+// updateLinks forwards keys to the links screen; after an action it refreshes every
+// vault in the background so the facts catch up, and keeps the screen open.
+func (v view) updateLinks(msg tea.Msg) (tea.Model, tea.Cmd) {
+	s, cmd := v.links.update(msg)
+	if s.closed {
+		v.links = nil
+		v.reloadKeeping(s.item.Project.Rel)
+		return v, nil
+	}
+	v.links = &s
+	if s.changed {
+		v.links.changed = false
+		v.changed = true
+		v.reloadKeeping(s.item.Project.Rel)
+		v.links.reload(v.items, s.item.Project.Rel)
+		if v.hooks.Refresh != nil {
+			v.links.status += " · refreshing…"
+			fn := v.hooks.Refresh
+			return v, tea.Batch(cmd, func() tea.Msg { return refreshedMsg{err: fn()} })
+		}
+	}
+	return v, cmd
 }
 
 // nameOf is a project's display name by rel, or the rel when it is unknown.
@@ -736,11 +777,7 @@ func (v view) updateEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case editSaved:
 		v.changed = true
 		v.status = "saved " + ed.draft.Name
-		keepDetail := v.detail != nil
-		v.reload(ed.rel)
-		if !keepDetail {
-			v.detail = nil
-		}
+		v.reloadKeeping(ed.rel)
 	case editRemoved:
 		v.changed = true
 		v.status = fmt.Sprintf("removed %s from the atlas; the vault is still on disk", ed.current.Name)
@@ -779,12 +816,8 @@ func (v view) updateIngest(msg tea.Msg) (tea.Model, tea.Cmd) {
 	v.ingest = nil
 	item := s.item
 	if len(s.linked) > 0 {
-		keepDetail := v.detail != nil
 		v.changed = true
-		v.reload(item.Project.Rel)
-		if !keepDetail {
-			v.detail = nil
-		}
+		v.reloadKeeping(item.Project.Rel)
 	}
 	waiting := s.plan.Waiting
 	if s.result != nil {
@@ -880,6 +913,9 @@ func (v view) View() string {
 	}
 	if v.ingest != nil {
 		return v.ingest.view()
+	}
+	if v.links != nil {
+		return v.links.view()
 	}
 	if v.detail != nil {
 		return v.viewDetail()
@@ -1005,13 +1041,13 @@ func (v view) viewDetail() string {
 		for _, l := range p.Linked {
 			name := l.Name
 			if name == "" {
-				name = dim.Render("(no page yet)")
+				name = home.Display(l.Path)
 			}
-			where := home.Display(l.Path)
+			where := dim.Render(l.Kind + " · " + home.Display(l.Path))
 			if l.Path == "" {
-				where = errSt.Render("names no page")
+				name, where = l.Entry, errSt.Render("names no page")
 			}
-			fmt.Fprintf(&b, "    %-10s %-24s %s\n", l.Kind, name, where)
+			fmt.Fprintf(&b, "    %-24s %s\n", name, where)
 			if s != nil {
 				for _, f := range s.Links {
 					if f.Path == l.Path && f.Kind == l.Kind {
@@ -1034,7 +1070,7 @@ func (v view) viewDetail() string {
 			fmt.Fprintf(&b, "    %-24s %s\n", q.Name, dim.Render(q.Rel+"  · related from its page"))
 		}
 	}
-	_ = links.Repo
+
 	section("Purpose", p.Purpose)
 	section("Done when", p.DefinitionOfDone)
 	if s != nil && len(s.OpenThreads) > 0 {

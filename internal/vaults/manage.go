@@ -301,6 +301,111 @@ func RemoveLink(cfg *home.Config, p *tree.Project, target string) error {
 	return SetLinks(cfg, p, keep)
 }
 
+// LinkEdit changes a link page. Empty fields are unchanged.
+type LinkEdit struct {
+	Name string
+	Kind string // links.Repo or links.Materials
+	Path string
+}
+
+// UpdateLink renames a link page, moves it between repos/ and materials/, or points it
+// at another folder, and rewrites every project page that links it.
+func UpdateLink(cfg *home.Config, page links.Page, edit LinkEdit) (links.Page, error) {
+	before, _, err := links.Walk(cfg.AtlasVault)
+	if err != nil {
+		return page, err
+	}
+	if page.File == "" {
+		page.File = filepath.Join(cfg.AtlasVault, links.Dir(page.Kind), page.Name+".md")
+	}
+	if _, err := os.Stat(page.File); err != nil {
+		return page, fmt.Errorf("no page %s.md", page.Rel())
+	}
+	updated := page
+	if edit.Kind != "" {
+		if edit.Kind != links.Repo && edit.Kind != links.Materials {
+			return page, fmt.Errorf("kind must be %s or %s", links.Repo, links.Materials)
+		}
+		updated.Kind = edit.Kind
+	}
+	if edit.Name != "" {
+		name := links.CleanName(edit.Name)
+		if name == "" {
+			return page, fmt.Errorf("%q leaves no usable page name", edit.Name)
+		}
+		updated.Name = name
+	}
+	if edit.Path != "" {
+		abs, err := filepath.Abs(home.Expand(edit.Path))
+		if err != nil {
+			return page, err
+		}
+		if other := links.FindByPath(before, abs); other != nil && other.File != page.File {
+			return page, fmt.Errorf("%s is already the folder of %s", home.Display(abs), other.Rel())
+		}
+		updated.Path = abs
+	}
+	info, err := os.Stat(updated.Path)
+	if err != nil {
+		return page, fmt.Errorf("%s: not found", home.Display(updated.Path))
+	}
+	if updated.Kind == links.Repo && !info.IsDir() {
+		return page, fmt.Errorf("%s is not a directory, so it cannot be a repo", home.Display(updated.Path))
+	}
+	updated.File = filepath.Join(cfg.AtlasVault, links.Dir(updated.Kind), updated.Name+".md")
+	if updated.File != page.File {
+		if _, err := os.Stat(updated.File); err == nil {
+			return page, fmt.Errorf("%s.md already exists", updated.Rel())
+		}
+		if err := os.MkdirAll(filepath.Dir(updated.File), 0o755); err != nil {
+			return page, err
+		}
+		if err := os.Rename(page.File, updated.File); err != nil {
+			return page, err
+		}
+	}
+	if updated.Path != page.Path {
+		if err := tree.UpdateFrontmatter(updated.File, map[string]any{"path": updated.Path}); err != nil {
+			return page, err
+		}
+	}
+	if updated.Rel() == page.Rel() {
+		return updated, nil
+	}
+	// Every project that linked the old page now links the new one, in the right list.
+	projects, _, err := tree.Walk(cfg.TreeRoot())
+	if err != nil {
+		return updated, err
+	}
+	for _, p := range projects {
+		repos, materials, changed := []string{}, []string{}, false
+		for _, kind := range []string{links.Repo, links.Materials} {
+			entries := p.Repos
+			if kind == links.Materials {
+				entries = p.Materials
+			}
+			for _, entry := range entries {
+				target := kind
+				if r, _ := links.Resolve(before, kind, entry); r != nil && r.File == page.File {
+					entry, target, changed = updated.Wikilink(), updated.Kind, true
+				}
+				if target == links.Repo {
+					repos = append(repos, entry)
+				} else {
+					materials = append(materials, entry)
+				}
+			}
+		}
+		if !changed {
+			continue
+		}
+		if err := tree.UpdateFrontmatter(p.Path, map[string]any{"repos": repos, "materials": materials}); err != nil {
+			return updated, err
+		}
+	}
+	return updated, nil
+}
+
 // Relate records that a and b belong together. One side holds the link; the other
 // side's page shows it as a backlink, and the atlas reads both directions.
 func Relate(cfg *home.Config, a, b *tree.Project) error {

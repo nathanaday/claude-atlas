@@ -82,7 +82,7 @@ internal/refresh/       derive state, generate categories/ and Tree.md, render O
 internal/pages/         About.md and Reference.md from templates
 internal/vaults/        create, register, edit project pages, link folders, relate projects
 internal/links/         link pages under repos/ and materials/, and the facts about their folders
-internal/tui/           Bubble Tea screens: the tree (view), the project editor, the add and adopt screens
+internal/tui/           Bubble Tea screens: the tree (view), the project editor, the links screen, ingest, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
 internal/home/          ~/.claude-atlas and config.json
 internal/console/       prompts and step lines

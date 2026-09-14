@@ -184,6 +184,29 @@ func TestLinkCommands(t *testing.T) {
 	}
 }
 
+func TestEditLinkCommand(t *testing.T) {
+	h, vaults := setup(t)
+	docs := filepath.Join(vaults, "docs")
+	os.MkdirAll(docs, 0o755)
+	if code := h.run("link", "welcome", docs); code != 0 {
+		t.Fatalf("link exit %d %s", code, h.err.String())
+	}
+	if code := h.run("edit-link", "docs"); code != 2 {
+		t.Fatalf("no flags exit %d", code)
+	}
+	if code := h.run("edit-link", "docs", "--name", "Lecture notes", "--kind", "repo"); code != 0 || !strings.Contains(h.out.String(), "materials/docs → repos/Lecture notes (repo,") {
+		t.Fatalf("edit-link exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	atlas := filepath.Join(filepath.Dir(h.home), "Atlas")
+	page, _ := os.ReadFile(filepath.Join(atlas, "tree", "welcome.md"))
+	if !strings.Contains(string(page), `- "[[repos/Lecture notes|Lecture notes]]"`) || !strings.Contains(string(page), "materials: []") {
+		t.Fatalf("project page:\n%s", page)
+	}
+	if code := h.run("edit-link", "nope", "--name", "x"); code != 1 || !strings.Contains(h.err.String(), "no page named") {
+		t.Fatalf("unknown page: %d %s", code, h.err.String())
+	}
+}
+
 func TestRelateCommands(t *testing.T) {
 	h, _ := setup(t)
 	if code := h.run("new-vault", "triage", "--category", "work"); code != 0 {

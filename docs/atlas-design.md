@@ -58,5 +58,9 @@ mean two edits per change and two places to drift.
 as a repo when it holds `.git`; `--kind` overrides that for a new page only,
 because an existing page keeps the kind of its directory. Every field in the
 interactive screens that takes a path completes it as a shell does, and the
-link field also completes page names. The ingest screen links the folder it
-stages from, so the next ingest with no path knows where to look.
+link field also completes page names. In `view`, `l` is a screen of its own:
+one box per link, and `a`, `e`, `u` act at once, one backend call each, then
+the atlas refreshes in the background. The project editor keeps `related`
+because a relation is a field of the project page; a link is an object of its
+own. The ingest screen links the folder it stages from, so the next ingest
+with no path knows where to look.

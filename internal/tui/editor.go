@@ -36,9 +36,13 @@ type Hooks struct {
 	// folders it linked.
 	Stage func(*tree.Project, *capture.StagePlan) (*capture.StageResult, []string, error)
 	// Links lists the link pages in the atlas, so a folder another project uses can be
-	// linked by name.
-	Links     func() []links.Page
-	VaultsDir string
+	// linked by name. AddLink, RemoveLink, and EditLink act on one project's links and
+	// one link page; the view refreshes after each.
+	Links      func() []links.Page
+	AddLink    func(*tree.Project, string) (links.Page, error)
+	RemoveLink func(*tree.Project, string) error
+	EditLink   func(links.Page, vaults.LinkEdit) (links.Page, error)
+	VaultsDir  string
 }
 
 type editMode int
@@ -49,7 +53,6 @@ const (
 	editPath
 	editCategory
 	editList
-	editListPath
 	editListPick
 	confirmRemove
 	confirmMove
@@ -75,32 +78,27 @@ const (
 	fieldBlockedOn
 	fieldReviewAfter
 	fieldDone
-	fieldLinks
 	fieldRelated
 	fieldCount
 )
 
-var fieldNames = [fieldCount]string{"Name", "Purpose", "Category", "Vault", "Priority", "State", "Blocked on", "Review after", "Done when", "Links", "Related"}
+var fieldNames = [fieldCount]string{"Name", "Purpose", "Category", "Vault", "Priority", "State", "Blocked on", "Review after", "Done when", "Related"}
+
+// labelWidth fits the longest field name, "Review after".
+const labelWidth = 13
 
 type draft struct {
 	Name, Purpose, Category, Vault, Priority, State string
 	BlockedOn, ReviewAfter, Done                    string
-	Links                                           []links.Page // a page without a Name is created on save
-	Related                                         []string     // project rels
+	Related                                         []string // project rels
 }
 
 func draftOf(p *tree.Project) draft {
-	d := draft{
+	return draft{
 		Name: p.Name, Purpose: p.Purpose, Category: p.Category(), Vault: p.VaultPath(), Priority: p.Priority, State: p.State,
 		BlockedOn: p.BlockedOn, ReviewAfter: p.ReviewAfter, Done: p.DefinitionOfDone,
 		Related: append([]string{}, p.RelatedTo...),
 	}
-	for _, l := range p.Linked {
-		if l.Path != "" {
-			d.Links = append(d.Links, links.Page{Kind: l.Kind, Name: l.Name, Path: l.Path})
-		}
-	}
-	return d
 }
 
 func (d draft) equal(o draft) bool {
@@ -113,17 +111,10 @@ func (d draft) equal(o draft) bool {
 }
 
 func (d draft) get(field int) string {
-	switch field {
-	case fieldLinks:
-		var parts []string
-		for _, l := range d.Links {
-			parts = append(parts, l.Kind+" "+l.Path)
-		}
-		return strings.Join(parts, "\x00")
-	case fieldRelated:
+	if field == fieldRelated {
 		return strings.Join(d.Related, "\x00")
 	}
-	return [fieldCount]string{d.Name, d.Purpose, d.Category, d.Vault, d.Priority, d.State, d.BlockedOn, d.ReviewAfter, d.Done, "", ""}[field]
+	return [fieldCount]string{d.Name, d.Purpose, d.Category, d.Vault, d.Priority, d.State, d.BlockedOn, d.ReviewAfter, d.Done, ""}[field]
 }
 
 func (d *draft) set(field int, v string) {
@@ -150,13 +141,12 @@ func (d *draft) set(field int, v string) {
 }
 
 // editor edits one project's page: its name, purpose, category, vault, priority, state,
-// linked folders, and related projects. It also removes the project from the atlas. It
-// is embedded in the view.
+// and related projects. It also removes the project from the atlas. It is embedded in
+// the view; links have their own screen.
 type editor struct {
 	hooks     Hooks
 	current   *tree.Project
 	projects  []*tree.Project
-	pages     []links.Page
 	original  draft
 	draft     draft
 	field     int
@@ -193,37 +183,23 @@ func newEditor(hooks Hooks, p *tree.Project) editor {
 	if hooks.Load != nil {
 		projects, _ = hooks.Load()
 	}
-	var pages []links.Page
-	if hooks.Links != nil {
-		pages = hooks.Links()
-	}
 	// The project as the tree loaded it, so related projects resolve.
 	for _, q := range projects {
 		if q.Rel == p.Rel {
 			p = q
 		}
 	}
-	e := editor{hooks: hooks, current: p, projects: projects, pages: pages, original: draftOf(p), draft: draftOf(p), text: text, picker: newPicker(known), rel: p.Rel}
-	e.path = newPathField("~/code/project or ~/Papers, or the name of a page under repos/ or materials/", 60)
+	e := editor{hooks: hooks, current: p, projects: projects, original: draftOf(p), draft: draftOf(p), text: text, picker: newPicker(known), rel: p.Rel}
+	e.path = newPathField("~/Documents/Vaults/project", 60)
 	return e
 }
 
 func (e editor) dirty() bool { return !e.draft.equal(e.original) }
 
-// list is the entries of the list field under the cursor, rendered for the screen.
-func (e editor) listLen() int {
-	if e.field == fieldLinks {
-		return len(e.draft.Links)
-	}
-	return len(e.draft.Related)
-}
+func (e editor) listLen() int { return len(e.draft.Related) }
 
 func (e *editor) removeAt(pos int) {
-	if e.field == fieldLinks {
-		e.draft.Links = append(append([]links.Page{}, e.draft.Links[:pos]...), e.draft.Links[pos+1:]...)
-	} else {
-		e.draft.Related = append(append([]string{}, e.draft.Related[:pos]...), e.draft.Related[pos+1:]...)
-	}
+	e.draft.Related = append(append([]string{}, e.draft.Related[:pos]...), e.draft.Related[pos+1:]...)
 }
 
 func (e editor) update(msg tea.Msg) (editor, tea.Cmd) {
@@ -309,20 +285,6 @@ func (e editor) update(msg tea.Msg) (editor, tea.Cmd) {
 			}
 		}
 		return e, nil
-	case editListPath:
-		if isKey {
-			switch key.Type {
-			case tea.KeyEnter:
-				return e.addLink(), nil
-			case tea.KeyEsc:
-				e.err = ""
-				e.mode = editList
-				return e, nil
-			}
-		}
-		var cmd tea.Cmd
-		e.path, cmd = e.path.update(msg)
-		return e, cmd
 	case editListPick:
 		if isKey {
 			switch key.Type {
@@ -371,15 +333,9 @@ func (e editor) update(msg tea.Msg) (editor, tea.Cmd) {
 	return e, nil
 }
 
-// startAdd opens the path input for a link, or the project picker for a relation.
+// startAdd opens the project picker for a relation.
 func (e editor) startAdd() (editor, tea.Cmd) {
 	e.err = ""
-	if e.field == fieldLinks {
-		e.path.names = e.pageNames()
-		e.path.setValue("")
-		e.mode = editListPath
-		return e, e.path.focus()
-	}
 	opts := e.relatedOptions()
 	if len(opts) == 0 {
 		e.err = "every other project is related already"
@@ -388,26 +344,6 @@ func (e editor) startAdd() (editor, tea.Cmd) {
 	e.pick = newOptionPicker(opts)
 	e.mode = editListPick
 	return e, e.pick.focus()
-}
-
-// pageNames lists the link pages the draft does not use yet.
-func (e editor) pageNames() []string {
-	var names []string
-	for _, page := range e.pages {
-		if !e.linkedPath(page.Path) {
-			names = append(names, page.Name)
-		}
-	}
-	return names
-}
-
-func (e editor) linkedPath(path string) bool {
-	for _, l := range e.draft.Links {
-		if filepath.Clean(l.Path) == filepath.Clean(path) {
-			return true
-		}
-	}
-	return false
 }
 
 // relatedOptions lists the projects the draft could relate to.
@@ -420,45 +356,6 @@ func (e editor) relatedOptions() []option {
 		opts = append(opts, option{label: q.Name + "  " + dim.Render(q.Rel), value: q.Rel, match: q.Name + " " + q.Rel})
 	}
 	return opts
-}
-
-// addLink reads the path input: a page name links that page; a path links its folder,
-// through the page that holds it or a new one.
-func (e editor) addLink() editor {
-	typed := e.path.value()
-	if typed == "" {
-		e.err = ""
-		e.mode = editList
-		return e
-	}
-	var page links.Page
-	if !strings.ContainsAny(typed, "/~") {
-		for _, known := range e.pages {
-			if strings.EqualFold(known.Name, typed) {
-				page = known
-			}
-		}
-	}
-	if page.Path == "" {
-		abs, _ := filepath.Abs(home.Expand(typed))
-		if _, err := os.Stat(abs); err != nil {
-			e.err = home.Display(abs) + " is neither a page nor a path on disk"
-			return e
-		}
-		page = links.Page{Kind: links.DetectKind(abs), Path: abs}
-		if known := links.FindByPath(e.pages, abs); known != nil {
-			page = *known
-		}
-	}
-	if e.linkedPath(page.Path) {
-		e.err = home.Display(page.Path) + " is already linked"
-		return e
-	}
-	e.draft.Links = append(e.draft.Links, page)
-	e.listPos = len(e.draft.Links) - 1
-	e.err = ""
-	e.mode = editList
-	return e
 }
 
 func (e editor) updateFields(msg tea.Msg) (editor, tea.Cmd) {
@@ -484,7 +381,7 @@ func (e editor) updateFields(msg tea.Msg) (editor, tea.Cmd) {
 			return e, e.picker.focus()
 		case fieldPriority, fieldState:
 			e.cycle(true)
-		case fieldLinks, fieldRelated:
+		case fieldRelated:
 			e.listPos = 0
 			e.mode = editList
 		case fieldVault:
@@ -571,10 +468,6 @@ func (e editor) save() editor {
 		cat := e.draft.Category
 		edit.Category = &cat
 	}
-	if e.draft.get(fieldLinks) != e.original.get(fieldLinks) {
-		pages := append([]links.Page{}, e.draft.Links...)
-		edit.Links = &pages
-	}
 	if e.draft.get(fieldRelated) != e.original.get(fieldRelated) {
 		related := append([]string{}, e.draft.Related...)
 		edit.Related = &related
@@ -615,19 +508,19 @@ func (e editor) view() string {
 	fmt.Fprintf(&b, "\n  %s   %s\n\n", title.Render(e.current.Name), dim.Render("tree/"+e.current.Rel+".md"))
 	for f := 0; f < fieldCount; f++ {
 		marker := "  "
-		name := label.Render(fieldNames[f])
+		name := label.Width(labelWidth).Render(fieldNames[f])
 		if f == e.field {
 			marker = cursorSt.Render("▸ ")
-			name = activeL.Render(fieldNames[f])
+			name = activeL.Width(labelWidth).Render(fieldNames[f])
 		}
 		var content string
 		switch {
 		case e.mode == editText && f == e.field:
 			content = e.text.View()
 		case e.mode == editPath && f == e.field:
-			content = e.path.view("               ")
+			content = e.path.view(listPad)
 		case e.mode == editCategory && f == e.field:
-			content = e.picker.view("               ")
+			content = e.picker.view(listPad)
 		case f == fieldPriority || f == fieldState:
 			content = "◂ " + e.draft.get(f) + " ▸"
 		case f == fieldCategory:
@@ -635,10 +528,8 @@ func (e editor) view() string {
 			if content == "" {
 				content = topLevel
 			}
-		case (e.mode == editList || e.mode == editListPath || e.mode == editListPick) && f == e.field:
+		case (e.mode == editList || e.mode == editListPick) && f == e.field:
 			content = e.viewList()
-		case f == fieldLinks:
-			content = e.linksSummary()
 		case f == fieldRelated:
 			content = e.relatedSummary()
 		case f == fieldVault:
@@ -663,13 +554,7 @@ func (e editor) view() string {
 		fmt.Fprintf(&b, "  %s %s does not exist. Move the vault directory there?  %s\n",
 			errSt.Render("▲"), home.Display(e.pendingMv.Vault), title.Render("y")+" / "+title.Render("n"))
 	case editList:
-		if e.field == fieldLinks {
-			b.WriteString("  " + dim.Render("↑↓ choose · a add a folder · d remove · Esc done") + "\n")
-		} else {
-			b.WriteString("  " + dim.Render("↑↓ choose · a add a project · d remove · Esc done") + "\n")
-		}
-	case editListPath:
-		b.WriteString("  " + dim.Render("type a folder path or a page name · "+pathHint()+" · Enter add · Esc cancel") + "\n")
+		b.WriteString("  " + dim.Render("↑↓ choose · a add a project · d remove · Esc done") + "\n")
 	case editListPick:
 		b.WriteString("  " + dim.Render("↑↓ choose · type to filter · Enter add · Esc cancel") + "\n")
 	case editText:
@@ -690,28 +575,6 @@ func (e editor) view() string {
 		b.WriteString("  " + errSt.Render(e.err) + "\n")
 	}
 	return b.String()
-}
-
-func (e editor) linksSummary() string {
-	if len(e.draft.Links) == 0 {
-		return dim.Render("none")
-	}
-	repos, materials := 0, 0
-	for _, l := range e.draft.Links {
-		if l.Kind == links.Repo {
-			repos++
-		} else {
-			materials++
-		}
-	}
-	var parts []string
-	if repos > 0 {
-		parts = append(parts, fmt.Sprintf("%d repo%s", repos, plural(repos)))
-	}
-	if materials > 0 {
-		parts = append(parts, fmt.Sprintf("%d material folder%s", materials, plural(materials)))
-	}
-	return strings.Join(parts, ", ")
 }
 
 func (e editor) relatedSummary() string {
@@ -753,52 +616,38 @@ func (e editor) relatedFrom() []string {
 	return names
 }
 
-// viewList renders the list editor for links or related projects.
+// listPad indents what sits under a field: two spaces, the marker, and the label.
+const listPad = "                 "
+
+// viewList renders the list editor for related projects.
 func (e editor) viewList() string {
 	var b strings.Builder
 	n := e.listLen()
 	if n == 0 && e.mode == editList {
-		if e.field == fieldLinks {
-			b.WriteString(dim.Render("none yet; press a to link a folder") + "\n")
-		} else {
-			b.WriteString(dim.Render("none yet; press a to relate a project") + "\n")
-		}
+		b.WriteString(dim.Render("none yet; press a to relate a project") + "\n")
 	}
 	for i := 0; i < n; i++ {
 		marker := "  "
-		var text string
-		if e.field == fieldLinks {
-			l := e.draft.Links[i]
-			name := l.Name
-			if name == "" {
-				name = newSt.Render("new page")
-			}
-			text = fmt.Sprintf("%-10s %-24s %s", l.Kind, name, home.Display(l.Path))
-		} else {
-			rel := e.draft.Related[i]
-			text = fmt.Sprintf("%-24s %s", e.relatedNames([]string{rel})[0], dim.Render(rel))
-		}
+		rel := e.draft.Related[i]
+		text := fmt.Sprintf("%-24s %s", e.relatedNames([]string{rel})[0], dim.Render(rel))
 		if i == e.listPos && e.mode == editList {
 			marker = cursorSt.Render("▸ ")
 			text = cursorSt.Render(text)
 		}
 		b.WriteString(marker + text + "\n")
 	}
-	if e.field == fieldRelated && e.mode == editList {
+	if e.mode == editList {
 		if from := e.relatedFrom(); len(from) > 0 {
 			b.WriteString("  " + dim.Render("related from "+strings.Join(from, ", ")+"; edit those on their own pages") + "\n")
 		}
 	}
-	switch e.mode {
-	case editListPath:
-		b.WriteString("  " + label.Width(8).Render("Folder") + e.path.view("          ") + "\n")
-	case editListPick:
+	if e.mode == editListPick {
 		b.WriteString("  " + e.pick.view("  ") + "\n")
 	}
 	if e.err != "" && e.mode != editList {
 		b.WriteString("  " + errSt.Render(e.err) + "\n")
 	}
-	return "\n               " + strings.ReplaceAll(strings.TrimRight(b.String(), "\n"), "\n", "\n               ")
+	return "\n" + listPad + strings.ReplaceAll(strings.TrimRight(b.String(), "\n"), "\n", "\n"+listPad)
 }
 
 func contains(list []string, value string) bool {

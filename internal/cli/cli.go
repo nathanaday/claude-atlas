@@ -60,6 +60,7 @@ The atlas:
   link NAME PATH|PAGE    link a git repo or a folder of material; PAGE names a folder another project links
   unlink NAME PATH|PAGE  remove that link; the folder and its page are untouched
   links [NAME]           a project's links, or every linked folder and the projects that use it
+  edit-link PAGE [flags] rename a linked folder's page, change its kind, or point it at another folder
   relate NAME OTHER      record that two projects belong together
   unrelate NAME OTHER    remove that
   refresh                read every vault and rewrite Overview.md, Tree.md, and categories/
@@ -145,6 +146,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.unlink(rest[1:])
 	case "links":
 		code, err = e.links(rest[1:])
+	case "edit-link":
+		code, err = e.editLink(rest[1:])
 	case "relate":
 		code, err = e.relate(rest[1:], true)
 	case "unrelate":
@@ -379,6 +382,11 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 		Links: func() []links.Page {
 			pages, _, _ := links.Walk(cfg.AtlasVault)
 			return pages
+		},
+		AddLink:    func(p *tree.Project, target string) (links.Page, error) { return vaults.AddLink(cfg, p, "", target) },
+		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
+		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
+			return vaults.UpdateLink(cfg, page, edit)
 		},
 		VaultsDir: cfg.VaultsDir,
 	}
@@ -1235,6 +1243,43 @@ func (e *env) allLinks(cfg *home.Config) (int, error) {
 		e.console.Say("  %-10s %-20s %s", page.Kind, page.Name, home.Display(page.Path))
 		e.console.Say("  %-10s %-20s %s", "", "", facts+" · "+used)
 	}
+	return 0, nil
+}
+
+func (e *env) editLink(args []string) (int, error) {
+	fs := newFlags("edit-link", e.stderr)
+	name := fs.String("name", "", "new page name")
+	kind := fs.String("kind", "", "repo or materials; moves the page between repos/ and materials/")
+	path := fs.String("path", "", "the folder the page points at")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) != 1 || (*name == "" && *kind == "" && *path == "") {
+		return 2, errors.New("usage: claude-atlas edit-link PAGE [--name N] [--kind repo|materials] [--path DIR]")
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	pages, _, err := links.Walk(cfg.AtlasVault)
+	if err != nil {
+		return 1, err
+	}
+	page, err := links.FindPage(pages, positional[0])
+	if err != nil {
+		return 1, err
+	}
+	updated, err := vaults.UpdateLink(cfg, *page, vaults.LinkEdit{Name: *name, Kind: *kind, Path: *path})
+	if err != nil {
+		return 1, err
+	}
+	out, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	e.console.Step(console.OK, "edited", fmt.Sprintf("%s → %s (%s, %s)", page.Rel(), updated.Rel(), updated.Kind, home.Display(updated.Path)))
+	e.console.Step(console.OK, "refreshed", home.Display(out))
 	return 0, nil
 }
 

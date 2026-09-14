@@ -81,7 +81,7 @@ Open its page under `tree/`. The properties panel shows the fields the atlas rea
 | materials | links to pages under `materials/` | Folders of static material: slide decks, PDFs, images. Overview shows the file count, size, and newest file. |
 | related | links to other project pages | Projects that belong together. One page holds the link; the other shows it as a backlink. |
 
-A commit in a linked repo or a new file in a linked folder counts as touching the project, so its heat reflects all of your work on it, not only the wiki. Nothing is copied; the page under `repos/` or `materials/` remembers the path. Link a folder with `claude-atlas link`, with `l` in `claude-atlas view`, or by typing `[[` in the property here and picking a page.
+A commit in a linked repo or a new file in a linked folder counts as touching the project, so its heat reflects all of your work on it, not only the wiki. Nothing is copied; the page under `repos/` or `materials/` remembers the path. Link a folder with `claude-atlas link`, with `l` in `claude-atlas view` (one box per link: add, edit, unlink), or by typing `[[` in the property here and picking a page.
 
 ## The graph
 
