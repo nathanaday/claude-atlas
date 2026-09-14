@@ -152,6 +152,9 @@ func PlanStage(v *vault.Vault, sources []string, now time.Time) (*StagePlan, err
 		}
 		plan.Dirs = append(plan.Dirs, abs)
 		base := filepath.Base(abs)
+		if base == "tasks" {
+			base = "tasks (sources)" // inbox/tasks/ holds task notes, not sources
+		}
 		err = filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil

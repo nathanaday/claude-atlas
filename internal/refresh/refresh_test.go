@@ -10,6 +10,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -169,7 +170,7 @@ func TestRenderListsRowsAndSignals(t *testing.T) {
 	res := &Result{Rows: []Row{{node, state}}, Problems: []tree.Problem{{Rel: "stray", Reason: "missing frontmatter"}}}
 	page := Render(res, "2026-09-11T20:00:00Z", today)
 	for _, want := range []string{
-		"| ❄️ cold | [[tree/work/v\\|x]] | [[categories/work\\|work]] | normal | active | 41d | 3 | 1 | 3 |",
+		"| ❄️ cold | [[tree/work/v\\|x]] | [[categories/work\\|work]] | normal | active | 41d | 3 | — | 1 | 3 |",
 		"| Vault | `/Users/me/v` |",
 		"## Signals", "> [!failure] tree/stray.md\n> Not a project: missing frontmatter.", "> [!warning] work/v", "cold for 41 days",
 		"## work\n\n### x\n\n> [!abstract] Purpose\n> Why.", "> - thread one",
@@ -207,7 +208,7 @@ func TestRunAgainstARealVault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !state.VaultOK || *state.Pages != 4 || state.Heat != "new" || len(state.OpenThreads) != 1 || *state.Unfinished.EmptySections != 0 || state.Project != "area/fresh" {
+	if !state.VaultOK || *state.Pages != 5 || state.Heat != "new" || len(state.OpenThreads) != 1 || *state.Unfinished.EmptySections != 0 || state.Project != "area/fresh" {
 		t.Fatalf("state %+v", state)
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "stale.json")); err == nil {
@@ -335,5 +336,37 @@ func TestCategoriesMakeTheTreeAGraph(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, CategoriesDir, "stale")); err == nil {
 		t.Fatal("stale category pages should be removed")
+	}
+}
+
+func TestTasksOnTheOverview(t *testing.T) {
+	node := leaf("/Users/me/v")
+	node.Rel, node.Name = "work/v", "V"
+	state := &tree.State{VaultOK: true, Heat: "hot", Tasks: &tree.TaskSummary{
+		Counts: tasks.Counts{Open: 3, Active: 1, Blocked: 1, Planted: 1, Stale: 1, Notes: 2},
+		Open: []tree.TaskLine{
+			{ID: "task-20260901-aaaa", Title: "Fix [the] dialog", Status: "active", Priority: "high", Path: "/Users/me/v/wiki/tasks/Fix the dialog.md", LastTouched: "2026-08-20", Stale: true},
+			{ID: "task-20260901-bbbb", Title: "Wait for parts", Status: "blocked", Priority: "normal", Path: "/Users/me/v/wiki/tasks/Wait for parts.md", LastTouched: "2026-09-01"},
+			{ID: "task-20260901-cccc", Title: "Someday", Status: "planted", Priority: "low", Path: "/Users/me/v/wiki/tasks/Someday.md", Due: "2026-12-01"},
+		},
+	}}
+	notes := strings.Join(Signals(node, state, today), "\n")
+	if !strings.Contains(notes, "1 blocked task: Wait for parts") || !strings.Contains(notes, "1 stale task, active but untouched for 14 days: Fix [the] dialog") {
+		t.Fatalf("signals %q", notes)
+	}
+	page := Render(&Result{Rows: []Row{{node, state}}}, "2026-09-11T20:00:00Z", today)
+	for _, want := range []string{
+		"| 3 open (1 active, 1 blocked, 1 planted) · 1 stale · 2 notes |",
+		"## Tasks\n\n| Project | Task | Status | Priority | Due | Last touched |",
+		"| [[tree/work/v\\|V]] | [Fix (the) dialog](obsidian://open?path=%2FUsers%2Fme%2Fv%2Fwiki%2Ftasks%2FFix+the+dialog.md) | active · stale | high | — | 2026-08-20 |",
+		"Someday.md) | planted | low | 2026-12-01 | — |",
+		"> [!todo] Open tasks\n> - [Fix (the) dialog](obsidian://",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("missing %q in:\n%s", want, page)
+		}
+	}
+	if taskCell(&tree.State{}) != "—" || taskCell(&tree.State{Tasks: &tree.TaskSummary{Counts: tasks.Counts{Notes: 1}}}) != "0 · 1 note" {
+		t.Fatal("task cell")
 	}
 }

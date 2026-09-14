@@ -40,6 +40,15 @@ const (
 	IndexPage    = "wiki/index.md"
 	OverviewPage = "wiki/overview.md"
 	LedgerPath   = "wiki/meta/ledgers/source-ledger.json"
+
+	// Tasks: open task pages, their archive, the generated index, the derived ledger,
+	// the inbox folder for task notes, and the user's scratch space.
+	TasksDir       = "wiki/tasks"
+	TaskArchiveDir = "wiki/tasks/archive"
+	TasksIndex     = "wiki/tasks/index.md"
+	TaskLedgerPath = "wiki/meta/ledgers/task-ledger.json"
+	InboxTasksDir  = "inbox/tasks"
+	IdeasDir       = "ideas"
 )
 
 // Mode is the filing methodology for new pages.
@@ -326,7 +335,43 @@ func writeMissing(root string, mode Mode, now time.Time, overwrite bool) ([]stri
 	if err := put(LedgerPath, ledger.Empty(now).Encode()); err != nil {
 		return nil, err
 	}
+	if err := put(TaskLedgerPath, []byte(EmptyTaskLedger)); err != nil {
+		return nil, err
+	}
 	sort.Strings(written)
+	return written, nil
+}
+
+// EmptyTaskLedger is the task ledger of a vault with no tasks; the tasks package owns
+// the full format.
+const EmptyTaskLedger = "{\n  \"schema\": \"claude-atlas.task-ledger.v1\",\n  \"tasks\": []\n}\n"
+
+// Upgrade adds the template files a vault made by an older version lacks, as one commit.
+// It returns what it wrote; nothing means the vault was current.
+func Upgrade(root string, now time.Time) ([]string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	v, err := Open(abs)
+	if err != nil {
+		return nil, err
+	}
+	written, err := writeMissing(abs, v.Config.Mode, now, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(written) == 0 {
+		return nil, nil
+	}
+	repo := gitx.Repo{Dir: abs}
+	if err := repo.Add(written...); err != nil {
+		return written, err
+	}
+	id := NewOperationID("setup", now)
+	if _, err := repo.Commit(CommitMessage("setup", fmt.Sprintf("add %s", strings.Join(written, ", ")), id)); err != nil {
+		return written, err
+	}
 	return written, nil
 }
 

@@ -27,9 +27,11 @@ const MaxFileBytes = txn.MaxWriteSize
 // WarnFileBytes is the size above which capture warns that git history will grow.
 const WarnFileBytes = 50 << 20
 
-// InboxFile describes one file waiting in inbox/.
+// InboxFile describes one file waiting in inbox/. Area is "tasks" for a note under
+// inbox/tasks/, which the task-plant skill handles rather than ingest.
 type InboxFile struct {
 	Path       string `json:"path"`
+	Area       string `json:"area,omitempty"`
 	Size       int64  `json:"size"`
 	Kind       string `json:"kind"`
 	SHA256     string `json:"sha256"`
@@ -116,6 +118,9 @@ func ListInbox(v *vault.Vault, now time.Time) ([]InboxFile, error) {
 			return err
 		}
 		f := InboxFile{Path: filepath.ToSlash(rel), Size: size, Kind: KindOf(d.Name()), SHA256: sum}
+		if strings.HasPrefix(f.Path, vault.InboxTasksDir+"/") {
+			f.Area = "tasks"
+		}
 		if id, rec := led.FindBySHA(sum); id != "" {
 			f.Captured, f.SourceID, f.StoredPath = true, id, rec.Origin.Locator
 		}

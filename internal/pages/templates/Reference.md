@@ -46,7 +46,7 @@ claude-atlas open-vault my-project
 
 **View the atlas**
 
-> Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `l` shows its linked folders, where `a` adds, `e` edits, and `u` unlinks one; `e` edits it (or removes it with `r`); `n` creates a vault; `a` adopts one; `R` refreshes. Paths complete with Tab.
+> Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `t` shows its tasks, where `p` plants one, `c` continues one in Claude Code, and `o` opens its page; `l` shows its linked folders, where `a` adds, `e` edits, and `u` unlinks one; `e` edits it (or removes it with `r`); `T` boards every project's tasks; `n` creates a vault; `a` adopts one; `R` refreshes. Paths complete with Tab.
 
 ```bash
 claude-atlas view
@@ -141,6 +141,36 @@ claude-atlas undo my-project ingest-20260912-150405-ab12
 ```
 
 > To invoke a skill on every launch, set `claude_code.prompt` in config.json, for example to `/claude-atlas:wiki`. Set `claude_code.session_context` to `false` to keep the hook silent.
+
+## Tasks
+
+> Plant a task in a project's vault: a page with status planted, in your words. Add `--priority`, `--workdir`, or `--due` when you know them.
+
+```bash
+claude-atlas plant my-project "Check the trust dialog on resume"
+```
+
+> List open tasks: a project's, or every project's when run outside a vault with no name. `--all` includes the archive.
+
+```bash
+claude-atlas tasks my-project
+```
+
+```bash
+claude-atlas tasks
+```
+
+> Continue a task in Claude Code: the session starts in the task's workdir with the vault selected and `/claude-atlas:task-run` as its first message. A title prefix works in place of the id.
+
+```bash
+claude-atlas open-claude my-project --task task-20260913-3f2a
+```
+
+> Give a vault made before tasks existed the folders and the index.
+
+```bash
+claude-atlas upgrade --all
+```
 
 ## Linking repos and material
 

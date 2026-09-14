@@ -13,7 +13,9 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/tree"
+	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
@@ -42,7 +44,11 @@ type Hooks struct {
 	AddLink    func(*tree.Project, string) (links.Page, error)
 	RemoveLink func(*tree.Project, string) error
 	EditLink   func(links.Page, vaults.LinkEdit) (links.Page, error)
-	VaultsDir  string
+	// Tasks reads a project's task ledger and the notes waiting in inbox/tasks/; Plant
+	// plants a task in its vault.
+	Tasks     func(*tree.Project) (tasks.Ledger, []string, error)
+	Plant     func(*tree.Project, tasks.Plant) (txn.Planted, error)
+	VaultsDir string
 }
 
 type editMode int

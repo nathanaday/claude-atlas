@@ -6,9 +6,10 @@ description: "Orient in a claude-atlas vault and route work to the right skill. 
 # Wiki orientation
 
 A claude-atlas vault is a plain Obsidian vault with a fixed layout: `inbox/` for
-sources you have not processed, `.raw/captured/` for immutable copies of the ones
-you have, and `wiki/` for the pages. Every change to `wiki/` is one reviewed
-operation and one git commit. The atlas MCP server (tools named
+sources you have not processed, `inbox/tasks/` for task notes, `ideas/` for the
+user's own scratch notes, `.raw/captured/` for immutable copies of ingested
+sources, `wiki/` for the pages, and `wiki/tasks/` for the tasks. Every change to
+`wiki/` is one reviewed operation and one git commit. The atlas MCP server (tools named
 `mcp__plugin_claude-atlas_atlas__<tool>`, called `status`, `plan`, `apply`, and so
 on below) is the only write path.
 
@@ -46,6 +47,11 @@ is rejected.
 | Check vault health | `wiki-lint` |
 | Read or change the filing mode | `wiki-mode` |
 | Roll up log entries | `wiki-fold` |
+| See, move, or route tasks | `task` |
+| Note an idea as a task, or plant the notes in `inbox/tasks/` | `task-plant` |
+| Decide how to do a task | `task-plan` |
+| Work on a task, or resume one | `task-run` |
+| Close a task as done or cancelled | `task-finish` |
 | Work with an Obsidian Canvas | `canvas` |
 | Author a Bases `.base` view | `obsidian-bases` |
 | Obsidian syntax questions | `obsidian-markdown` |
@@ -53,6 +59,10 @@ is rejected.
 
 Query is read-only. Keeping an answer is a separate `save` operation the user
 asks for. Never update the hot cache merely because a session ended.
+
+A session started in a repository that an atlas project links uses that
+project's vault; `status` says which. Search the wiki before answering from
+the code alone, and keep decisions made there with `save`.
 
 ## The operation contract
 

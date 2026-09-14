@@ -1,8 +1,11 @@
 # Tasks
 
-Status: proposed. This document sets out how tasks fit the vault, the plugin,
-and the atlas. It takes the brainstorm in the personal-projects vault ("Atlas
-ideas") as its starting point and says where and why it departs from it.
+Status: implemented in 0.4.0. This document sets out how tasks fit the vault,
+the plugin, and the atlas. It takes the brainstorm in the personal-projects
+vault ("Atlas ideas") as its starting point and says where and why it departs
+from it. Two details differ from the first proposal: cross-vault planting
+through a `vaults` tool is not built, since the tools already take a `vault`
+path and `claude-atlas list` prints them; and the stale threshold is 14 days.
 
 ## What a task must do
 
@@ -188,9 +191,9 @@ file, under `docs/atlas/` by convention, and the task page links to it. The
 vault page remains the record of the task; the repo file is an artifact of
 the work, like the code.
 
-`claude-atlas task run ID` starts Claude Code in the task's `workdir` with the
-vault selected, and `/claude-atlas:task-run ID` as the first message. From
-the atlas, `c` on a task does the same. A task with no workdir runs in the
+`claude-atlas open-claude NAME --task ID` starts Claude Code in the task's
+`workdir` with the vault selected, and `/claude-atlas:task-run ID` as the
+first message. From the atlas, `c` on a task does the same. A task with no workdir runs in the
 vault. The `t` screen offers the project's linked repos when setting one.
 
 ## The atlas side
@@ -208,7 +211,7 @@ The atlas reads ledgers; it never writes into a vault.
   `c` to start Claude Code on the task. `T` from the tree shows the open tasks
   of every project in one list, the same keys.
 - Commands: `claude-atlas tasks [NAME]`, `claude-atlas plant NAME "text"`,
-  `claude-atlas task run NAME ID`, mirroring the keys.
+  `claude-atlas open-claude NAME --task ID`, mirroring the keys.
 
 Planting from another vault's session ("add a task to cs566-project") needs
 the server to know the atlas's projects. A read-only `vaults` tool lists them
@@ -226,7 +229,8 @@ atlas; the plugin does, the way the CLI already does.
    router and the ingest skill updated.
 3. Atlas: refresh, overview, the `t` and `T` screens, `task run`.
 
-## Open questions
+## Left for later
 
-- Stale after 14 days: right threshold?
-- Cross-vault planting through a `vaults` tool: wanted in the first cut?
+- Cross-vault planting from a session through a `vaults` tool.
+- A Stop hook line when the session's task is active and its page was not
+  touched.

@@ -181,6 +181,11 @@ func launch(args ...string) error {
 }
 
 // Open asks the desktop to open a registered vault.
+// OpenPath opens one file of a vault Obsidian already knows.
+func OpenPath(path string) error {
+	return launch(OpenURI(path))
+}
+
 func Open(vault string) error {
 	if err := launch(OpenURI(vault)); err != nil {
 		return fmt.Errorf("could not launch Obsidian; open this link by hand: %s", OpenURI(vault))

@@ -12,6 +12,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -323,5 +324,127 @@ func TestPrependLogHandlesEmptyAndHeaderOnly(t *testing.T) {
 	out = string(prependLog([]byte(out), "## 2026-09-13 — b\n\nsecond\n", now.Add(24*time.Hour)))
 	if !strings.Contains(out, "updated: 2026-09-13") || strings.Index(out, "— b") > strings.Index(out, "— a") {
 		t.Fatalf("second:\n%s", out)
+	}
+}
+
+func taskPage(title, status, id, folder, extra string) (string, []byte) {
+	p := folder + "/" + title + ".md"
+	return p, []byte("---\ntype: task\ntitle: \"" + title + "\"\nstatus: " + status + "\npriority: normal\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - task\ntask_id: " + id + "\n---\n\n# " + title + "\n\n## Idea\n\nDo it.\n" + extra)
+}
+
+func TestTaskOperationsPlantMoveAndRebuildTheLedger(t *testing.T) {
+	v := newVault(t)
+	os.MkdirAll(v.Path(vault.InboxTasksDir), 0o755)
+	os.WriteFile(v.Path(vault.InboxTasksDir+"/note.md"), []byte("# Fix the dialog\n\nIt quits on Enter."), 0o644)
+	req, planted, err := PlantRequest(v, tasks.Plant{Text: "# Fix the dialog\n\nIt quits on Enter."}, "inbox/tasks/note.md", now)
+	if err != nil || planted.Path != vault.TasksDir+"/Fix the dialog.md" || req.Kind != Task || len(req.Writes) != 2 {
+		t.Fatalf("plant request: %+v %+v %v", req, planted, err)
+	}
+	plan, err := Prepare(v, req, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Apply(v, plan, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{planted.Path, vault.TaskLedgerPath, vault.TasksIndex, vault.LogPage, "inbox/tasks/note.md"} {
+		if !contains(res.ChangedPaths, want) {
+			t.Errorf("changed paths lack %s: %v", want, res.ChangedPaths)
+		}
+	}
+	if _, err := os.Stat(v.Path("inbox/tasks/note.md")); err == nil {
+		t.Fatal("the note should be gone")
+	}
+	led, _ := tasks.LoadLedger(v)
+	if len(led.Tasks) != 1 || led.Tasks[0].ID != planted.ID || led.Tasks[0].Status != "planted" || len(led.Tasks[0].History) != 1 || led.Tasks[0].History[0].OperationID != res.OperationID {
+		t.Fatalf("ledger %+v", led)
+	}
+	if index := read(t, v, vault.TasksIndex); !strings.Contains(index, "[[Fix the dialog]] | planted") {
+		t.Fatalf("index:\n%s", index)
+	}
+	if strings.Contains(read(t, v, vault.LogPage), "task-ledger") {
+		t.Fatal("the log names pages, not the ledger")
+	}
+	// A second plant with the same title gets a numbered page.
+	req2, planted2, _ := PlantRequest(v, tasks.Plant{Title: "Fix the dialog"}, "", now)
+	if planted2.Path != vault.TasksDir+"/Fix the dialog (2).md" {
+		t.Fatalf("second path %s", planted2.Path)
+	}
+	plan2, _ := Prepare(v, req2, now)
+	if _, err := Apply(v, plan2, now); err != nil {
+		t.Fatal(err)
+	}
+	// Finishing moves the page to the archive in one plan; the ledger keeps its history.
+	page := read(t, v, planted.Path)
+	done := strings.Replace(page, "status: planted", "status: done", 1) + "\n## Outcome\n\nFixed.\n"
+	move := Request{Kind: Task, Summary: "finish Fix the dialog", Writes: []Write{
+		{Path: planted.Path, Mode: Delete},
+		{Path: vault.TaskArchiveDir + "/Fix the dialog.md", Mode: Create, Content: []byte(done)},
+	}}
+	plan3, err := Prepare(v, move, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(v, plan3, now); err != nil {
+		t.Fatal(err)
+	}
+	led, _ = tasks.LoadLedger(v)
+	rec := led.Find(planted.ID)
+	if rec == nil || rec.Status != "done" || rec.Path != vault.TaskArchiveDir+"/Fix the dialog.md" || len(rec.History) != 2 {
+		t.Fatalf("after finish %+v", rec)
+	}
+	if index := read(t, v, vault.TasksIndex); !strings.Contains(index, "## Archive\n\n| Task") || !strings.Contains(index, "[[Fix the dialog (2)\\|Fix the dialog]] | planted") {
+		t.Fatalf("index:\n%s", index)
+	}
+	// Undo restores the page, the ledger, and the index together.
+	ops, _ := History(v, 1, false)
+	if _, err := UndoOperation(v, ops[0].ID, now); err != nil {
+		t.Fatal(err)
+	}
+	led, _ = tasks.LoadLedger(v)
+	if rec := led.Find(planted.ID); rec == nil || rec.Status != "planted" {
+		t.Fatalf("after undo %+v", rec)
+	}
+}
+
+func TestTaskKindBoundsWrites(t *testing.T) {
+	v := newVault(t)
+	p, text := taskPage("Done wrong", "done", "task-20260912-aaaa", vault.TasksDir, "")
+	if _, err := Prepare(v, Request{Kind: Task, Summary: "x", Writes: []Write{{Path: p, Mode: Create, Content: text}}}, now); err == nil || !strings.Contains(err.Error(), "moves to wiki/tasks/archive/") {
+		t.Fatalf("done outside the archive: %v", err)
+	}
+	p, text = taskPage("Good", "planted", "task-20260912-aaaa", vault.TasksDir, "")
+	if _, err := Prepare(v, Request{Kind: Save, Summary: "x", Writes: []Write{{Path: p, Mode: Create, Content: text}}}, now); err == nil || !strings.Contains(err.Error(), "task operation") {
+		t.Fatalf("save may not write task pages: %v", err)
+	}
+	if _, err := Prepare(v, Request{Kind: Task, Summary: "x", Writes: []Write{{Path: "wiki/concepts/x.md", Mode: Create, Content: mkpage("x", "")}}}, now); err == nil {
+		t.Fatal("a task operation may not write concepts")
+	}
+	if _, err := Prepare(v, Request{Kind: Task, Summary: "x", Writes: []Write{{Path: vault.TasksIndex, Mode: Replace, Content: text}}}, now); err == nil || !strings.Contains(err.Error(), "written by the core") {
+		t.Fatalf("index is reserved: %v", err)
+	}
+	plan, err := Prepare(v, Request{Kind: Task, Summary: "plant", Writes: []Write{{Path: p, Mode: Create, Content: text}}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(v, plan, now); err != nil {
+		t.Fatal(err)
+	}
+	q, qtext := taskPage("Other", "planted", "task-20260912-aaaa", vault.TasksDir, "")
+	if _, err := Prepare(v, Request{Kind: Task, Summary: "dup", Writes: []Write{{Path: q, Mode: Create, Content: qtext}}}, now); err == nil || !strings.Contains(err.Error(), "reuses task_id") {
+		t.Fatalf("duplicate id: %v", err)
+	}
+	// A repair may touch a task page, and the hot cache may ride along in a task plan.
+	hot := read(t, v, vault.HotPage)
+	plan, err = Prepare(v, Request{Kind: Task, Summary: "note", Writes: []Write{{Path: vault.HotPage, Mode: Replace, Content: []byte(hot + "\n- Working on Good.\n")}}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(v, plan, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(v, Request{Kind: Repair, Summary: "fix", Writes: []Write{{Path: p, Mode: Replace, Content: text}}}, now); err != nil {
+		t.Fatalf("repair: %v", err)
 	}
 }

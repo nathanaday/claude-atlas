@@ -26,10 +26,22 @@ const (
 // IngestPrompt is the first message that starts an ingest of the inbox.
 const IngestPrompt = "/claude-atlas:wiki-ingest"
 
+// TaskPrompt is the first message that continues a task.
+func TaskPrompt(taskID string) string { return "/claude-atlas:task-run " + taskID }
+
 // LaunchCommand builds the process that runs Claude Code in a vault, with the vault
 // selected explicitly so the plugin never has to guess. prompt is the first message;
 // empty means the configured one, if any.
 func LaunchCommand(cfg LaunchConfig, vault, prompt string) (*exec.Cmd, error) {
+	return LaunchIn(cfg, vault, vault, prompt)
+}
+
+// LaunchIn is LaunchCommand with the session started in dir, such as a task's workdir,
+// while the vault stays selected through the environment.
+func LaunchIn(cfg LaunchConfig, vault, dir, prompt string) (*exec.Cmd, error) {
+	if dir == "" {
+		dir = vault
+	}
 	command := cfg.Command
 	if command == "" {
 		command = "claude"
@@ -46,7 +58,7 @@ func LaunchCommand(cfg LaunchConfig, vault, prompt string) (*exec.Cmd, error) {
 		args = append(args, prompt)
 	}
 	cmd := exec.Command(path, args...)
-	cmd.Dir = vault
+	cmd.Dir = dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	context := "0"
 	if cfg.SessionContext {

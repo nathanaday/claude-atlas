@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nathanaday/claude-atlas/internal/ledger"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -95,6 +96,7 @@ type Report struct {
 	StaleIndexEntries  []LinkFinding        `json:"stale_index_entries"`
 	ReadErrors         []PathFinding        `json:"read_errors"`
 	LedgerErrors       []PathFinding        `json:"ledger_errors"`
+	TaskErrors         []PathFinding        `json:"task_errors"`
 }
 
 type page struct {
@@ -150,6 +152,25 @@ var (
 
 var orphanExcluded = map[string]bool{
 	"_index.md": true, "index.md": true, "log.md": true, "hot.md": true, "overview.md": true, "dashboard.md": true,
+}
+
+// taskErrors checks a task page: the rules the core enforces, a plan where the status
+// promises one, and an active task nobody has touched for tasks.StaleDays.
+func taskErrors(pg *page, asOf time.Time) []PathFinding {
+	t, err := tasks.Parse(pg.path, []byte(pg.text))
+	if err != nil {
+		return []PathFinding{{Path: pg.path, Message: strings.TrimPrefix(err.Error(), pg.path+": ")}}
+	}
+	var out []PathFinding
+	if (t.Status == "planned" || t.Status == "active") && !t.HasPlan {
+		out = append(out, PathFinding{Path: pg.path, Message: t.Status + " without a Plan section; run task-plan or set the status back to planted"})
+	}
+	if t.Status == "active" {
+		if updated, err := time.ParseInLocation("2006-01-02", t.Updated, time.Local); err == nil && asOf.Sub(updated).Hours()/24 >= tasks.StaleDays {
+			out = append(out, PathFinding{Path: pg.path, Message: fmt.Sprintf("active but untouched since %s; continue it, block it, or finish it", t.Updated)})
+		}
+	}
+	return out
 }
 
 // Run lints the vault at root.
@@ -311,6 +332,11 @@ func Run(root string, opts Options) (*Report, error) {
 	}
 
 	report.LedgerErrors = ledgerErrors(root, opts.Overlay, present, asOf)
+	for _, pg := range pages {
+		if tasks.IsPage(pg.path) {
+			report.TaskErrors = append(report.TaskErrors, taskErrors(pg, asOf)...)
+		}
+	}
 
 	sortFindings(report)
 	report.Summary = Summary{PagesScanned: len(pages), LinksScanned: links, CategoryCounts: map[string]int{
@@ -324,6 +350,7 @@ func Run(root string, opts Options) (*Report, error) {
 		"stale_index_entries": len(report.StaleIndexEntries),
 		"read_errors":         len(report.ReadErrors),
 		"ledger_errors":       len(report.LedgerErrors),
+		"task_errors":         len(report.TaskErrors),
 	}}
 	for _, n := range report.Summary.CategoryCounts {
 		report.Summary.IssuesFound += n
@@ -874,6 +901,10 @@ func (r *Report) Markdown() string {
 	}
 	section("Read errors", len(r.ReadErrors))
 	for _, f := range r.ReadErrors {
+		fmt.Fprintf(&b, "- `%s`: %s\n", f.Path, f.Message)
+	}
+	section("Tasks", len(r.TaskErrors))
+	for _, f := range r.TaskErrors {
 		fmt.Fprintf(&b, "- `%s`: %s\n", f.Path, f.Message)
 	}
 	section("Ledger", len(r.LedgerErrors))

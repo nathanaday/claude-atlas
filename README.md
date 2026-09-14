@@ -5,7 +5,7 @@ Knowledge vaults for Claude Code, and one view across all of them.
 [![License: MIT](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](.claude-plugin/plugin.json)
-[![Version](https://img.shields.io/badge/version-0.3.1-d97745.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.4.0-d97745.svg)](.claude-plugin/plugin.json)
 
 ## About
 
@@ -19,6 +19,9 @@ commit you can undo. The atlas is the page that shows all your vaults at once.
 - **Ask the vault.** Answers name their evidence, or say what is missing.
 - **Review, then commit.** Preview every change; undo reverts it. Your own
   Obsidian edits are committed first and never touched.
+- **Tasks that outlive a session.** Plant an idea in a word, plan it when
+  ready, and every session starts knowing what is open. A repo linked to the
+  project reaches the vault and its tasks with no file added to the repo.
 - **One view across vaults.** Heat, open threads, unfinished work, and your
   declared priority, side by side. Projects, the repos and folders they
   share, and the tree itself draw as one graph in Obsidian.
@@ -73,9 +76,10 @@ pages; `/claude-atlas:wiki-query` answers from the vault. Claude shows a
 preview before every change, and `claude-atlas undo` takes one back.
 
 See every vault at once. The tree does everything the commands do: `o` opens
-a vault in Obsidian, `c` starts Claude Code in it, `i` ingests sources, `l`
-shows and edits its linked repos and folders, `e` edits its project page, `n` creates a vault,
-`a` adopts one, `R` refreshes:
+a vault in Obsidian, `c` starts Claude Code in it, `i` ingests sources, `t`
+shows its tasks and plants new ones, `l` shows and edits its linked repos and
+folders, `e` edits its project page, `T` boards every project's tasks, `n`
+creates a vault, `a` adopts one, `R` refreshes:
 
 ```bash
 claude-atlas view
@@ -89,6 +93,8 @@ configuration: [docs/usage.md](docs/usage.md).
 ```
 sensor-triage/
 ├── inbox/                    sources waiting to be ingested
+│   └── tasks/                task notes waiting to be planted
+├── ideas/                    your scratch notes, outside the wiki
 ├── .raw/captured/            immutable copies of ingested sources
 ├── .git/                     one commit per operation
 └── wiki/
@@ -97,7 +103,8 @@ sensor-triage/
     ├── hot.md                recent context, handed to Claude at session start
     ├── overview.md           the stable big picture
     ├── sources/ entities/ concepts/ questions/ sessions/
-    └── meta/ledgers/source-ledger.json
+    ├── tasks/                one page per open task, archive/ for finished ones
+    └── meta/ledgers/         source-ledger.json, task-ledger.json
 ```
 
 Two filing modes: `generic` files pages by type into the folders above; `lyt`
@@ -142,7 +149,7 @@ Full reasoning in [docs/core-design.md](docs/core-design.md).
 ## Documentation
 
 - Usage — [docs/usage.md](docs/usage.md)
-- Design and decisions — [docs/core-design.md](docs/core-design.md), [docs/atlas-design.md](docs/atlas-design.md)
+- Design and decisions — [docs/core-design.md](docs/core-design.md), [docs/atlas-design.md](docs/atlas-design.md), [docs/tasks-design.md](docs/tasks-design.md)
 - Skills — [skills/](skills/), one `SKILL.md` per skill
 - Plugin manifest — [.claude-plugin/plugin.json](.claude-plugin/plugin.json)
 

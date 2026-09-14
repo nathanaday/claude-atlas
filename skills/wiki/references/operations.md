@@ -22,6 +22,8 @@ The tools are on the atlas MCP server, named `mcp__plugin_claude-atlas_atlas__<t
 | `history` | recent operations |
 | `lint` | the health check |
 | `mode` | read or prepare a change of filing mode |
+| `plant` | create a task page with status planted, as one commit |
+| `tasks` | the task ledger: open tasks in board order, counts, notes waiting |
 
 ## Workflow
 
@@ -65,11 +67,15 @@ The kind bounds what a plan may write. The core rejects anything outside it.
 | `save`, `markdown`, `repair`, `fold` | `wiki/**` |
 | `canvas` | `wiki/canvases/**/*.canvas` and `wiki/canvases/index.md` |
 | `base` | `wiki/**/*.base` |
+| `task` | task pages under `wiki/tasks/` and `wiki/tasks/archive/`, `wiki/hot.md`; may `delete` a note under `inbox/tasks/` |
 | `config` | only through the `mode` tool |
 
 Never writable: `wiki/log.md` (the core writes the entry from your summary),
-`wiki/meta/ledgers/source-ledger.json` (use the `sources` field), `.raw/`,
-`.git/`, `.vault-meta/`, `.obsidian/`, and `.claude-atlas.json`.
+`wiki/meta/ledgers/source-ledger.json` (use the `sources` field),
+`wiki/tasks/index.md` and `wiki/meta/ledgers/task-ledger.json` (the core
+rewrites them from the task pages), `.raw/`, `.git/`, `.vault-meta/`,
+`.obsidian/`, and `.claude-atlas.json`. Only a `task` or `repair` plan may
+touch a task page.
 
 ## Content rules the core enforces
 
@@ -87,6 +93,8 @@ Never writable: `wiki/log.md` (the core writes the entry from your summary),
 - Fold: the fold page and the index.
 - Canvas: the canvas, plus its catalog only when the catalog changes.
 - Repair: the approved fixes only.
+- Task: the task page; the hot cache when it names the task; the inbox note
+  when planting from one. The core adds the ledger and the index.
 - Query: nothing. Persistence is a separate `save`.
 
 ## Failure behavior

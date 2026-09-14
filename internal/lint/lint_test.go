@@ -154,3 +154,33 @@ func TestExcludeAndFrontmatterYAMLError(t *testing.T) {
 		t.Fatalf("exclude: %+v", r.Summary)
 	}
 }
+
+func TestTaskErrors(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "wiki", "tasks", "archive"), 0o755)
+	write := func(rel, text string) {
+		os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(text), 0o644)
+	}
+	task := func(status, id, extra string) string {
+		return "---\ntype: task\ntitle: T\nstatus: " + status + "\npriority: normal\ncreated: 2026-08-01\nupdated: 2026-08-01\ntags:\n  - task\ntask_id: " + id + "\n---\n\n# T\n\n## Idea\n\nx\n" + extra
+	}
+	write("wiki/tasks/index.md", "---\ntype: meta\ntitle: Tasks\nstatus: evergreen\ncreated: 2026-08-01\nupdated: 2026-08-01\ntags:\n  - meta\n---\n\n[[ok]] [[stale]] [[noplan]] [[wrong]]\n")
+	write("wiki/tasks/ok.md", task("planted", "task-20260801-aaaa", ""))
+	write("wiki/tasks/stale.md", task("active", "task-20260801-bbbb", "\n## Plan\n\n1. Go.\n"))
+	write("wiki/tasks/noplan.md", task("planned", "task-20260801-cccc", ""))
+	write("wiki/tasks/wrong.md", task("done", "task-20260801-dddd", ""))
+	report, err := Run(root, Options{AsOf: time.Date(2026, 9, 1, 0, 0, 0, 0, time.Local)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, f := range report.TaskErrors {
+		got[f.Path] = f.Message
+	}
+	if len(got) != 3 || !strings.Contains(got["wiki/tasks/stale.md"], "untouched since 2026-08-01") || !strings.Contains(got["wiki/tasks/noplan.md"], "without a Plan section") || !strings.Contains(got["wiki/tasks/wrong.md"], "moves to wiki/tasks/archive/") {
+		t.Fatalf("task errors %+v", got)
+	}
+	if report.Summary.CategoryCounts["task_errors"] != 3 || len(report.UnindexedPages) != 0 || !strings.Contains(report.Markdown(), "## Tasks (3)") {
+		t.Fatalf("summary %+v unindexed %v", report.Summary, report.UnindexedPages)
+	}
+}

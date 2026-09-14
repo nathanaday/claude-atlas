@@ -204,6 +204,10 @@ func (r Repo) Log(n int) ([]Commit, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseLog(out), nil
+}
+
+func parseLog(out string) []Commit {
 	var commits []Commit
 	for _, record := range strings.Split(out, "\x1e") {
 		record = strings.TrimLeft(record, "\n")
@@ -217,7 +221,19 @@ func (r Repo) Log(n int) ([]Commit, error) {
 			SHA: fields[0], Date: date, Subject: fields[2], Body: body, Trailers: trailers(body),
 		})
 	}
-	return commits, nil
+	return commits
+}
+
+// LogFollow lists the commits that touched one path, newest first, across renames.
+func (r Repo) LogFollow(path string) ([]Commit, error) {
+	if !r.HasHead() {
+		return nil, nil
+	}
+	out, err := r.run("log", "--follow", "--format=%H%x00%aI%x00%s%x00%b%x1e", "--", path)
+	if err != nil {
+		return nil, err
+	}
+	return parseLog(out), nil
 }
 
 // trailers parses `key: value` lines from the last paragraph of a commit body.

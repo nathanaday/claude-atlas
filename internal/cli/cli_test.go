@@ -374,3 +374,38 @@ func TestIngestStagesNewFilesAndLinksTheFolder(t *testing.T) {
 		t.Fatalf("third ingest exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 }
+
+func TestTaskCommands(t *testing.T) {
+	h, vaults := setup(t)
+	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "no open tasks in any project") {
+		t.Fatalf("tasks exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("plant", "welcome", "Fix", "the", "dialog", "--priority", "high"); code != 0 || !strings.Contains(h.out.String(), "planted") || !strings.Contains(h.out.String(), "wiki/tasks/Fix the dialog.md") {
+		t.Fatalf("plant exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	welcome := filepath.Join(vaults, "welcome")
+	if _, err := os.Stat(filepath.Join(welcome, "wiki", "tasks", "Fix the dialog.md")); err != nil {
+		t.Fatal("page missing")
+	}
+	if code := h.run("tasks", "welcome"); code != 0 || !strings.Contains(h.out.String(), "planted   high     Fix the dialog") {
+		t.Fatalf("tasks welcome exit %d:\n%s", code, h.out.String())
+	}
+	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "welcome\n") || !strings.Contains(h.out.String(), "Fix the dialog") {
+		t.Fatalf("all tasks:\n%s", h.out.String())
+	}
+	if code := h.run("plant", "welcome"); code != 2 {
+		t.Fatalf("plant without text exit %d", code)
+	}
+	if code := h.run("plant", "welcome", "x", "--priority", "urgent"); code != 1 {
+		t.Fatalf("bad priority exit %d %s", code, h.err.String())
+	}
+	// An older vault gains the task files through upgrade.
+	os.RemoveAll(filepath.Join(welcome, "ideas"))
+	os.Remove(filepath.Join(welcome, "wiki", "tasks", "index.md"))
+	if code := h.run("upgrade", "welcome"); code != 0 || !strings.Contains(h.out.String(), "added ideas/.gitkeep, wiki/tasks/index.md") {
+		t.Fatalf("upgrade exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("upgrade", "--all"); code != 0 || !strings.Contains(h.out.String(), "current") {
+		t.Fatalf("upgrade --all exit %d\n%s", code, h.out.String())
+	}
+}

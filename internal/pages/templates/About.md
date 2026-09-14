@@ -29,15 +29,21 @@
 sensor-triage/
 ├── .claude-atlas.json        identity and filing mode
 ├── .git/                     one commit per operation
-├── inbox/                    sources waiting to be ingested
+├── inbox/                    sources waiting to be ingested; inbox/tasks/ for task notes
+├── ideas/                    your scratch notes, outside the wiki
 ├── .raw/captured/            immutable copies of ingested sources
 └── wiki/
     ├── index.md  log.md  hot.md  overview.md
     ├── sources/ entities/ concepts/ questions/ sessions/
-    └── meta/ledgers/source-ledger.json
+    ├── tasks/                one page per open task; archive/ for finished ones; index.md generated
+    └── meta/ledgers/         source-ledger.json, task-ledger.json
 ```
 
 Drop a file into `inbox/`, start Claude Code in the vault, and run `/claude-atlas:wiki-ingest`. Claude captures the file, writes pages, shows you what it will change, and applies it as one commit. Edits you make in Obsidian are committed under their own message before any operation, so `claude-atlas undo` never touches them.
+
+## Tasks
+
+A task is a page under `wiki/tasks/` whose status moves from `planted` through `planned`, `active`, and `blocked` to `done` or `cancelled`; finished tasks move to `wiki/tasks/archive/`. Plant one with `claude-atlas plant`, with `p` in the atlas, with a note in `inbox/tasks/`, or by telling Claude. The task skills (`/claude-atlas:task`, `task-plan`, `task-run`, `task-finish`) carry the ceremony; every session in the vault starts knowing what is open. [[Overview]] lists open tasks across projects and signals blocked and stale ones.
 
 ## The tree
 

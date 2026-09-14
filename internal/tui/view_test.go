@@ -114,7 +114,7 @@ func TestDownRevealsTheEndAndNeverWraps(t *testing.T) {
 
 func TestHintsFollowTheCursor(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
-	if out := v.View(); !strings.Contains(out, "o Obsidian · c Claude · i ingest · e edit") {
+	if out := v.View(); !strings.Contains(out, "o Obsidian · c Claude · i ingest · t tasks · e edit") {
 		t.Fatalf("project hints missing:\n%s", out)
 	}
 	v = pressV(v, tea.KeyDown) // engineering

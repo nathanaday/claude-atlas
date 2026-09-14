@@ -29,9 +29,16 @@ type Opener struct {
 	Open            func(vault string) error
 	RegisterAndOpen func(vault string) error
 	// Claude builds the Claude Code process for a vault, with prompt as the first
-	// message when not empty; the view hands it the terminal.
-	Claude func(vault, prompt string) (*exec.Cmd, error)
+	// message when not empty; the view hands it the terminal. ClaudeIn starts it in
+	// another folder, such as a task's workdir, with the vault still selected.
+	Claude   func(vault, prompt string) (*exec.Cmd, error)
+	ClaudeIn func(vault, dir, prompt string) (*exec.Cmd, error)
+	// OpenPath opens one page of a vault in Obsidian.
+	OpenPath func(path string) error
 }
+
+// now is the clock the screens use; tests may replace it.
+var now = time.Now
 
 // claudeDoneMsg reports that a Claude Code session ended and the view has the terminal back.
 type claudeDoneMsg struct {
@@ -144,6 +151,7 @@ type view struct {
 	add       *model // the add-vault or adopt screen while open
 	ingest    *ingestScreen
 	links     *linksScreen
+	tasks     *tasksScreen
 	changed   bool
 	collapsed map[string]bool // category paths folded by the user
 	root      string
@@ -494,6 +502,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.links != nil {
 			v.links.width = msg.Width
 		}
+		if v.tasks != nil {
+			v.tasks.width = msg.Width
+		}
 		v.layout()
 		v.ensureVisible()
 		return v, nil
@@ -502,6 +513,14 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.errMsg = msg.err.Error()
 		} else {
 			v.status = "back from Claude Code in " + msg.name
+		}
+		if v.tasks != nil {
+			v.tasks.reload(v.items)
+			v.tasks.status = "back from Claude Code"
+			if v.hooks.Refresh != nil {
+				fn := v.hooks.Refresh
+				return v, func() tea.Msg { return refreshedMsg{err: fn()} }
+			}
 		}
 		return v, nil
 	case openedMsg:
@@ -530,6 +549,10 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.links.reload(v.items, v.links.item.Project.Rel)
 			v.links.status = "refreshed"
 		}
+		if v.tasks != nil {
+			v.tasks.reload(v.items)
+			v.tasks.status = "refreshed"
+		}
 		return v, nil
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
@@ -546,6 +569,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if v.links != nil {
 			return v.updateLinks(msg)
+		}
+		if v.tasks != nil {
+			return v.updateTasks(msg)
 		}
 		if msg.String() == "q" {
 			return v, tea.Quit
@@ -572,8 +598,10 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v.openAdd(true)
 		case "R":
 			return v.refresh()
+		case "T":
+			return v.openTasks(nil)
 		}
-		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" || key == "l" {
+		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" || key == "l" || key == "t" {
 			var item *Item
 			if v.detail != nil {
 				item = v.detail
@@ -590,6 +618,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v.openEditor(item)
 			case "l":
 				return v.openLinks(item)
+			case "t":
+				return v.openTasks(item)
 			case "i":
 				return v.openIngest(item)
 			}
@@ -757,6 +787,55 @@ func (v view) updateLinks(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, cmd
 }
 
+// openTasks shows a project's open tasks, or every project's when item is nil.
+func (v view) openTasks(item *Item) (tea.Model, tea.Cmd) {
+	if v.hooks.Tasks == nil {
+		v.errMsg = "tasks are not available here"
+		return v, nil
+	}
+	s := newTasks(v.hooks, v.opener, item, v.items, v.width)
+	v.tasks = &s
+	return v, nil
+}
+
+// updateTasks forwards keys to the tasks screen, starts Claude Code when asked, and
+// refreshes in the background after a plant.
+func (v view) updateTasks(msg tea.Msg) (tea.Model, tea.Cmd) {
+	s, cmd := v.tasks.update(msg)
+	if s.closed {
+		v.tasks = nil
+		rel := ""
+		if s.item != nil {
+			rel = s.item.Project.Rel
+		} else if r := v.current(); r != nil && r.kind == rowProject {
+			rel = r.item.Project.Rel
+		}
+		v.reloadKeeping(rel)
+		return v, nil
+	}
+	v.tasks = &s
+	if l := s.launch; l != nil {
+		v.tasks.launch = nil
+		cmd, err := v.opener.ClaudeIn(l.vault, l.dir, l.prompt)
+		if err != nil {
+			v.tasks.err = err.Error()
+			return v, nil
+		}
+		name := l.name
+		return v, tea.ExecProcess(cmd, func(err error) tea.Msg { return claudeDoneMsg{name: name, err: err} })
+	}
+	if s.changed {
+		v.tasks.changed = false
+		v.changed = true
+		if v.hooks.Refresh != nil {
+			v.tasks.status += " · refreshing…"
+			fn := v.hooks.Refresh
+			return v, tea.Batch(cmd, func() tea.Msg { return refreshedMsg{err: fn()} })
+		}
+	}
+	return v, cmd
+}
+
 // nameOf is a project's display name by rel, or the rel when it is unknown.
 func (v view) nameOf(rel string) string {
 	for _, it := range v.items {
@@ -917,6 +996,9 @@ func (v view) View() string {
 	if v.links != nil {
 		return v.links.view()
 	}
+	if v.tasks != nil {
+		return v.tasks.view()
+	}
 	if v.detail != nil {
 		return v.viewDetail()
 	}
@@ -948,7 +1030,7 @@ func (v view) View() string {
 
 // globalHints lists the keys that work anywhere in the tree.
 func (v view) globalHints() string {
-	return "n new vault · a adopt · R refresh · - + fold all · q quit"
+	return "n new vault · a adopt · T all tasks · R refresh · - + fold all · q quit"
 }
 
 // treeHints lists the keys that do something for the row under the cursor.
@@ -957,7 +1039,7 @@ func (v view) treeHints() string {
 	if r := v.current(); r != nil {
 		switch r.kind {
 		case rowProject:
-			hints += " · Enter details · o Obsidian · c Claude · i ingest · e edit · l links · Space fold"
+			hints += " · Enter details · o Obsidian · c Claude · i ingest · t tasks · e edit · l links · Space fold"
 		case rowCategory:
 			if v.collapsed[r.path] {
 				hints += " · Enter unfold"
@@ -1004,6 +1086,9 @@ func (v view) viewDetail() string {
 	row("State", p.State)
 	row("Blocked on", dash(p.BlockedOn))
 	row("Review after", dash(p.ReviewAfter))
+	if s != nil && s.Tasks != nil {
+		row("Tasks", taskSummaryText(s.Tasks))
+	}
 	if s != nil {
 		row("Pages", pagesText(s))
 		u := s.Unfinished
@@ -1079,8 +1164,27 @@ func (v view) viewDetail() string {
 			b.WriteString("    - " + t + "\n")
 		}
 	}
-	b.WriteString("\n" + v.footer("o Obsidian · c Claude Code · i ingest · e edit · l links · R refresh · Esc back · q quit"))
+	b.WriteString("\n" + v.footer("o Obsidian · c Claude Code · i ingest · t tasks · e edit · l links · R refresh · Esc back · q quit"))
 	return b.String()
+}
+
+// taskSummaryText is one line of task counts for the details screen.
+func taskSummaryText(t *tree.TaskSummary) string {
+	c := t.Counts
+	if c.Open == 0 {
+		if c.Notes > 0 {
+			return fmt.Sprintf("none open · %d note%s waiting", c.Notes, plural(c.Notes))
+		}
+		return "none open"
+	}
+	out := fmt.Sprintf("%d open: %d active · %d blocked · %d planned · %d planted", c.Open, c.Active, c.Blocked, c.Planned, c.Planted)
+	if c.Stale > 0 {
+		out += errSt.Render(fmt.Sprintf(" · %d stale", c.Stale))
+	}
+	if c.Notes > 0 {
+		out += fmt.Sprintf(" · %d note%s waiting", c.Notes, plural(c.Notes))
+	}
+	return out
 }
 
 // projects lists every project the view holds.

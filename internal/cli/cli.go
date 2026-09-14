@@ -26,6 +26,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/obsidian"
 	"github.com/nathanaday/claude-atlas/internal/pages"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/tui"
 	"github.com/nathanaday/claude-atlas/internal/txn"
@@ -48,7 +49,7 @@ Vaults:
   new-vault NAME         create a vault without prompts
   adopt [PATH]           make an existing Obsidian or claude-obsidian vault a claude-atlas vault
   open-vault [NAME]      open the atlas, or a project's vault, in Obsidian
-  open-claude NAME       start Claude Code inside a project's vault
+  open-claude NAME       start Claude Code inside a project's vault; --task ID continues a task in its workdir
   ingest NAME [PATH...]  stage new files from outside the vault into its inbox, then ingest them
 
 The atlas:
@@ -65,12 +66,17 @@ The atlas:
   unrelate NAME OTHER    remove that
   refresh                read every vault and rewrite Overview.md, Tree.md, and categories/
 
+Tasks (VAULT is a project name or a path; default: the current directory):
+  plant VAULT TEXT...    plant a task: a page with status planted, from your words
+  tasks [VAULT]          list open tasks; with no vault and outside one, every project's
+
 Inside a vault (VAULT is a project name or a path; default: the current directory):
   lint [VAULT]           run the wiki health check
   history [VAULT]        list operations, newest first
   undo VAULT OPERATION   revert one operation
   recover [VAULT]        restore a vault after an interrupted operation
   mode [VAULT] [MODE]    show or set the filing mode: generic or lyt
+  upgrade [VAULT|--all]  add the files a vault made by an older version lacks
   apply VAULT PLAN.json  apply a plan file, for scripts
 
 Plugin:
@@ -172,6 +178,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.recover(rest[1:])
 	case "mode":
 		code, err = e.mode(rest[1:])
+	case "plant":
+		code, err = e.plant(rest[1:])
+	case "tasks":
+		code, err = e.tasks(rest[1:])
+	case "upgrade":
+		code, err = e.upgrade(rest[1:])
 	case "apply":
 		code, err = e.apply(rest[1:])
 	case "mcp":
@@ -388,6 +400,33 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
 			return vaults.UpdateLink(cfg, page, edit)
 		},
+		Tasks: func(p *tree.Project) (tasks.Ledger, []string, error) {
+			v, err := vault.Open(p.VaultPath())
+			if err != nil {
+				return tasks.Ledger{}, nil, err
+			}
+			led, err := tasks.Current(v, time.Now())
+			return led, tasks.Notes(v), err
+		},
+		Plant: func(p *tree.Project, plant tasks.Plant) (txn.Planted, error) {
+			v, err := vault.Open(p.VaultPath())
+			if err != nil {
+				return txn.Planted{}, err
+			}
+			now := time.Now()
+			req, planted, err := txn.PlantRequest(v, plant, "", now)
+			if err != nil {
+				return txn.Planted{}, err
+			}
+			plan, err := txn.Prepare(v, req, now)
+			if err != nil {
+				return txn.Planted{}, err
+			}
+			if _, err := txn.Apply(v, plan, now); err != nil {
+				return txn.Planted{}, err
+			}
+			return planted, nil
+		},
 		VaultsDir: cfg.VaultsDir,
 	}
 }
@@ -594,6 +633,10 @@ func (e *env) view(args []string) (int, error) {
 		Status:          obsidian.Status,
 		Open:            obsidian.Open,
 		RegisterAndOpen: obsidian.RegisterAndOpen,
+		ClaudeIn: func(vault, dir, prompt string) (*exec.Cmd, error) {
+			return claudecode.LaunchIn(cfg.ClaudeCode, vault, dir, prompt)
+		},
+		OpenPath: obsidian.OpenPath,
 		Claude: func(vault, prompt string) (*exec.Cmd, error) {
 			return claudecode.LaunchCommand(cfg.ClaudeCode, vault, prompt)
 		},
@@ -731,8 +774,15 @@ const skillHint = "skills: " + hooks.Skills
 const trustNote = "The first time in a vault, Claude Code asks whether you trust the folder; choose Yes."
 
 func (e *env) openClaude(args []string) (int, error) {
-	if len(args) != 1 {
-		return 2, errors.New("usage: claude-atlas open-claude NAME")
+	fs := newFlags("open-claude", e.stderr)
+	taskID := fs.String("task", "", "continue this task: start in its workdir with /claude-atlas:task-run as the first message")
+	in := fs.String("in", "", "start the session in this folder instead of the vault")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) != 1 {
+		return 2, errors.New("usage: claude-atlas open-claude NAME [--task ID] [--in DIR]")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
@@ -742,9 +792,9 @@ func (e *env) openClaude(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	project := tree.FindByRel(projects, args[0])
+	project := tree.FindByRel(projects, positional[0])
 	if project == nil {
-		return 1, fmt.Errorf("no project named %q; see `claude-atlas list`", args[0])
+		return 1, fmt.Errorf("no project named %q; see `claude-atlas list`", positional[0])
 	}
 	if !e.console.Interactive() {
 		return 2, errors.New("open-claude starts an interactive Claude Code session and needs a terminal")
@@ -752,11 +802,23 @@ func (e *env) openClaude(args []string) (int, error) {
 	if vault.IsLegacy(project.VaultPath()) {
 		e.console.Say("  %s is a claude-obsidian vault; adopt it first: claude-atlas adopt %s", project.Name, home.Display(project.VaultPath()))
 	}
-	cmd, err := claudecode.LaunchCommand(cfg.ClaudeCode, project.VaultPath(), "")
+	dir, prompt := home.Expand(*in), ""
+	if *taskID != "" {
+		rec, err := e.findTask(project, *taskID)
+		if err != nil {
+			return 1, err
+		}
+		prompt = claudecode.TaskPrompt(rec.ID)
+		if dir == "" {
+			dir = rec.Workdir
+		}
+		e.console.Say("  task: %s (%s)", rec.Title, rec.Status)
+	}
+	cmd, err := claudecode.LaunchIn(cfg.ClaudeCode, project.VaultPath(), dir, prompt)
 	if err != nil {
 		return 1, err
 	}
-	e.console.Say("  %s", home.Display(project.VaultPath()))
+	e.console.Say("  %s", home.Display(cmd.Dir))
 	e.console.Say("  %s", skillHint)
 	e.console.Say("  %s", trustNote)
 	e.console.Say("")
@@ -1479,6 +1541,221 @@ func (e *env) history(args []string) (int, error) {
 	return 0, nil
 }
 
+// findTask finds a task in a project's vault by id, or by the start of its title.
+func (e *env) findTask(p *tree.Project, key string) (*tasks.Record, error) {
+	v, err := vault.Open(p.VaultPath())
+	if err != nil {
+		return nil, err
+	}
+	led, err := tasks.Current(v, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if rec := led.Find(key); rec != nil {
+		return rec, nil
+	}
+	var matches []*tasks.Record
+	for i := range led.Tasks {
+		if strings.HasPrefix(strings.ToLower(led.Tasks[i].Title), strings.ToLower(key)) {
+			matches = append(matches, &led.Tasks[i])
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return nil, fmt.Errorf("no task %q in %s; see `claude-atlas tasks %s`", key, p.Name, p.Rel)
+	}
+	return nil, fmt.Errorf("%q matches several tasks in %s; use the id", key, p.Name)
+}
+
+func (e *env) plant(args []string) (int, error) {
+	fs := newFlags("plant", e.stderr)
+	title := fs.String("title", "", "the task's title; taken from the text when omitted")
+	priority := fs.String("priority", "", "high, normal, low, or someday")
+	workdir := fs.String("workdir", "", "the folder the work happens in")
+	due := fs.String("due", "", "YYYY-MM-DD")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) < 2 {
+		return 2, errors.New("usage: claude-atlas plant VAULT TEXT... [--title T] [--priority P] [--workdir DIR] [--due DATE]")
+	}
+	v, err := e.openVaultArg(positional[0])
+	if err != nil {
+		return 1, err
+	}
+	now := time.Now()
+	req, planted, err := txn.PlantRequest(v, tasks.Plant{Title: *title, Text: strings.Join(positional[1:], " "), Priority: *priority, Workdir: home.Expand(*workdir), Due: *due}, "", now)
+	if err != nil {
+		return 1, err
+	}
+	plan, err := txn.Prepare(v, req, now)
+	if err != nil {
+		return 1, err
+	}
+	res, err := txn.Apply(v, plan, now)
+	if err != nil {
+		return 1, err
+	}
+	e.console.Step(console.OK, "planted", fmt.Sprintf("%s (%s)", planted.Path, planted.ID))
+	e.console.Step(console.OK, "committed", res.OperationID)
+	return 0, nil
+}
+
+func (e *env) tasks(args []string) (int, error) {
+	fs := newFlags("tasks", e.stderr)
+	all := fs.Bool("all", false, "include done and cancelled tasks")
+	status := fs.String("status", "", "only tasks with this status")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) > 1 {
+		return 2, errors.New("usage: claude-atlas tasks [VAULT] [--all] [--status S]")
+	}
+	now := time.Now()
+	v, err := e.openVaultArg(first(positional))
+	if err != nil && len(positional) == 0 && errors.Is(err, vault.ErrNotVault) {
+		return e.allTasks(now, *all, *status)
+	}
+	if err != nil {
+		return 1, err
+	}
+	led, err := tasks.Current(v, now)
+	if err != nil {
+		return 1, err
+	}
+	e.printTasks(led, now, *all, *status, "")
+	if notes := tasks.Notes(v); len(notes) > 0 {
+		e.console.Say("  %d task note%s waiting in %s/: %s", len(notes), plural(len(notes)), vault.InboxTasksDir, strings.Join(notes, ", "))
+	}
+	for _, p := range led.Problems {
+		e.console.Step(console.Fail, p.Path, p.Reason)
+	}
+	return 0, nil
+}
+
+// allTasks lists the open tasks of every registered project.
+func (e *env) allTasks(now time.Time, all bool, status string) (int, error) {
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	projects, _, err := tree.Walk(cfg.TreeRoot())
+	if err != nil {
+		return 1, err
+	}
+	shown := 0
+	for _, p := range projects {
+		v, err := vault.Open(p.VaultPath())
+		if err != nil {
+			continue
+		}
+		led, err := tasks.Current(v, now)
+		if err != nil {
+			continue
+		}
+		list := led.Open()
+		if all {
+			list = append(list, led.Archived()...)
+		}
+		if len(list) == 0 {
+			continue
+		}
+		shown += len(list)
+		e.printTasks(led, now, all, status, p.Name)
+	}
+	if shown == 0 {
+		e.console.Say("no open tasks in any project; plant one with `claude-atlas plant NAME \"...\"`")
+	}
+	return 0, nil
+}
+
+func (e *env) printTasks(led tasks.Ledger, now time.Time, all bool, status, project string) {
+	list := led.Open()
+	if all {
+		list = append(list, led.Archived()...)
+	}
+	if project != "" {
+		e.console.Say("%s", project)
+	}
+	if len(list) == 0 {
+		e.console.Say("  no open tasks")
+		return
+	}
+	for _, r := range list {
+		if status != "" && r.Status != status {
+			continue
+		}
+		flags := ""
+		if tasks.Stale(r, now) {
+			flags = "  stale"
+		}
+		if r.Due != "" {
+			flags += "  due " + r.Due
+		}
+		e.console.Say("  %-9s %-8s %-40s %s  %s%s", r.Status, r.Priority, r.Title, r.ID, dash(r.LastTouched), flags)
+		if r.Workdir != "" {
+			e.console.Say("  %-9s %-8s %s", "", "", "workdir "+home.Display(r.Workdir))
+		}
+	}
+}
+
+func dash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+func (e *env) upgrade(args []string) (int, error) {
+	fs := newFlags("upgrade", e.stderr)
+	all := fs.Bool("all", false, "every registered vault")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) > 1 || (*all && len(positional) > 0) {
+		return 2, errors.New("usage: claude-atlas upgrade [VAULT] or claude-atlas upgrade --all")
+	}
+	var roots []string
+	if *all {
+		cfg, err := e.home.Load()
+		if err != nil {
+			return 1, err
+		}
+		projects, _, err := tree.Walk(cfg.TreeRoot())
+		if err != nil {
+			return 1, err
+		}
+		for _, p := range projects {
+			if vault.IsVault(p.VaultPath()) {
+				roots = append(roots, p.VaultPath())
+			}
+		}
+	} else {
+		v, err := e.openVaultArg(first(positional))
+		if err != nil {
+			return 1, err
+		}
+		roots = []string{v.Root}
+	}
+	for _, root := range roots {
+		written, err := vault.Upgrade(root, time.Now())
+		if err != nil {
+			return 1, err
+		}
+		if len(written) == 0 {
+			e.console.Step(console.Skip, home.Display(root), "current")
+			continue
+		}
+		e.console.Step(console.OK, home.Display(root), "added "+strings.Join(written, ", "))
+	}
+	return 0, nil
+}
+
 func (e *env) undo(args []string) (int, error) {
 	if len(args) != 2 {
 		return 2, errors.New("usage: claude-atlas undo VAULT OPERATION")
@@ -1683,7 +1960,7 @@ func (e *env) hook(args []string) (int, error) {
 		if cfg, err := e.home.Load(); err == nil {
 			enabled = cfg.ClaudeCode.SessionContext
 		}
-		return 0, hooks.SessionStart(e.stdin, e.stdout, os.Getenv, enabled)
+		return 0, hooks.SessionStart(e.stdin, e.stdout, os.Getenv, enabled, time.Now())
 	case "guard":
 		return 0, hooks.Guard(e.stdin, e.stdout)
 	case "stop":

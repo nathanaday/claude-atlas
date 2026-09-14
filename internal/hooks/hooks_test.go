@@ -9,7 +9,11 @@ import (
 	"time"
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
+	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 func newVault(t *testing.T) *vault.Vault {
@@ -32,7 +36,7 @@ func env(values map[string]string) Env {
 func TestSessionStart(t *testing.T) {
 	v := newVault(t)
 	var out bytes.Buffer
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Path("wiki")+`"}`), &out, env(nil), true); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Path("wiki")+`"}`), &out, env(nil), true, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -45,19 +49,19 @@ func TestSessionStart(t *testing.T) {
 		t.Fatal("frontmatter should be stripped")
 	}
 	out.Reset()
-	SessionStart(strings.NewReader(`{"cwd":"`+t.TempDir()+`"}`), &out, env(nil), true)
+	SessionStart(strings.NewReader(`{"cwd":"`+t.TempDir()+`"}`), &out, env(nil), true, time.Now())
 	if out.Len() != 0 {
 		t.Fatal("silent outside a vault")
 	}
 	out.Reset()
-	SessionStart(strings.NewReader(`{"cwd":"/nowhere"}`), &out, env(map[string]string{vault.EnvVault: v.Root, "CLAUDE_ATLAS_SESSION_CONTEXT": "0"}), true)
+	SessionStart(strings.NewReader(`{"cwd":"/nowhere"}`), &out, env(map[string]string{vault.EnvVault: v.Root, "CLAUDE_ATLAS_SESSION_CONTEXT": "0"}), true, time.Now())
 	if !strings.Contains(out.String(), "claude-atlas vault") || strings.Contains(out.String(), "<vault-context>") {
 		t.Fatalf("env vault with context off:\n%s", out.String())
 	}
 	os.MkdirAll(v.Path(".vault-meta"), 0o755)
 	os.WriteFile(v.Path(".vault-meta/inflight.json"), []byte(`{"operation_id":"save-x","paths":[]}`), 0o644)
 	out.Reset()
-	SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false)
+	SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, time.Now())
 	if !strings.Contains(out.String(), "WARNING: operation save-x was interrupted") {
 		t.Fatalf("recovery warning:\n%s", out.String())
 	}
@@ -91,5 +95,65 @@ func TestGuard(t *testing.T) {
 	Guard(strings.NewReader(`{"tool_name":"Edit","cwd":"`+v.Root+`","tool_input":{"file_path":"wiki/hot.md"}}`), &out)
 	if !strings.Contains(out.String(), "deny") {
 		t.Fatal("relative paths resolve against cwd")
+	}
+}
+
+func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
+	v := newVault(t)
+	now := time.Now()
+	req, _, err := txn.PlantRequest(v, tasks.Plant{Title: "Fix the dialog", Text: "It quits on Enter."}, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := txn.Prepare(v, req, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txn.Apply(v, plan, now); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(v.Path("inbox/tasks"), 0o755)
+	os.WriteFile(v.Path("inbox/tasks/idea.md"), []byte("An idea."), 0o644)
+	var out bytes.Buffer
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, now); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"Open tasks: 1 (active 0, blocked 0, planned 0, planted 1)", "- [planted] Fix the dialog (task-", "1 task note waits in inbox/tasks/", "task-plant"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	// A repo the atlas links to the vault's project gets the same, through discovery.
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := h.Default(filepath.Join(root, "Vaults"), filepath.Join(root, "Atlas"))
+	os.MkdirAll(h.Root, 0o755)
+	h.Save(cfg)
+	os.MkdirAll(cfg.TreeRoot(), 0o755)
+	p, err := vaults.Register(cfg, v.Root, vaults.RegisterOptions{Name: "V"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(root, "code")
+	os.MkdirAll(filepath.Join(repo, "src"), 0o755)
+	if _, err := vaults.AddLink(cfg, p, "", repo); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	e := env(map[string]string{home.EnvHome: h.Root})
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+filepath.Join(repo, "src")+`"}`), &out, e, true, now); err != nil {
+		t.Fatal(err)
+	}
+	text = out.String()
+	for _, want := range []string{"linked to the project V", "Open tasks: 1", "<vault-context>"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in repo session:\n%s", want, text)
+		}
+	}
+	out.Reset()
+	SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, e, true, now)
+	if out.Len() != 0 {
+		t.Fatalf("silent outside linked folders:\n%s", out.String())
 	}
 }

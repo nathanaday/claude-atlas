@@ -18,6 +18,8 @@ does is also one command, so scripts and muscle memory both work:
 | `c` start Claude Code | `open-claude NAME` |
 | `i` ingest sources | `ingest NAME [PATH...]` |
 | `l` links: add, edit, unlink | `link NAME PATH`, `edit-link PAGE`, `unlink`, `links` |
+| `t` tasks, `p` plant, `c` continue | `tasks NAME`, `plant NAME TEXT`, `open-claude NAME --task ID` |
+| `T` every project's tasks | `tasks` |
 | Related in the editor | `relate NAME OTHER`, `unrelate` |
 | `R` refresh | `refresh` |
 
@@ -68,6 +70,11 @@ In the session, the skills are on the slash menu:
 | Skill | What it does |
 |---|---|
 | `/claude-atlas:wiki` | orient in the vault and route to the right skill |
+| `/claude-atlas:task` | list open tasks, move one between statuses, route |
+| `/claude-atlas:task-plant` | plant a task from a sentence or the notes in `inbox/tasks/` |
+| `/claude-atlas:task-plan` | ask what matters, choose an approach, write the plan |
+| `/claude-atlas:task-run` | work the plan and write progress |
+| `/claude-atlas:task-finish` | close as done or cancelled and archive |
 | `/claude-atlas:wiki-ingest` | read what is in the inbox and write cited pages |
 | `/claude-atlas:wiki-query` | answer from the vault, with citations |
 | `/claude-atlas:save` | keep an answer or decision as a page |
@@ -81,6 +88,65 @@ In the session, the skills are on the slash menu:
 
 Claude shows a preview of every change before it applies it. Each applied
 change is one git commit in the vault.
+
+## Tasks
+
+A task is a page in the vault, `wiki/tasks/<Title>.md`, with a status that
+moves from `planted` through `planned`, `active`, and `blocked` to `done` or
+`cancelled`. Finished tasks move to `wiki/tasks/archive/`. The core keeps the
+task ledger and `wiki/tasks/index.md` from the pages; a session started in the
+vault sees the open tasks at its start, so a task lives across sessions.
+
+Plant a task without ceremony, from anywhere:
+
+```bash
+claude-atlas plant sensor-triage "Check the trust dialog on resume"
+claude-atlas plant sensor-triage "Write the fault taxonomy" --priority high --workdir ~/code/sensor-triage
+```
+
+Or drop a note into the vault's `inbox/tasks/` folder; the next session's
+`/claude-atlas:task-plant` turns each note into a task and removes the note.
+
+See what is open, in one vault or in every project:
+
+```bash
+claude-atlas tasks sensor-triage
+claude-atlas tasks                       # every project, outside a vault
+claude-atlas tasks sensor-triage --all   # with the archive
+```
+
+Work a task in a session. The skills carry the ceremony: `task` lists and
+routes, `task-plan` asks what changes the plan and writes it, `task-run`
+works the plan and writes progress at every stopping point, `task-finish`
+closes the task and archives it. `open-claude --task` starts the session in
+the task's workdir, with the vault selected and `task-run` as the first
+message:
+
+```bash
+claude-atlas open-claude sensor-triage --task task-20260913-3f2a
+claude-atlas open-claude sensor-triage --task "Write the fault"   # a title prefix works
+```
+
+In `view`, `t` on a project shows its open tasks as boxes: `p` plants one,
+`c` continues the selected task in Claude Code, `o` opens its page in
+Obsidian. `T` shows every project's open tasks on one board. The overview
+lists open tasks across projects, and signals blocked tasks and stale ones,
+active but untouched for 14 days.
+
+Vaults made before tasks existed gain the folders and the index with:
+
+```bash
+claude-atlas upgrade sensor-triage
+claude-atlas upgrade --all
+```
+
+## A repo reaches its vault
+
+A session started in a folder that a project links, a repository or a
+material folder, uses that project's vault: the atlas tools resolve it, and
+the session hook says so and lists the open tasks, the ones whose workdir is
+that folder first. Nothing is written into the repository. If two projects
+link the same folder, pass `vault` to the tools or set `CLAUDE_ATLAS_VAULT`.
 
 ## Ingest a folder of sources
 

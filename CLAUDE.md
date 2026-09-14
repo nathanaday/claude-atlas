@@ -13,6 +13,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 |---|---|
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side: tree, link pages, graph | `docs/atlas-design.md` |
+| Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
 | Original brainstorm (not a contract) | `docs/spec.md` |
 | The skills' contracts | `skills/<name>/SKILL.md` and `skills/wiki/references/` |
 
@@ -32,8 +33,11 @@ safety net, and adds the cross-vault view.
    Write and Edit under `wiki/`.
 2. The vault is the user's. Apply commits hand edits as `manual` operations
    first, so a rollback never touches what the user typed in Obsidian.
-3. Code owns what code can derive. The core writes `wiki/log.md` and the source
-   ledger; the model never targets them.
+3. Code owns what code can derive. The core writes `wiki/log.md`, the source
+   ledger, the task ledger, and `wiki/tasks/index.md`; the model never targets
+   them. A task's status is the truth and its folder follows it: finished
+   tasks sit in `wiki/tasks/archive/`, and the core refuses a page whose
+   folder disagrees.
 
 ## Three rules for the atlas
 
@@ -70,12 +74,14 @@ internal/cli/           argument parsing and one method per subcommand
 internal/wizard/        the setup flow
 internal/vault/         identity file, layout, templates, Init, Adopt, mode routing, page skeletons
 internal/gitx/          the git commands the core needs
-internal/txn/           plans, preview, apply, recovery, undo, history
+internal/txn/           plans, preview, apply, recovery, undo, history, planting a task
+internal/tasks/         task pages, the derived task ledger and index; never decides to write
+internal/discover/      the vault a folder belongs to, through the atlas's link pages
 internal/capture/       inbox listing and capture into .raw/captured/
 internal/ledger/        the source ledger
 internal/lint/          the health check (ported from claude-obsidian's engine)
 internal/mcpserver/     the tools, thin over the packages above
-internal/hooks/         session-start, guard, stop
+internal/hooks/         session-start (vault or linked repo, open tasks, hot cache), guard, stop
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
 internal/tree/          project pages (frontmatter) and derived state files
 internal/refresh/       derive state, generate categories/ and Tree.md, render Overview.md
@@ -102,12 +108,17 @@ the vaults directory (default `~/Documents/Vaults`).
   binary on PATH, in `~/go/bin`, in the Homebrew prefixes, or at
   `$CLAUDE_ATLAS_BIN`. `plugin.json` and `marketplace.json` carry the version
   the binary should match; `status` and `doctor` warn on a mismatch.
-- Every write path goes through `txn.Prepare` and `txn.Apply`. `vault.Init`
-  and `vault.Adopt` are the only code that writes vault files directly, and
-  only before or outside an operation.
+- Every write path goes through `txn.Prepare` and `txn.Apply`. `vault.Init`,
+  `vault.Adopt`, and `vault.Upgrade` are the only code that writes vault files
+  directly, and only before or outside an operation.
 - A kind bounds a plan's writes (`txn.allowed`). Reserved everywhere:
-  `wiki/log.md`, the ledger, `.git`, `.vault-meta`, `.obsidian`, `.raw` except
-  through capture, `inbox` except deletes in an ingest.
+  `wiki/log.md`, both ledgers, `wiki/tasks/index.md`, `.git`, `.vault-meta`,
+  `.obsidian`, `.raw` except through capture, `inbox` except deletes in an
+  ingest, `inbox/tasks` except deletes in a task operation. Only a `task` or
+  `repair` plan may touch a page under `wiki/tasks/`.
+- The server and the hooks resolve the vault in this order: an explicit
+  `vault`, `CLAUDE_ATLAS_VAULT`, the nearest identity file, then the atlas: a
+  folder that exactly one project links belongs to that project's vault.
 - Lint and refresh are read-only toward every vault, offline, and idempotent.
 - TUI models keep all logic in `Update`; tests drive them with `tea.KeyMsg`.
 - Tests never touch a real `~/.claude-atlas`, never install a plugin, and skip

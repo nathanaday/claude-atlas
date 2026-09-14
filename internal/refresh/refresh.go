@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/pages"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -263,6 +265,7 @@ func derive(project *tree.Project, today time.Time, generatedAt string, facts ma
 			if pending, _ := txn.Pending(v); pending != nil {
 				state.PendingRecovery = true
 			}
+			state.Tasks = taskSummary(v, today)
 		}
 	}
 	state.VaultOK = true
@@ -270,6 +273,32 @@ func derive(project *tree.Project, today time.Time, generatedAt string, facts ma
 	state.Unfinished.EmptySections = ptr(report.Summary.CategoryCounts["empty_sections"])
 	state.Unfinished.DeadLinks = ptr(report.Summary.CategoryCounts["dead_links"])
 	return state
+}
+
+// taskSummary reads the vault's task ledger; nil when the vault has no tasks at all.
+func taskSummary(v *vault.Vault, today time.Time) *tree.TaskSummary {
+	led, err := tasks.Current(v, today)
+	if err != nil {
+		return nil
+	}
+	sum := &tree.TaskSummary{Counts: led.Counts(today), Open: []tree.TaskLine{}}
+	sum.Counts.Notes = len(tasks.Notes(v))
+	for _, r := range led.Open() {
+		sum.Open = append(sum.Open, tree.TaskLine{
+			ID: r.ID, Title: r.Title, Status: r.Status, Priority: r.Priority, Due: r.Due, Workdir: r.Workdir,
+			LastTouched: r.LastTouched, Path: v.Path(r.Path), Stale: tasks.Stale(r, today),
+		})
+	}
+	if len(sum.Open) == 0 && sum.Counts.Done+sum.Counts.Cancelled+sum.Counts.Notes == 0 {
+		return nil
+	}
+	return sum
+}
+
+// TaskLink is a markdown link that opens a task page in its own vault.
+func TaskLink(t tree.TaskLine) string {
+	title := strings.NewReplacer("[", "(", "]", ")").Replace(t.Title)
+	return "[" + title + "](obsidian://open?path=" + url.QueryEscape(t.Path) + ")"
 }
 
 func inspectLinks(project *tree.Project, facts map[string]links.Link) []links.Link {
@@ -462,6 +491,23 @@ func Signals(node *tree.Project, state *tree.State, today time.Time) []string {
 		}
 	}
 	notes = append(notes, node.Warnings...)
+	if state.Tasks != nil {
+		var blocked, stale []string
+		for _, t := range state.Tasks.Open {
+			if t.Status == "blocked" {
+				blocked = append(blocked, t.Title)
+			}
+			if t.Stale {
+				stale = append(stale, t.Title)
+			}
+		}
+		if len(blocked) > 0 {
+			notes = append(notes, fmt.Sprintf("%d blocked task%s: %s", len(blocked), plural(len(blocked)), strings.Join(blocked, "; ")))
+		}
+		if len(stale) > 0 {
+			notes = append(notes, fmt.Sprintf("%d stale task%s, active but untouched for %d days: %s", len(stale), plural(len(stale)), tasks.StaleDays, strings.Join(stale, "; ")))
+		}
+	}
 	if node.State == "blocked" {
 		on := node.BlockedOn
 		if on == "" {
@@ -550,8 +596,8 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 		strings.Join(parts, " · "), stamp.Local().Format("2006-01-02 15:04"))
 
 	b.WriteString("## All projects\n\n")
-	b.WriteString("| Heat | Project | Category | Priority | State | Idle | Pages | Threads | Unfinished |\n")
-	b.WriteString("|:--|:--|:--|:--|:--|--:|--:|--:|--:|\n")
+	b.WriteString("| Heat | Project | Category | Priority | State | Idle | Pages | Tasks | Threads | Unfinished |\n")
+	b.WriteString("|:--|:--|:--|:--|:--|--:|--:|--:|--:|--:|\n")
 	sorted := append([]Row(nil), rows...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		a, c := sorted[i], sorted[j]
@@ -564,10 +610,10 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 		return a.Project.Rel < c.Project.Rel
 	})
 	for _, r := range sorted {
-		fmt.Fprintf(&b, "| %s | [[tree/%s\\|%s]] | %s | %s | %s | %s | %s | %d | %s |\n",
+		fmt.Fprintf(&b, "| %s | [[tree/%s\\|%s]] | %s | %s | %s | %s | %s | %s | %d | %s |\n",
 			heatLabel(r.State.Heat), r.Project.Rel, r.Project.Name, categoryCell(r.Project.Category()),
 			r.Project.Priority, r.Project.State, idle(r.State),
-			intOr(r.State.Pages, "—"), len(r.State.OpenThreads), unfinishedTotal(r.State.Unfinished))
+			intOr(r.State.Pages, "—"), taskCell(r.State), len(r.State.OpenThreads), unfinishedTotal(r.State.Unfinished))
 	}
 
 	b.WriteString("\n## Signals\n\n")
@@ -605,6 +651,19 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 				projects = append(projects, "[[tree/"+rel+"\\|"+name+"]]")
 			}
 			fmt.Fprintf(&b, "| %s | %s | `%s` | %s | %s |\n", row.Page.Kind, linkCell(row.Link), home.Display(row.Page.Path), dash(strings.Join(projects, ", ")), LinkSummary(row.Link))
+		}
+		b.WriteString("\n")
+	}
+
+	if open := openTasks(rows); len(open) > 0 {
+		b.WriteString("## Tasks\n\n")
+		b.WriteString("| Project | Task | Status | Priority | Due | Last touched |\n|:--|:--|:--|:--|:--|:--|\n")
+		for _, t := range open {
+			status := t.line.Status
+			if t.line.Stale {
+				status += " · stale"
+			}
+			fmt.Fprintf(&b, "| [[tree/%s\\|%s]] | %s | %s | %s | %s | %s |\n", t.row.Project.Rel, t.row.Project.Name, TaskLink(t.line), status, t.line.Priority, dash(t.line.Due), dash(t.line.LastTouched))
 		}
 		b.WriteString("\n")
 	}
@@ -671,8 +730,21 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 		if rel := related(rows, r.Project); len(rel) > 0 {
 			fmt.Fprintf(&b, "| Related | %s |\n", strings.Join(rel, ", "))
 		}
+		if t := r.State.Tasks; t != nil {
+			fmt.Fprintf(&b, "| Tasks | %s |\n", taskCell(r.State))
+		}
 		if r.Project.DefinitionOfDone != "" {
 			fmt.Fprintf(&b, "\n> [!success] Done when\n> %s\n", strings.TrimSpace(r.Project.DefinitionOfDone))
+		}
+		if t := r.State.Tasks; t != nil && len(t.Open) > 0 {
+			b.WriteString("\n> [!todo] Open tasks\n")
+			for i, line := range t.Open {
+				if i == 5 {
+					fmt.Fprintf(&b, "> - … and %d more\n", len(t.Open)-i)
+					break
+				}
+				fmt.Fprintf(&b, "> - %s · %s · %s\n", TaskLink(line), line.Status, line.Priority)
+			}
 		}
 		if len(r.State.OpenThreads) > 0 {
 			b.WriteString("\n> [!todo] Open threads\n")
@@ -689,6 +761,69 @@ func dash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// taskCell summarizes a project's tasks for a table.
+func taskCell(state *tree.State) string {
+	t := state.Tasks
+	if t == nil {
+		return "—"
+	}
+	c := t.Counts
+	if c.Open == 0 {
+		if c.Notes > 0 {
+			return fmt.Sprintf("0 · %d note%s", c.Notes, plural(c.Notes))
+		}
+		return "0"
+	}
+	var bits []string
+	for _, kv := range []struct {
+		n    int
+		name string
+	}{{c.Active, "active"}, {c.Blocked, "blocked"}, {c.Planned, "planned"}, {c.Planted, "planted"}} {
+		if kv.n > 0 {
+			bits = append(bits, fmt.Sprintf("%d %s", kv.n, kv.name))
+		}
+	}
+	out := fmt.Sprintf("%d open (%s)", c.Open, strings.Join(bits, ", "))
+	if c.Stale > 0 {
+		out += fmt.Sprintf(" · %d stale", c.Stale)
+	}
+	if c.Notes > 0 {
+		out += fmt.Sprintf(" · %d note%s", c.Notes, plural(c.Notes))
+	}
+	return out
+}
+
+// openTask pairs a task with its project for the cross-vault list.
+type openTask struct {
+	row  Row
+	line tree.TaskLine
+}
+
+// openTasks lists every project's open tasks in board order: status, priority, age.
+func openTasks(rows []Row) []openTask {
+	var out []openTask
+	for _, r := range rows {
+		if r.State.Tasks == nil {
+			continue
+		}
+		for _, line := range r.State.Tasks.Open {
+			out = append(out, openTask{row: r, line: line})
+		}
+	}
+	order := map[string]int{"active": 0, "blocked": 1, "planned": 2, "planted": 3}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i].line, out[j].line
+		if order[a.Status] != order[b.Status] {
+			return order[a.Status] < order[b.Status]
+		}
+		if priorityOrder[a.Priority] != priorityOrder[b.Priority] {
+			return priorityOrder[a.Priority] < priorityOrder[b.Priority]
+		}
+		return a.LastTouched > b.LastTouched
+	})
+	return out
 }
 
 func heatLabel(heat string) string {

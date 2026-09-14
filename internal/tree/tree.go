@@ -16,6 +16,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 )
 
 const (
@@ -432,6 +433,25 @@ type Unfinished struct {
 	DeadLinks     *int `json:"dead_links"`
 }
 
+// TaskLine is one open task as the atlas shows it.
+type TaskLine struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	Priority    string `json:"priority"`
+	Due         string `json:"due,omitempty"`
+	Workdir     string `json:"workdir,omitempty"`
+	LastTouched string `json:"last_touched"`
+	Path        string `json:"path"` // absolute path of the task page
+	Stale       bool   `json:"stale,omitempty"`
+}
+
+// TaskSummary is what refresh read from a vault's task ledger.
+type TaskSummary struct {
+	Counts tasks.Counts `json:"counts"`
+	Open   []TaskLine   `json:"open"`
+}
+
 // State is the derived half of a project, regenerated in full by refresh.
 type State struct {
 	Schema      string `json:"schema"`
@@ -453,6 +473,7 @@ type State struct {
 	OpenThreads     []string     `json:"open_threads"`
 	Unfinished      Unfinished   `json:"unfinished"`
 	Links           []links.Link `json:"links"`
+	Tasks           *TaskSummary `json:"tasks,omitempty"`
 }
 
 // StatePath is where a project's derived state lives: the state dir mirrors the tree.

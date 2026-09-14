@@ -89,14 +89,14 @@ func TestToolsListAndStatus(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, ",") != "apply,capture,history,inbox,lint,mode,plan,route,status,undo" {
+	if strings.Join(names, ",") != "apply,capture,history,inbox,lint,mode,plan,plant,route,status,tasks,undo" {
 		t.Fatalf("tools %v", names)
 	}
 	var st Status
 	if msg := c.call("status", nil, &st); msg != "" {
 		t.Fatal(msg)
 	}
-	if st.Vault != v.Root || st.Mode != "generic" || st.Pages != 4 || !st.Git.HasHistory || st.LastOperation == nil || st.LastOperation.Kind != "setup" {
+	if st.Vault != v.Root || st.Mode != "generic" || st.Pages != 5 || !st.Git.HasHistory || st.LastOperation == nil || st.LastOperation.Kind != "setup" {
 		t.Fatalf("status %+v", st)
 	}
 	if msg := c.call("status", map[string]any{"vault": t.TempDir()}, nil); !strings.Contains(msg, "not a claude-atlas vault") {
@@ -179,7 +179,7 @@ func TestIngestWorkflow(t *testing.T) {
 		DeadLinks []any `json:"dead_links"`
 	}
 	c.call("lint", nil, &report)
-	if report.Summary.Pages != 5 || len(report.DeadLinks) != 0 {
+	if report.Summary.Pages != 6 || len(report.DeadLinks) != 0 {
 		t.Fatalf("lint %+v", report)
 	}
 	var undone struct {
@@ -229,5 +229,75 @@ func TestPlanErrorsAndReplacement(t *testing.T) {
 	}
 	if msg := c.call("mode", map[string]any{"set": "para"}, nil); !strings.Contains(msg, "generic or lyt") {
 		t.Fatalf("bad mode: %q", msg)
+	}
+}
+
+func TestTaskTools(t *testing.T) {
+	v := newVault(t)
+	c := connect(t, v.Root)
+	var route struct {
+		Path     string `json:"path"`
+		Type     string `json:"type"`
+		Skeleton string `json:"skeleton"`
+		Exists   bool   `json:"exists"`
+	}
+	if msg := c.call("route", map[string]any{"type": "task", "title": "Fix the dialog"}, &route); msg != "" {
+		t.Fatal(msg)
+	}
+	if route.Path != "wiki/tasks/Fix the dialog.md" || route.Type != "task" || !strings.Contains(route.Skeleton, "task_id: task-") || route.Exists {
+		t.Fatalf("route %+v", route)
+	}
+	os.MkdirAll(v.Path("inbox/tasks"), 0o755)
+	os.WriteFile(v.Path("inbox/tasks/idea.md"), []byte("# Fix the dialog\n\nIt quits."), 0o644)
+	var inbox struct {
+		Files []struct {
+			Path string `json:"path"`
+			Area string `json:"area"`
+		} `json:"files"`
+	}
+	c.call("inbox", nil, &inbox)
+	if len(inbox.Files) != 1 || inbox.Files[0].Area != "tasks" {
+		t.Fatalf("inbox %+v", inbox)
+	}
+	var st Status
+	c.call("status", nil, &st)
+	if st.Tasks.Notes != 1 || len(st.Warnings) == 0 || !strings.Contains(strings.Join(st.Warnings, " "), "task note") {
+		t.Fatalf("status %+v", st)
+	}
+	var planted PlantOut
+	if msg := c.call("plant", map[string]any{"text": "# Fix the dialog\n\nIt quits.", "from": "inbox/tasks/idea.md", "priority": "high"}, &planted); msg != "" {
+		t.Fatal(msg)
+	}
+	if planted.Path != "wiki/tasks/Fix the dialog.md" || !strings.HasPrefix(planted.ID, "task-") || planted.OperationID == "" {
+		t.Fatalf("planted %+v", planted)
+	}
+	if _, err := os.Stat(v.Path("inbox/tasks/idea.md")); err == nil {
+		t.Fatal("the note should be gone")
+	}
+	var list TasksOut
+	c.call("tasks", nil, &list)
+	if list.Counts.Open != 1 || list.Counts.Planted != 1 || len(list.Tasks) != 1 || list.Tasks[0].Priority != "high" || len(list.Tasks[0].History) != 1 || len(list.Notes) != 0 {
+		t.Fatalf("tasks %+v", list)
+	}
+	if msg := c.call("route", map[string]any{"type": "task", "title": "Fix the dialog"}, &route); msg != "" || !route.Exists {
+		t.Fatalf("route sees the page: %s %+v", msg, route)
+	}
+	if msg := c.call("plant", map[string]any{"text": "", "title": ""}, nil); msg == "" {
+		t.Fatal("empty plant should fail")
+	}
+	if msg := c.call("plant", map[string]any{"text": "x", "priority": "urgent"}, nil); msg == "" {
+		t.Fatal("bad priority should fail")
+	}
+	// A task plan through plan and apply: move it to active with a plan section.
+	page, _ := os.ReadFile(v.Path(planted.Path))
+	active := strings.Replace(string(page), "status: planted", "status: active", 1) + "\n## Plan\n\n1. Look.\n"
+	var out PlanOut
+	if msg := c.call("plan", map[string]any{"kind": "task", "summary": "start Fix the dialog", "writes": []map[string]any{{"path": planted.Path, "mode": "replace", "content": active}}}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	c.call("apply", map[string]any{"plan_id": out.PlanID}, nil)
+	c.call("tasks", nil, &list)
+	if list.Counts.Active != 1 || !list.Tasks[0].HasPlan || len(list.Tasks[0].History) != 2 {
+		t.Fatalf("after apply %+v", list)
 	}
 }

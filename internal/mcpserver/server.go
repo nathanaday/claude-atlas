@@ -17,8 +17,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nathanaday/claude-atlas/internal/capture"
+	"github.com/nathanaday/claude-atlas/internal/discover"
+	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
 	"github.com/nathanaday/claude-atlas/internal/lint"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
@@ -58,8 +61,24 @@ func New(opts Options) *Server {
 	return &Server{opts: opts, plans: map[string]*txn.Plan{}}
 }
 
+// resolve picks the vault: an explicit path, the environment, the nearest identity file,
+// and last the atlas: a session started in a folder one project links uses that
+// project's vault.
 func (s *Server) resolve(explicit string) (*vault.Vault, error) {
-	return vault.Resolve(explicit, s.opts.Env(vault.EnvVault), s.opts.ProjectDir)
+	v, err := vault.Resolve(explicit, s.opts.Env(vault.EnvVault), s.opts.ProjectDir)
+	if err == nil || explicit != "" || !errors.Is(err, vault.ErrNotVault) {
+		return v, err
+	}
+	match, candidates, derr := discover.Vault(home.Resolve(s.opts.Env(home.EnvHome)), s.opts.ProjectDir)
+	switch {
+	case derr != nil:
+		return nil, err
+	case match != nil:
+		return vault.Open(match.Vault)
+	case len(candidates) > 1:
+		return nil, fmt.Errorf("%s is linked by several atlas projects: %s; pass vault", s.opts.ProjectDir, discover.Describe(candidates))
+	}
+	return nil, err
 }
 
 func (s *Server) pluginVersion() string {
@@ -91,6 +110,7 @@ type Status struct {
 	InboxWaiting  int            `json:"inbox_waiting"`
 	Git           txn.Status     `json:"git"`
 	LastOperation *txn.Operation `json:"last_operation,omitempty"`
+	Tasks         tasks.Counts   `json:"tasks"`
 	Versions      Versions       `json:"versions"`
 	Warnings      []string       `json:"warnings"`
 }
@@ -129,6 +149,25 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 	}
 	if ops, err := txn.History(v, 1, false); err == nil && len(ops) > 0 {
 		out.LastOperation = &ops[0]
+	}
+	if led, err := tasks.Current(v, s.opts.Now()); err == nil {
+		out.Tasks = led.Counts(s.opts.Now())
+		out.Tasks.Notes = len(tasks.Notes(v))
+		var stale []string
+		for _, r := range led.Open() {
+			if tasks.Stale(r, s.opts.Now()) {
+				stale = append(stale, r.Title)
+			}
+		}
+		if len(stale) > 0 {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("%d active task%s untouched for %d days: %s", len(stale), plural(len(stale)), tasks.StaleDays, strings.Join(stale, "; ")))
+		}
+		for _, p := range led.Problems {
+			out.Warnings = append(out.Warnings, "task page "+p.Path+": "+p.Reason)
+		}
+		if out.Tasks.Notes > 0 {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("%d task note%s wait in %s/; the task-plant skill turns them into tasks", out.Tasks.Notes, plural(out.Tasks.Notes), vault.InboxTasksDir))
+		}
 	}
 	if out.Versions.Plugin != "" && out.Versions.Binary != "dev" && out.Versions.Plugin != out.Versions.Binary {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("plugin %s and binary %s differ; update one of them", out.Versions.Plugin, out.Versions.Binary))
@@ -180,11 +219,104 @@ func (s *Server) route(ctx context.Context, req *mcp.CallToolRequest, a RouteArg
 	if err != nil {
 		return nil, vault.Route{}, err
 	}
+	if a.Type == "task" {
+		now := s.opts.Now()
+		plain := vault.TasksDir + "/" + vault.SanitizeTitle(a.Title) + ".md"
+		r := vault.Route{Path: plain, Type: "task", Mode: v.Config.Mode, Skeleton: tasks.Skeleton(tasks.Plant{Title: a.Title}, tasks.NewID(now), now)}
+		if _, err := os.Stat(v.Path(plain)); err == nil {
+			r.Exists = true
+		}
+		return nil, r, nil
+	}
 	r, err := v.RouteFor(a.Type, a.Title, s.opts.Now())
 	if err != nil {
 		return nil, vault.Route{}, err
 	}
 	return nil, *r, nil
+}
+
+type PlantArgs struct {
+	VaultArg
+	Title    string `json:"title,omitempty" jsonschema:"the task's title; taken from the text when omitted"`
+	Text     string `json:"text,omitempty" jsonschema:"the idea in the user's words; kept verbatim on the page"`
+	Priority string `json:"priority,omitempty" jsonschema:"high, normal, low, or someday; default normal"`
+	Workdir  string `json:"workdir,omitempty" jsonschema:"the folder the work happens in, usually a linked repository"`
+	Due      string `json:"due,omitempty" jsonschema:"YYYY-MM-DD"`
+	From     string `json:"from,omitempty" jsonschema:"the note under inbox/tasks/ this task comes from; it is removed in the same commit"`
+}
+
+type PlantOut struct {
+	txn.Planted
+	OperationID string `json:"operation_id"`
+	Commit      string `json:"commit"`
+}
+
+func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArgs) (*mcp.CallToolResult, PlantOut, error) {
+	v, err := s.resolve(a.Vault)
+	if err != nil {
+		return nil, PlantOut{}, err
+	}
+	now := s.opts.Now()
+	request, planted, err := txn.PlantRequest(v, tasks.Plant{Title: a.Title, Text: a.Text, Priority: a.Priority, Workdir: a.Workdir, Due: a.Due}, a.From, now)
+	if err != nil {
+		return nil, PlantOut{}, err
+	}
+	plan, err := txn.Prepare(v, request, now)
+	if err != nil {
+		return nil, PlantOut{}, err
+	}
+	res, err := txn.Apply(v, plan, now)
+	if err != nil {
+		return nil, PlantOut{}, err
+	}
+	return nil, PlantOut{Planted: planted, OperationID: res.OperationID, Commit: res.Commit}, nil
+}
+
+type TasksArgs struct {
+	VaultArg
+	Status string `json:"status,omitempty" jsonschema:"only tasks with this status"`
+	All    bool   `json:"all,omitempty" jsonschema:"include done and cancelled tasks"`
+}
+
+type TasksOut struct {
+	Counts   tasks.Counts    `json:"counts"`
+	Tasks    []tasks.Record  `json:"tasks"`
+	Notes    []string        `json:"notes"`
+	Problems []tasks.Problem `json:"problems,omitempty"`
+}
+
+func (s *Server) tasks(ctx context.Context, req *mcp.CallToolRequest, a TasksArgs) (*mcp.CallToolResult, TasksOut, error) {
+	v, err := s.resolve(a.Vault)
+	if err != nil {
+		return nil, TasksOut{}, err
+	}
+	now := s.opts.Now()
+	led, err := tasks.Current(v, now)
+	if err != nil {
+		return nil, TasksOut{}, err
+	}
+	out := TasksOut{Counts: led.Counts(now), Tasks: []tasks.Record{}, Notes: tasks.Notes(v), Problems: led.Problems}
+	out.Counts.Notes = len(out.Notes)
+	list := led.Open()
+	if a.All {
+		list = append(list, led.Archived()...)
+	}
+	for _, r := range list {
+		if a.Status == "" || r.Status == a.Status {
+			out.Tasks = append(out.Tasks, r)
+		}
+	}
+	if out.Notes == nil {
+		out.Notes = []string{}
+	}
+	return nil, out, nil
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 type PlanWrite struct {
@@ -427,6 +559,10 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "List recent operations, newest first, with their kind, summary, date, commit, and changed paths."}, s.history)
 	mcp.AddTool(server, &mcp.Tool{Name: "lint", Annotations: ro(),
 		Description: "Run the deterministic wiki health check: dead and ambiguous links, duplicate basenames, orphans, pages missing from every index, missing frontmatter, empty sections, stale index entries, and ledger problems. Read-only."}, s.lint)
+	mcp.AddTool(server, &mcp.Tool{Name: "plant",
+		Description: "Plant a task: create a task page with status planted from a title and the idea's text, as one commit. Give from to remove the inbox/tasks/ note it came from. No plan preview is needed; undo covers it."}, s.plant)
+	mcp.AddTool(server, &mcp.Tool{Name: "tasks", Annotations: ro(),
+		Description: "List the vault's tasks from the task ledger: open ones by status, priority, and age, with each task's page, workdir, last touch, and history; counts; and the notes waiting in inbox/tasks/. Pass all to include finished tasks."}, s.tasks)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",
 		Description: "Read the vault's filing mode (generic or lyt) and the page types it files. Pass set to prepare a plan that changes it; apply that plan to make the change."}, s.mode)
 	return server
