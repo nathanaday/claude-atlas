@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,6 +85,7 @@ Plugin:
   mcp                    serve the atlas tools over stdio; Claude Code runs this
   hook EVENT             run a plugin hook: session-start, guard, stop
 
+  config [KEY VALUE]     show the settings, or set one: new-days N
   info                   show every path and version the atlas uses
   doctor                 check the installation and every registered vault
   version                print the version
@@ -199,6 +201,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.tasks(rest[1:])
 	case "upgrade":
 		code, err = e.upgrade(rest[1:])
+	case "config":
+		code, err = e.config(rest[1:])
 	case "apply":
 		code, err = e.apply(rest[1:])
 	case "mcp":
@@ -1982,6 +1986,50 @@ func (e *env) hook(args []string) (int, error) {
 		return 0, hooks.Stop(e.stdin, e.stdout, os.Getenv)
 	}
 	return 2, fmt.Errorf("unknown hook %q", args[0])
+}
+
+// config shows the settings, or sets one and refreshes so the overview follows.
+func (e *env) config(args []string) (int, error) {
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	c := e.console
+	if len(args) == 0 {
+		row := func(label, value string) { c.Say("  %-18s %s", label, value) }
+		row("new-days", fmt.Sprintf("%d  (a vault is new for this many days after its creation; 0 turns it off)", cfg.NewDays()))
+		row("vaults dir", home.Display(cfg.VaultsDir))
+		row("atlas vault", home.Display(cfg.AtlasVault))
+		row("claude command", cfg.ClaudeCode.Command)
+		row("plugin source", cfg.Plugin.Source)
+		row("file", home.Display(e.home.ConfigPath()))
+		return 0, nil
+	}
+	if len(args) != 2 {
+		return 2, errors.New("usage: claude-atlas config [KEY VALUE]; keys: new-days")
+	}
+	switch args[0] {
+	case "new-days":
+		days, err := strconv.Atoi(args[1])
+		if err != nil {
+			return 2, fmt.Errorf("new-days takes a number of days, got %q", args[1])
+		}
+		if err := cfg.SetNewDays(days); err != nil {
+			return 2, err
+		}
+	default:
+		return 2, fmt.Errorf("unknown setting %q; keys: new-days", args[0])
+	}
+	if err := e.home.Save(cfg); err != nil {
+		return 1, err
+	}
+	page, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	c.Step(console.OK, args[0], args[1])
+	c.Step(console.OK, "refreshed", home.Display(page))
+	return 0, nil
 }
 
 func (e *env) info(args []string) (int, error) {

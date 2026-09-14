@@ -411,9 +411,15 @@ claude-atlas apply sensor-triage plan.json
   "claude_code": {
     "command": "claude",
     "session_context": true
+  },
+  "heat": {
+    "new_days": 7
   }
 }
 ```
+
+`claude-atlas config` prints the settings; `claude-atlas config new-days 14`
+sets one and refreshes the overview.
 
 | Setting | Effect |
 |---|---|
@@ -421,5 +427,6 @@ claude-atlas apply sensor-triage plan.json
 | `claude_code.args` | flags for `claude`, such as `--model` |
 | `claude_code.session_context` | whether the session-start hook hands Claude the vault's `hot.md` |
 | `plugin.source` | where `claude plugin marketplace add` gets the plugin: a GitHub slug or a local path |
+| `heat.new_days` | how many days after its creation a vault shows as ✨ new whatever its activity; 7 by default, 0 turns it off |
 | `--home DIR`, `CLAUDE_ATLAS_HOME` | use a different home instead of `~/.claude-atlas` |
 | `-y`, `--yes` | answer yes to every prompt |

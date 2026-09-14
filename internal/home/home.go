@@ -21,7 +21,15 @@ const (
 	DefaultPluginID = "claude-atlas@nathanaday-claude-atlas"
 	// DefaultPluginSource is what `claude plugin marketplace add` takes: this repository.
 	DefaultPluginSource = "nathanaday/claude-atlas"
+	// DefaultNewDays is how many days after its creation a vault counts as new.
+	DefaultNewDays = 7
 )
+
+// HeatConfig tunes how the overview reads a vault's activity. NewDays is the age, in
+// days, under which a vault is "new" whatever its activity; 0 turns that off.
+type HeatConfig struct {
+	NewDays int `json:"new_days"`
+}
 
 // PluginConfig says where the claude-atlas plugin comes from.
 type PluginConfig struct {
@@ -47,10 +55,29 @@ type Config struct {
 	AtlasVault string       `json:"atlas_vault"`
 	Plugin     PluginConfig `json:"plugin"`
 	ClaudeCode LaunchConfig `json:"claude_code"`
+	// Heat is nil in a config written before the section existed; NewDays reads it.
+	Heat *HeatConfig `json:"heat,omitempty"`
 }
 
 // TreeRoot is the directory of nodes inside the atlas vault.
 func (c *Config) TreeRoot() string { return filepath.Join(c.AtlasVault, "tree") }
+
+// NewDays is the configured age under which a vault is new, or the default.
+func (c *Config) NewDays() int {
+	if c.Heat == nil {
+		return DefaultNewDays
+	}
+	return c.Heat.NewDays
+}
+
+// SetNewDays records the threshold; it must not be negative.
+func (c *Config) SetNewDays(days int) error {
+	if days < 0 {
+		return fmt.Errorf("new_days must be 0 or more, got %d", days)
+	}
+	c.Heat = &HeatConfig{NewDays: days}
+	return nil
+}
 
 // Home is the atlas home directory.
 type Home struct {
@@ -105,6 +132,7 @@ func (h Home) Default(vaultsDir, atlasVault string) *Config {
 		AtlasVault: Expand(atlasVault),
 		Plugin:     defaultPlugin(),
 		ClaudeCode: defaultLaunch(),
+		Heat:       &HeatConfig{NewDays: DefaultNewDays},
 	}
 }
 
@@ -134,6 +162,9 @@ func (h Home) Load() (*Config, error) {
 	cfg.Plugin.Source = Expand(cfg.Plugin.Source)
 	if cfg.ClaudeCode.Command == "" {
 		cfg.ClaudeCode = defaultLaunch()
+	}
+	if cfg.Heat != nil && cfg.Heat.NewDays < 0 {
+		return nil, fmt.Errorf("%s: heat.new_days must be 0 or more", h.ConfigPath())
 	}
 	return &cfg, nil
 }

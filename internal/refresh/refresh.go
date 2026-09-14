@@ -26,7 +26,6 @@ import (
 )
 
 const (
-	NewDays  = 7
 	HotDays  = 7
 	WarmDays = 30
 )
@@ -41,13 +40,13 @@ var (
 func ptr[T any](v T) *T { return &v }
 
 // Heat maps a vault's age and idleness to new, hot, warm, or cold; unknown idleness gives "".
-// A vault created within NewDays is "new" whatever its activity, so a fresh, possibly
+// A vault created within newDays is "new" whatever its activity, so a fresh, possibly
 // empty vault is not mistaken for one with a long active history.
-func Heat(daysIdle, daysOld *int) string {
+func Heat(daysIdle, daysOld *int, newDays int) string {
 	switch {
 	case daysIdle == nil:
 		return ""
-	case daysOld != nil && *daysOld < NewDays:
+	case daysOld != nil && *daysOld < newDays:
 		return "new"
 	case *daysIdle < HotDays:
 		return "hot"
@@ -201,11 +200,12 @@ func baseState(generatedAt string) *tree.State {
 // Derive observes one project's vault: a claude-atlas vault, or a claude-obsidian vault
 // that has not been adopted yet, which reads the same way but is marked legacy.
 func Derive(project *tree.Project, today time.Time, generatedAt string) *tree.State {
-	return derive(project, today, generatedAt, nil)
+	return derive(project, today, generatedAt, nil, home.DefaultNewDays)
 }
 
-// derive is Derive with the link facts already known, keyed by folder path.
-func derive(project *tree.Project, today time.Time, generatedAt string, facts map[string]links.Link) *tree.State {
+// derive is Derive with the link facts already known, keyed by folder path, and the
+// configured age under which a vault is new.
+func derive(project *tree.Project, today time.Time, generatedAt string, facts map[string]links.Link, newDays int) *tree.State {
 	state := baseState(generatedAt)
 	state.Project = project.Rel
 	root := project.VaultPath()
@@ -244,7 +244,7 @@ func derive(project *tree.Project, today time.Time, generatedAt string, facts ma
 		state.LastTouched = touched.Format("2006-01-02")
 		days := int(dateOf(today).Sub(dateOf(touched)).Hours() / 24)
 		state.DaysIdle = ptr(days)
-		state.Heat = Heat(state.DaysIdle, daysOld)
+		state.Heat = Heat(state.DaysIdle, daysOld, newDays)
 	}
 	state.OpenThreads = ActiveThreads(root)
 	if state.OpenThreads == nil {
@@ -424,7 +424,7 @@ func Tree(cfg *home.Config, stateDir string, today time.Time, generatedAt string
 	}
 	rows := make([]Row, 0, len(projects))
 	for _, project := range projects {
-		state := derive(project, today, generatedAt, facts)
+		state := derive(project, today, generatedAt, facts, cfg.NewDays())
 		if err := tree.WriteState(stateDir, project.Rel, state); err != nil {
 			return nil, err
 		}

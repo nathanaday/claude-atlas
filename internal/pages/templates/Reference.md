@@ -94,6 +94,18 @@ claude-atlas remove my-project
 claude-atlas info
 ```
 
+**Settings**
+
+> Show the settings, or change how many days a vault counts as ✨ new after its creation (7 by default; 0 turns it off).
+
+```bash
+claude-atlas config
+```
+
+```bash
+claude-atlas config new-days 14
+```
+
 ## Working with Claude Code
 
 > Start Claude Code inside a project's vault. The plugin's session hook hands Claude the vault's recent context (`wiki/hot.md`) at the start, and its skills are on the slash menu.

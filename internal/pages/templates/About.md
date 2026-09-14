@@ -65,7 +65,7 @@ Folders are categories and carry no data of their own; make, rename, and nest th
 
 | Heat | Meaning |
 |:--|:--|
-| ✨ new | Created within the last 7 days, whatever its activity. A fresh vault has no history yet, so this keeps it apart from projects with a long active run. |
+| ✨ new | Created within the last %NEW_DAYS% days, whatever its activity. A fresh vault has no history yet, so this keeps it apart from projects with a long active run. Change the number with `claude-atlas config new-days N`. |
 | 🔥 hot | Touched within the last 7 days. |
 | 🌤️ warm | Touched within the last 30 days. |
 | ❄️ cold | Untouched for 30 days or more. |

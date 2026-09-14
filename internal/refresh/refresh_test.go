@@ -38,18 +38,21 @@ func leaf(vault string) *tree.Project {
 func TestHeat(t *testing.T) {
 	for days, want := range map[int]string{0: "hot", 6: "hot", 7: "warm", 29: "warm", 30: "cold"} {
 		d := days
-		if got := Heat(&d, nil); got != want {
+		if got := Heat(&d, nil, 7); got != want {
 			t.Errorf("%d days: got %s want %s", days, got, want)
 		}
 	}
-	if Heat(nil, p(0)) != "" {
+	if Heat(nil, p(0), 7) != "" {
 		t.Error("nil idleness should be unknown even when new")
 	}
-	if Heat(p(0), p(3)) != "new" || Heat(p(40), p(6)) != "new" {
+	if Heat(p(0), p(3), 7) != "new" || Heat(p(40), p(6), 7) != "new" {
 		t.Error("a vault under 7 days old is new whatever its idleness")
 	}
-	if Heat(p(0), p(7)) != "hot" {
+	if Heat(p(0), p(7), 7) != "hot" {
 		t.Error("7 days old is no longer new")
+	}
+	if Heat(p(0), p(3), 1) != "hot" || Heat(p(0), p(0), 1) != "new" || Heat(p(0), p(0), 0) != "hot" {
+		t.Error("the threshold is configurable; 0 turns new off")
 	}
 }
 

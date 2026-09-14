@@ -429,3 +429,32 @@ func TestBareCommandOpensTheTreeOrExplains(t *testing.T) {
 		t.Fatalf("help: %d", code)
 	}
 }
+
+func TestConfigNewDays(t *testing.T) {
+	h, _ := setup(t)
+	if code := h.run("config"); code != 0 || !strings.Contains(h.out.String(), "new-days           7") {
+		t.Fatalf("config exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("config", "new-days", "1"); code != 0 || !strings.Contains(h.out.String(), "refreshed") {
+		t.Fatalf("set exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	cfg, err := home.Home{Root: h.home}.Load()
+	if err != nil || cfg.NewDays() != 1 {
+		t.Fatalf("saved %v %+v", err, cfg.Heat)
+	}
+	about, _ := os.ReadFile(filepath.Join(filepath.Dir(h.home), "Atlas", "About.md"))
+	if !strings.Contains(string(about), "within the last 1 days") {
+		t.Fatal("the About page follows the setting")
+	}
+	for _, bad := range [][]string{{"config", "new-days", "-1"}, {"config", "new-days", "soon"}, {"config", "hot-days", "3"}, {"config", "new-days"}} {
+		if code := h.run(bad...); code != 2 {
+			t.Fatalf("%v exit %d", bad, code)
+		}
+	}
+	if code := h.run("config", "new-days", "0"); code != 0 {
+		t.Fatalf("zero exit %d %s", code, h.err.String())
+	}
+	if code := h.run("list"); code != 0 || strings.Contains(h.out.String(), "new  ") {
+		t.Fatalf("with 0, a fresh vault is not new:\n%s", h.out.String())
+	}
+}

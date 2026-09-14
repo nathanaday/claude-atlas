@@ -1,11 +1,12 @@
 // Package pages writes the static orientation pages into the atlas vault.
 //
 // The pages are markdown templates under templates/. Placeholders: %REPO%, %VERSION%,
-// %VAULTS%, %ATLAS%, %HOME%.
+// %VAULTS%, %ATLAS%, %HOME%, %NEW_DAYS%.
 package pages
 
 import (
 	"embed"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,7 @@ func Write(cfg *home.Config, homeRoot, version string) error {
 		"%VAULTS%", home.Display(cfg.VaultsDir),
 		"%ATLAS%", home.Display(cfg.AtlasVault),
 		"%HOME%", home.Display(homeRoot),
+		"%NEW_DAYS%", fmt.Sprint(cfg.NewDays()),
 	)
 	entries, err := templates.ReadDir("templates")
 	if err != nil {
