@@ -214,6 +214,41 @@ func (l *Ledger) Apply(updates []Update, now time.Time) error {
 	return nil
 }
 
+// Dropped names a page path removed from a record.
+type Dropped struct {
+	ID   string
+	Page string
+}
+
+// DropPages removes every page path for which exists reports false.
+func (l *Ledger) DropPages(exists func(page string) bool, now time.Time) []Dropped {
+	ids := make([]string, 0, len(l.Sources))
+	for id := range l.Sources {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var dropped []Dropped
+	for _, id := range ids {
+		rec := l.Sources[id]
+		kept := []string{}
+		for _, p := range rec.Pages {
+			if exists(p) {
+				kept = append(kept, p)
+			} else {
+				dropped = append(dropped, Dropped{ID: id, Page: p})
+			}
+		}
+		if len(kept) != len(rec.Pages) {
+			rec.Pages = kept
+			l.Sources[id] = rec
+		}
+	}
+	if len(dropped) > 0 {
+		l.GeneratedAt = timestamp(now)
+	}
+	return dropped
+}
+
 // FindBySHA returns the record whose content hash matches, if any.
 func (l *Ledger) FindBySHA(sha string) (string, *Source) {
 	for id, s := range l.Sources {

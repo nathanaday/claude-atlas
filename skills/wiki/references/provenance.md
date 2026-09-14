@@ -30,7 +30,8 @@ plan updates them:
 ```
 
 `ingested: true` sets `ingested_at` and marks the source active. `pages` lists
-the wiki pages that came from it. `authority` is one of `official`, `primary`,
+the wiki pages that came from it. Apply removes a listed page that no longer
+exists, so a plan that moves or renames a page lists only the new path. `authority` is one of `official`, `primary`,
 `secondary`, `community`, `synthetic`, or `unknown`.
 
 ## Source rules

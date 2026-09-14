@@ -381,26 +381,21 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 	if err := checkTaskIDs(v, plan, overlay); err != nil {
 		return nil, err
 	}
+	trial, err := ledger.Parse(led.Encode())
+	if err != nil {
+		return nil, err
+	}
 	if len(req.Sources) > 0 {
-		trial, err := ledger.Parse(led.Encode())
-		if err != nil {
-			return nil, err
-		}
 		if err := trial.Apply(req.Sources, now); err != nil {
 			return nil, err
 		}
 		for _, u := range req.Sources {
 			plan.Preview.Sources = append(plan.Preview.Sources, u.ID)
-			for _, page := range u.Pages {
-				if _, planned := overlay[page]; planned {
-					continue
-				}
-				if _, _, exists, _ := fileState(v, page); !exists {
-					plan.Warnings = append(plan.Warnings, fmt.Sprintf("source %s lists %s, which does not exist", u.ID, page))
-				}
-			}
 		}
 		plan.sources = req.Sources
+	}
+	for _, d := range trial.DropPages(pageExists(v, plan.writes), now) {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf("source %s lists %s, which does not exist; apply removes it from the ledger", d.ID, d.Page))
 	}
 	var written []string
 	for p := range overlay {
@@ -416,6 +411,21 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 	}
 	sort.Strings(plan.Warnings)
 	return plan, nil
+}
+
+// pageExists reports whether a path exists once the writes are applied.
+func pageExists(v *vault.Vault, writes []prepared) func(string) bool {
+	planned := map[string]bool{}
+	for _, w := range writes {
+		planned[w.Path] = w.Mode != Delete
+	}
+	return func(p string) bool {
+		if present, ok := planned[p]; ok {
+			return present
+		}
+		_, _, exists, _ := fileState(v, p)
+		return exists
+	}
 }
 
 // checkTaskIDs refuses a plan whose task pages reuse an id another page holds.
@@ -663,6 +673,7 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 	if err := led.Apply(plan.sources, now); err != nil {
 		return nil, err
 	}
+	writeLedger := len(led.DropPages(pageExists(v, plan.writes), now)) > 0 || len(plan.sources) > 0
 	logData, err := os.ReadFile(v.Path(vault.LogPage))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -675,7 +686,7 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 		in.Paths = append(in.Paths, InflightPath{Path: w.Path, Existed: w.Existed})
 	}
 	in.Paths = append(in.Paths, InflightPath{Path: vault.LogPage, Existed: logExisted})
-	if len(plan.sources) > 0 {
+	if writeLedger {
 		in.Paths = append(in.Paths, InflightPath{Path: vault.LedgerPath, Existed: ledgerExisted})
 	}
 	withTasks := touchesTasks(plan)
@@ -717,7 +728,7 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 		return nil, rollback(err)
 	}
 	changed = append(changed, vault.LogPage)
-	if len(plan.sources) > 0 {
+	if writeLedger {
 		if err := writeAtomic(v.Path(vault.LedgerPath), led.Encode()); err != nil {
 			return nil, rollback(err)
 		}

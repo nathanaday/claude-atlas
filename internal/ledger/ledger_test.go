@@ -56,6 +56,23 @@ func TestApplyCreatesThenUpdates(t *testing.T) {
 	}
 }
 
+func TestDropPagesRemovesPagesThatDoNotExist(t *testing.T) {
+	l := Empty(now)
+	l.Sources["src-a"] = Source{Title: "A", Pages: []string{"wiki/a.md", "wiki/gone.md"}}
+	l.Sources["src-b"] = Source{Title: "B", Pages: []string{"wiki/a.md"}}
+	later := now.Add(time.Hour)
+	dropped := l.DropPages(func(p string) bool { return p != "wiki/gone.md" }, later)
+	if len(dropped) != 1 || dropped[0] != (Dropped{ID: "src-a", Page: "wiki/gone.md"}) {
+		t.Fatalf("dropped %+v", dropped)
+	}
+	if got := l.Sources["src-a"].Pages; len(got) != 1 || got[0] != "wiki/a.md" || len(l.Sources["src-b"].Pages) != 1 || l.GeneratedAt != timestamp(later) {
+		t.Fatalf("ledger %+v", l)
+	}
+	if again := l.DropPages(func(string) bool { return true }, now); len(again) != 0 || l.GeneratedAt != timestamp(later) {
+		t.Fatal("a ledger with nothing to drop must not change")
+	}
+}
+
 func TestParseKeepsLegacyFields(t *testing.T) {
 	raw := `{"schema":"claude-obsidian.source-ledger.v1","generated_at":"2026-01-01T00:00:00Z","sources":{"src-abc":{"title":"T","origin":{"kind":"url","locator":"https://x"},"authority":"official","review_status":"active","pages":[],"independence_key":"x","refresh_due":"2027-01-01"}}}`
 	l, err := Parse([]byte(raw))

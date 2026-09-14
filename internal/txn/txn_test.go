@@ -308,11 +308,56 @@ func TestConfigAndSources(t *testing.T) {
 	}
 	l, _ := ledger.Load(v.Path(vault.LedgerPath), now)
 	rec := l.Sources[id]
-	if rec.IngestedAt != "2026-09-12" || rec.Authority != "primary" || len(rec.Pages) != 2 {
+	if rec.IngestedAt != "2026-09-12" || rec.Authority != "primary" || len(rec.Pages) != 1 || rec.Pages[0] != "wiki/notes/Paper.md" {
 		t.Fatalf("ledger %+v", rec)
 	}
 	if !strings.Contains(read(t, v, vault.LogPage), "- Removed: `inbox/paper.md`\n- Sources: "+id) {
 		t.Fatalf("log:\n%s", read(t, v, vault.LogPage))
+	}
+}
+
+func TestApplyDropsLedgerPagesThatNoLongerExist(t *testing.T) {
+	v := newVault(t)
+	sum := hashOf("paper")
+	locator := ".raw/captured/" + sum + ".md"
+	id := ledger.ID("file", locator, sum)
+	for _, req := range []Request{
+		{Kind: Capture, Summary: "capture paper", Writes: []Write{{Path: locator, Mode: Create, Content: []byte("paper")}},
+			Sources: []ledger.Update{{ID: id, Origin: &ledger.Origin{Kind: "file", Locator: locator}, ContentSHA256: sum}}},
+		{Kind: Ingest, Summary: "ingest paper", Writes: []Write{{Path: "wiki/notes/Paper.md", Mode: Create, Content: mkpage("Paper", "# Paper\n\np\n")}},
+			Sources: []ledger.Update{{ID: id, Ingested: true, Pages: []string{"wiki/notes/Paper.md"}}}},
+	} {
+		plan, err := Prepare(v, req, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Apply(v, plan, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	move, err := Prepare(v, Request{Kind: Markdown, Summary: "archive paper", Writes: []Write{
+		{Path: "wiki/notes/Paper.md", Mode: Delete},
+		{Path: "wiki/archive/Paper.md", Mode: Create, Content: mkpage("Paper", "# Paper\n\np\n")},
+	}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(move.Warnings, "\n"), "source "+id+" lists wiki/notes/Paper.md, which does not exist; apply removes it") {
+		t.Fatalf("warnings %v", move.Warnings)
+	}
+	res, err := Apply(v, move, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(res.ChangedPaths, ","), vault.LedgerPath) {
+		t.Fatalf("changed %v", res.ChangedPaths)
+	}
+	l, _ := ledger.Load(v.Path(vault.LedgerPath), now)
+	if pages := l.Sources[id].Pages; len(pages) != 0 {
+		t.Fatalf("pages %v", pages)
+	}
+	if dirty, _ := v.Repo().Dirty(); dirty {
+		t.Fatal("the ledger change must be in the operation's commit")
 	}
 }
 
