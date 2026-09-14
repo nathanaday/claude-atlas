@@ -46,9 +46,12 @@ safety net, and adds the cross-vault view.
    the vault records nothing.
 3. The atlas never stores a fact it can compute. `~/.claude-atlas/state/` is
    rebuilt in full by `refresh`, and so are `Overview.md`, `Tree.md`, and
-   `categories/`. `tree/`, `repos/`, and `materials/` are the user's; refresh
-   touches a project page for one reason only, to turn a plain folder path in
-   `repos` or `materials` into a link to its page.
+   `categories/`. `tree/` and `repos/` are the user's; refresh touches a
+   project page for one reason only, to turn a plain folder path in `repos`
+   into a link to its page, and moves a git-backed page from the retired
+   `materials/` under `repos/`.
+4. A link is a mounted repository, always a git repository: deliverables live
+   there, memory lives in the vault. Ingest sources are not links.
 
 ## Two layers, one backend
 
@@ -86,8 +89,8 @@ internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launchin
 internal/tree/          project pages (frontmatter) and derived state files
 internal/refresh/       derive state, generate categories/ and Tree.md, render Overview.md
 internal/pages/         About.md and Reference.md from templates
-internal/vaults/        create, register, edit project pages, link folders, relate projects
-internal/links/         link pages under repos/ and materials/, and the facts about their folders
+internal/vaults/        create, register, edit project pages, mount and create repositories, relate projects
+internal/links/         repository pages under repos/ (materials/ is legacy), git init and create, the facts about them
 internal/tui/           Bubble Tea screens: the tree (view), the project editor, the links screen, ingest, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
 internal/home/          ~/.claude-atlas and config.json

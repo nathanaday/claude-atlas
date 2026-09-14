@@ -144,43 +144,69 @@ func TestLinkCommands(t *testing.T) {
 	os.MkdirAll(docs, 0o755)
 	os.WriteFile(filepath.Join(docs, "a.pdf"), []byte("x"), 0o644)
 	atlas := filepath.Join(filepath.Dir(h.home), "Atlas")
-	if code := h.run("link", "welcome", docs); code != 0 || !strings.Contains(h.out.String(), "docs (materials,") || !strings.Contains(h.out.String(), "materials/docs.md (new)") {
-		t.Fatalf("link exit %d\n%s%s", code, h.out.String(), h.err.String())
+	// A plain folder is not a repository; piped, the command says so and stops.
+	if code := h.run("link", "welcome", docs); code != 1 || !strings.Contains(h.err.String(), "not a git repository") {
+		t.Fatalf("plain folder: %d %s", code, h.err.String())
 	}
-	if _, err := os.Stat(filepath.Join(atlas, "materials", "docs.md")); err != nil {
+	if code := h.run("link", "welcome", docs, "--init"); code != 0 || !strings.Contains(h.out.String(), "docs (") || !strings.Contains(h.out.String(), "repos/docs.md (new)") {
+		t.Fatalf("link --init exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(docs, ".git")); err != nil {
+		t.Fatal("--init should make the folder a repository")
+	}
+	if _, err := os.Stat(filepath.Join(atlas, "repos", "docs.md")); err != nil {
 		t.Fatal("link should create the page")
 	}
 	page, _ := os.ReadFile(filepath.Join(atlas, "tree", "welcome.md"))
-	if !strings.Contains(string(page), `- "[[materials/docs|docs]]"`) {
+	if !strings.Contains(string(page), `- "[[repos/docs|docs]]"`) {
 		t.Fatalf("project page should hold a wikilink:\n%s", page)
 	}
 	if code := h.run("link", "welcome", docs); code != 1 || !strings.Contains(h.err.String(), "already linked") {
 		t.Fatalf("duplicate: %d %s", code, h.err.String())
 	}
-	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "materials") || !strings.Contains(h.out.String(), "1 file") {
+	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "repo") || !strings.Contains(h.out.String(), "main") {
 		t.Fatalf("links exit %d:\n%s", code, h.out.String())
 	}
 	if code := h.run("links"); code != 0 || !strings.Contains(h.out.String(), "docs") || !strings.Contains(h.out.String(), "· welcome") {
 		t.Fatalf("all links exit %d:\n%s", code, h.out.String())
 	}
 	overview, _ := os.ReadFile(filepath.Join(atlas, "Overview.md"))
-	if !strings.Contains(string(overview), "## Repos and materials") || !strings.Contains(string(overview), "[[materials/docs\\|docs]]") {
+	if !strings.Contains(string(overview), "## Repositories") || !strings.Contains(string(overview), "[[repos/docs\\|docs]]") {
 		t.Fatalf("overview:\n%s", overview)
 	}
 	if code := h.run("unlink", "welcome", "docs"); code != 0 {
 		t.Fatalf("unlink by name exit %d %s", code, h.err.String())
 	}
-	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "no links") {
+	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "no repositories") {
 		t.Fatalf("after unlink:\n%s", h.out.String())
 	}
 	if code := h.run("links"); code != 0 || !strings.Contains(h.out.String(), "no project") {
 		t.Fatalf("an unused page shows as such:\n%s", h.out.String())
 	}
 	if code := h.run("link", "welcome", docs, "--kind", "bogus"); code != 2 {
-		t.Fatalf("bad kind exit %d", code)
+		t.Fatalf("unknown flag exit %d", code)
 	}
 	if code := h.run("link", "welcome", "docs"); code != 0 {
 		t.Fatalf("link by page name exit %d %s", code, h.err.String())
+	}
+	// A new repository beside the wiki, ignored by the vault's own git.
+	if code := h.run("new-repo", "welcome", "paper"); code != 0 || !strings.Contains(h.out.String(), "own git history") || !strings.Contains(h.out.String(), "repos/paper.md") {
+		t.Fatalf("new-repo exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	paper := filepath.Join(vaults, "welcome", "paper")
+	if _, err := os.Stat(filepath.Join(paper, ".git")); err != nil {
+		t.Fatal("paper should be a repository")
+	}
+	ignore, _ := os.ReadFile(filepath.Join(vaults, "welcome", ".gitignore"))
+	if !strings.Contains(string(ignore), "/paper/") {
+		t.Fatalf("vault .gitignore:\n%s", ignore)
+	}
+	elsewhere := filepath.Join(filepath.Dir(vaults), "slides")
+	if code := h.run("new-repo", "welcome", "slides", "--at", elsewhere); code != 0 {
+		t.Fatalf("new-repo --at exit %d %s", code, h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, "README.md")); err != nil {
+		t.Fatal("slides should exist with a README")
 	}
 }
 
@@ -188,13 +214,13 @@ func TestEditLinkCommand(t *testing.T) {
 	h, vaults := setup(t)
 	docs := filepath.Join(vaults, "docs")
 	os.MkdirAll(docs, 0o755)
-	if code := h.run("link", "welcome", docs); code != 0 {
+	if code := h.run("link", "welcome", docs, "--init"); code != 0 {
 		t.Fatalf("link exit %d %s", code, h.err.String())
 	}
 	if code := h.run("edit-link", "docs"); code != 2 {
 		t.Fatalf("no flags exit %d", code)
 	}
-	if code := h.run("edit-link", "docs", "--name", "Lecture notes", "--kind", "repo"); code != 0 || !strings.Contains(h.out.String(), "materials/docs → repos/Lecture notes (repo,") {
+	if code := h.run("edit-link", "docs", "--name", "Lecture notes"); code != 0 || !strings.Contains(h.out.String(), "repos/docs → repos/Lecture notes (repo,") {
 		t.Fatalf("edit-link exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 	atlas := filepath.Join(filepath.Dir(h.home), "Atlas")
@@ -342,12 +368,12 @@ func TestShowEditRemove(t *testing.T) {
 	}
 }
 
-func TestIngestStagesNewFilesAndLinksTheFolder(t *testing.T) {
+func TestIngestStagesNewFilesAndRemembersTheFolder(t *testing.T) {
 	h, vaults := setup(t)
 	src := filepath.Join(filepath.Dir(vaults), "Papers")
 	os.MkdirAll(src, 0o755)
 	os.WriteFile(filepath.Join(src, "a.md"), []byte("aaa"), 0o644)
-	if code := h.run("ingest", "welcome"); code != 1 || !strings.Contains(h.err.String(), "no linked material") {
+	if code := h.run("ingest", "welcome"); code != 1 || !strings.Contains(h.err.String(), "has not ingested from a folder yet") {
 		t.Fatalf("no sources: exit %d err %s", code, h.err.String())
 	}
 	if code := h.run("ingest", "welcome", src, "--dry-run"); code != 0 || !strings.Contains(h.out.String(), "new        Papers/a.md") {
@@ -356,16 +382,16 @@ func TestIngestStagesNewFilesAndLinksTheFolder(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(vaults, "welcome", "inbox", "Papers", "a.md")); err == nil {
 		t.Fatal("dry run must not stage")
 	}
-	if code := h.run("ingest", "welcome", src, "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "staged") || !strings.Contains(h.out.String(), "linked") || !strings.Contains(h.out.String(), "wiki-ingest") {
+	if code := h.run("ingest", "welcome", src, "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "staged") || !strings.Contains(h.out.String(), "remembered") || !strings.Contains(h.out.String(), "wiki-ingest") {
 		t.Fatalf("ingest exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 	if data, _ := os.ReadFile(filepath.Join(vaults, "welcome", "inbox", "Papers", "a.md")); string(data) != "aaa" {
 		t.Fatal("file not staged")
 	}
-	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "materials") {
-		t.Fatalf("folder should be linked:\n%s", h.out.String())
+	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "no repositories") {
+		t.Fatalf("ingesting from a folder does not link it:\n%s", h.out.String())
 	}
-	// With no path, the linked folder is the source; nothing is new, but the staged file still waits.
+	// With no path, the remembered folder is the source; nothing is new, but the staged file still waits.
 	if code := h.run("ingest", "welcome", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "nothing new to stage; 1 file already waiting") || !strings.Contains(h.out.String(), "wiki-ingest") {
 		t.Fatalf("second ingest exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}

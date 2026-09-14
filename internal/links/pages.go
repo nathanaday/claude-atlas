@@ -10,12 +10,16 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
 )
 
-// A linked folder is a page in the atlas vault, repos/<name>.md or materials/<name>.md,
-// whose frontmatter holds the folder's path. A project page names it with a wikilink, so
-// Obsidian draws the edge and a folder shared by two projects is one node between them.
+// A link is a mounted repository: a git repository where a project's deliverables are
+// made, code or papers or decks, with the vault as the memory behind it. Each has a page
+// in the atlas vault, repos/<name>.md, whose frontmatter holds the path. A project page
+// names it with a wikilink, so Obsidian draws the edge and a repository two projects
+// share is one node between them. Pages under materials/ are from before links were
+// repositories; they still read, and refresh moves the ones that are git repositories.
 
 const PageSchema = "atlas.link.v1"
 
@@ -279,4 +283,65 @@ func quoteYAML(s string) string {
 	}
 	enc.Close()
 	return strings.TrimSpace(b.String())
+}
+
+// IsRepo reports whether a folder is the top of a git working tree.
+func IsRepo(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	return gitx.Repo{Dir: path}.IsRepo()
+}
+
+// InitRepo makes an existing folder a git repository with one commit of what it holds,
+// or of a README when it is empty.
+func InitRepo(path, name string) error {
+	if !gitx.Available() {
+		return fmt.Errorf("git is required and is not on PATH")
+	}
+	repo := gitx.Repo{Dir: path}
+	if repo.IsRepo() {
+		return nil
+	}
+	if err := repo.Init(); err != nil {
+		return err
+	}
+	if err := repo.AddAll(); err != nil {
+		return err
+	}
+	staged, err := repo.Status()
+	if err != nil {
+		return err
+	}
+	subject := "initial: existing files"
+	if len(staged) == 0 {
+		// Nothing git can track yet: a README gives the repository its first commit.
+		if err := os.WriteFile(filepath.Join(path, "README.md"), []byte(readme(name)), 0o644); err != nil {
+			return err
+		}
+		if err := repo.AddAll(); err != nil {
+			return err
+		}
+		subject = "initial"
+	}
+	_, err = repo.Commit(subject)
+	return err
+}
+
+// CreateRepo makes a new git repository at dir, which must not exist or must be empty.
+func CreateRepo(dir, name string) error {
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		return fmt.Errorf("%s already exists and is not empty", home.Display(dir))
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return InitRepo(dir, name)
+}
+
+func readme(name string) string {
+	return "# " + name + "\n\nDeliverables live here. The knowledge behind them lives in the claude-atlas vault this repository is linked to.\n"
 }

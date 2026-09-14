@@ -1,14 +1,18 @@
 package vaults
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/tree"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 func fakeVault(t *testing.T, dir string) string {
@@ -112,10 +116,14 @@ func reload(t *testing.T, cfg *home.Config, p *tree.Project) *tree.Project {
 func TestAddAndRemoveLinksThroughPages(t *testing.T) {
 	cfg, p := setup(t)
 	repo := filepath.Join(cfg.VaultsDir, "code")
-	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	os.MkdirAll(repo, 0o755)
+	if err := links.InitRepo(repo, "code"); err != nil {
+		t.Fatal(err)
+	}
 	docs := filepath.Join(cfg.VaultsDir, "docs")
 	os.MkdirAll(docs, 0o755)
-	page, err := AddLink(cfg, p, "", repo)
+	os.WriteFile(filepath.Join(docs, "a.pdf"), []byte("x"), 0o644)
+	page, err := AddLink(cfg, p, repo, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,20 +138,32 @@ func TestAddAndRemoveLinksThroughPages(t *testing.T) {
 	if len(p.Repos) != 1 || p.Repos[0] != "[[repos/code|code]]" {
 		t.Fatalf("repos entry %v", p.Repos)
 	}
-	if _, err := AddLink(cfg, p, "", docs); err != nil {
+	// A plain folder is refused until the caller asks for a git init; then it is a repo.
+	_, err = AddLink(cfg, p, docs, false)
+	var notRepo *NotRepoError
+	if !errors.As(err, &notRepo) || notRepo.Path != docs {
+		t.Fatalf("plain folder: %v", err)
+	}
+	if _, err := AddLink(cfg, p, docs, true); err != nil {
 		t.Fatal(err)
 	}
+	if !links.IsRepo(docs) {
+		t.Fatal("docs should be a git repository now")
+	}
+	if log, _ := (gitx.Repo{Dir: docs}).Log(1); len(log) != 1 || log[0].Subject != "initial: existing files" {
+		t.Fatalf("init commit %+v", log)
+	}
 	p = reload(t, cfg, p)
-	if len(p.Linked) != 2 || p.Linked[0].Name != "code" || p.Linked[0].Path != repo || p.Linked[1].Kind != links.Materials || p.Linked[1].Path != docs {
+	if len(p.Linked) != 2 || p.Linked[0].Name != "code" || p.Linked[1].Kind != links.Repo || p.Linked[1].Path != docs {
 		t.Fatalf("linked %+v", p.Linked)
 	}
-	if !p.LinkedTo(repo) || len(p.Paths(links.Materials)) != 1 {
+	if !p.LinkedTo(repo) || len(p.Paths(links.Repo)) != 2 {
 		t.Fatal("helpers should see both links")
 	}
-	if _, err := AddLink(cfg, p, links.Materials, repo); err == nil {
+	if _, err := AddLink(cfg, p, repo, false); err == nil {
 		t.Fatal("duplicate link should fail")
 	}
-	if _, err := AddLink(cfg, p, "", filepath.Join(cfg.VaultsDir, "nope")); err == nil {
+	if _, err := AddLink(cfg, p, filepath.Join(cfg.VaultsDir, "nope"), false); err == nil {
 		t.Fatal("missing path should fail")
 	}
 	// Another project links the same repo by page name and shares the node.
@@ -152,7 +172,7 @@ func TestAddAndRemoveLinksThroughPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared, err := AddLink(cfg, q, "", "code")
+	shared, err := AddLink(cfg, q, "code", false)
 	if err != nil || shared.File != page.File {
 		t.Fatalf("link by name: %v %+v", err, shared)
 	}
@@ -164,8 +184,8 @@ func TestAddAndRemoveLinksThroughPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	p = reload(t, cfg, p)
-	if len(p.Repos) != 0 || len(p.Materials) != 1 {
-		t.Fatalf("after remove: repos=%v materials=%v", p.Repos, p.Materials)
+	if len(p.Repos) != 1 {
+		t.Fatalf("after remove: repos=%v", p.Repos)
 	}
 	if _, err := os.Stat(page.File); err != nil {
 		t.Fatal("removing a link must not delete the page")
@@ -178,35 +198,98 @@ func TestAddAndRemoveLinksThroughPages(t *testing.T) {
 	}
 }
 
-func TestLinkPageDecidesTheKind(t *testing.T) {
+func TestNewRepoBesideTheWikiOrElsewhere(t *testing.T) {
 	cfg, p := setup(t)
-	slides := filepath.Join(cfg.VaultsDir, "slides")
-	os.MkdirAll(slides, 0o755)
-	if _, err := AddLink(cfg, p, links.Materials, slides); err != nil {
+	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "real"), vault.Generic, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	other := fakeVault(t, filepath.Join(cfg.VaultsDir, "b"))
-	q, _ := Register(cfg, other, RegisterOptions{Name: "B"})
-	page, err := AddLink(cfg, q, links.Repo, slides)
-	if err != nil || page.Kind != links.Materials {
-		t.Fatalf("an existing page keeps its kind: %v %+v", err, page)
+	p, err := Register(cfg, filepath.Join(cfg.VaultsDir, "real"), RegisterOptions{Name: "Real"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	q = reload(t, cfg, q)
-	if len(q.Materials) != 1 || len(q.Repos) != 0 {
-		t.Fatalf("q lists %v %v", q.Repos, q.Materials)
+	page, err := NewRepo(cfg, p, "paper", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(p.VaultPath(), "paper")
+	if page.Path != dir || page.Kind != links.Repo || !links.IsRepo(dir) {
+		t.Fatalf("page %+v", page)
+	}
+	readme, _ := os.ReadFile(filepath.Join(dir, "README.md"))
+	if !strings.Contains(string(readme), "# paper") {
+		t.Fatalf("readme:\n%s", readme)
+	}
+	ignore, _ := os.ReadFile(filepath.Join(p.VaultPath(), ".gitignore"))
+	if !strings.Contains(string(ignore), "/paper/") {
+		t.Fatalf("the vault should ignore the mounted repository:\n%s", ignore)
+	}
+	if st, _ := (gitx.Repo{Dir: p.VaultPath()}).Status(); len(st) != 0 {
+		t.Fatalf("the vault should be clean after mounting: %+v", st)
+	}
+	log, _ := (gitx.Repo{Dir: p.VaultPath()}).Log(1)
+	if len(log) != 1 || !strings.Contains(log[0].Subject, "ignore the mounted repository /paper/") {
+		t.Fatalf("vault commit %+v", log)
+	}
+	p = reload(t, cfg, p)
+	if !p.LinkedTo(dir) {
+		t.Fatal("the repo should be linked")
+	}
+	if _, err := NewRepo(cfg, p, "paper", ""); err == nil {
+		t.Fatal("an existing folder should be refused")
+	}
+	if _, err := NewRepo(cfg, p, "notes", filepath.Join(p.VaultPath(), "wiki", "notes")); err == nil {
+		t.Fatal("inside the wiki should be refused")
+	}
+	elsewhere := filepath.Join(cfg.VaultsDir, "elsewhere", "slides")
+	page, err = NewRepo(cfg, p, "slides", elsewhere)
+	if err != nil || page.Path != elsewhere || !links.IsRepo(elsewhere) {
+		t.Fatalf("elsewhere: %+v %v", page, err)
+	}
+	if _, err := NewRepo(cfg, p, "", ""); err == nil {
+		t.Fatal("a name is needed")
+	}
+}
+
+func TestUpgradeMovesGitBackedFolderPages(t *testing.T) {
+	cfg, p := setup(t)
+	docs := filepath.Join(cfg.VaultsDir, "docs")
+	os.MkdirAll(filepath.Join(cfg.AtlasVault, "materials"), 0o755)
+	os.MkdirAll(docs, 0o755)
+	os.WriteFile(filepath.Join(cfg.AtlasVault, "materials", "docs.md"), []byte("---\nschema: atlas.link.v1\npath: "+docs+"\n---\n"), 0o644)
+	if err := tree.UpdateFrontmatter(p.Path, map[string]any{"materials": []string{"[[materials/docs|docs]]"}}); err != nil {
+		t.Fatal(err)
+	}
+	if up, err := UpgradeLinks(cfg); err != nil || len(up) != 0 {
+		t.Fatalf("a plain folder stays a folder page: %v %v", up, err)
+	}
+	if err := links.InitRepo(docs, "docs"); err != nil {
+		t.Fatal(err)
+	}
+	up, err := UpgradeLinks(cfg)
+	if err != nil || len(up) != 1 || up[0] != "materials/docs → repos/docs" {
+		t.Fatalf("upgrade %v %v", up, err)
+	}
+	p = reload(t, cfg, p)
+	if len(p.Repos) != 1 || p.Repos[0] != "[[repos/docs|docs]]" || len(p.Materials) != 0 {
+		t.Fatalf("after upgrade repos=%v materials=%v", p.Repos, p.Materials)
 	}
 }
 
 func TestUpdateLinkRenamesMovesAndRepoints(t *testing.T) {
 	cfg, p := setup(t)
 	docs := filepath.Join(cfg.VaultsDir, "docs")
-	os.MkdirAll(filepath.Join(docs, ".git"), 0o755)
-	page, err := AddLink(cfg, p, links.Materials, docs)
+	os.MkdirAll(docs, 0o755)
+	page, err := AddLink(cfg, p, docs, true)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The kind is internal now; move the page under materials/ to exercise the move back.
+	page, err = UpdateLink(cfg, page, LinkEdit{Kind: links.Materials})
+	if err != nil || page.Kind != links.Materials {
+		t.Fatal(err)
+	}
 	q, _ := Register(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "b")), RegisterOptions{Name: "B"})
-	if _, err := AddLink(cfg, q, "", "docs"); err != nil {
+	if _, err := AddLink(cfg, q, "docs", false); err != nil {
 		t.Fatal(err)
 	}
 	renamed, err := UpdateLink(cfg, page, LinkEdit{Name: "Course notes"})
@@ -232,6 +315,12 @@ func TestUpdateLinkRenamesMovesAndRepoints(t *testing.T) {
 	}
 	other := filepath.Join(cfg.VaultsDir, "other")
 	os.MkdirAll(other, 0o755)
+	if _, err := UpdateLink(cfg, moved, LinkEdit{Path: other}); err == nil {
+		t.Fatal("a repo page cannot point at a plain folder")
+	}
+	if err := links.InitRepo(other, "other"); err != nil {
+		t.Fatal(err)
+	}
 	repointed, err := UpdateLink(cfg, moved, LinkEdit{Path: other})
 	if err != nil || repointed.Path != other {
 		t.Fatalf("repoint: %+v %v", repointed, err)
@@ -255,9 +344,6 @@ func TestUpdateLinkRenamesMovesAndRepoints(t *testing.T) {
 	if _, err := UpdateLink(cfg, repointed, LinkEdit{Path: file}); err == nil {
 		t.Fatal("a repo cannot be a file")
 	}
-	if _, err := UpdateLink(cfg, repointed, LinkEdit{Kind: links.Materials, Path: file}); err != nil {
-		t.Fatal("material may be a file:", err)
-	}
 }
 
 func TestUpgradeLinksGivesPlainPathsPages(t *testing.T) {
@@ -274,7 +360,7 @@ func TestUpgradeLinksGivesPlainPathsPages(t *testing.T) {
 		t.Fatalf("a plain path resolves to itself: %+v", p.Linked)
 	}
 	upgraded, err := UpgradeLinks(cfg)
-	if err != nil || len(upgraded) != 1 || upgraded[0] != p.Rel {
+	if err != nil || len(upgraded) != 1 || upgraded[0] != "tree/"+p.Rel {
 		t.Fatalf("upgraded %v %v", upgraded, err)
 	}
 	p = reload(t, cfg, p)

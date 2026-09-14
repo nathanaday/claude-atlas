@@ -137,7 +137,7 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 	}
 	repo := filepath.Join(root, "code")
 	os.MkdirAll(filepath.Join(repo, "src"), 0o755)
-	if _, err := vaults.AddLink(cfg, p, "", repo); err != nil {
+	if _, err := vaults.AddLink(cfg, p, repo, true); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,15 +16,19 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
-// linksScreen shows a project's linked folders as boxes, one per link, and acts on
-// them at once: add, edit the page, unlink. Every action is one backend call; the view
-// refreshes afterwards so the facts catch up. It is embedded in the view.
+// linksScreen shows a project's mounted repositories as boxes, one per link, and acts
+// on them at once: mount an existing one, create a new one, edit the page, unlink.
+// Every action is one backend call; the view refreshes afterwards so the facts catch
+// up. It is embedded in the view.
 
 type linksMode int
 
 const (
 	linksList linksMode = iota
 	linksAdd
+	linksConfirmInit
+	linksNewName
+	linksNewPath
 	linksEdit
 	linksConfirmUnlink
 )
@@ -44,6 +49,9 @@ type linksScreen struct {
 	cursor  int
 	mode    linksMode
 	source  pathField
+	pending string // the folder awaiting a yes to git init
+	name    textinput.Model
+	where   pathField
 	edit    linkEditor
 	width   int
 	status  string
@@ -54,7 +62,13 @@ type linksScreen struct {
 
 func newLinks(hooks Hooks, item *Item, items []Item, width int) linksScreen {
 	s := linksScreen{hooks: hooks, item: item, width: width}
-	s.source = newPathField("~/code/project or ~/Papers, or the name of a page another project links", 60)
+	s.source = newPathField("~/code/project, or the name of a repository another project links", 60)
+	s.name = textinput.New()
+	s.name.Prompt = ""
+	s.name.Placeholder = "paper, slides, app"
+	s.name.CharLimit = 80
+	s.name.Width = 40
+	s.where = newPathField("", 60)
 	s.reload(items, item.Project.Rel)
 	return s
 }
@@ -75,10 +89,12 @@ func (s *linksScreen) reload(items []Item, rel string) {
 			row.facts, row.broken = "names no page under "+links.Dir(l.Kind)+"/", true
 		case l.Name == "":
 			row.facts = "no page yet; refresh makes one"
+		case l.Kind == links.Materials:
+			row.facts, row.broken = "a folder, not a git repository; initialize git there and refresh, or unlink", true
 		default:
 			row.facts = "not refreshed yet"
 		}
-		if s.item.State != nil {
+		if s.item.State != nil && l.Kind == links.Repo {
 			for _, f := range s.item.State.Links {
 				if f.Path == l.Path && f.Kind == l.Kind && l.Path != "" {
 					row.facts, row.broken = refresh.LinkSummary(f), !f.OK
@@ -146,6 +162,14 @@ func (s linksScreen) update(msg tea.Msg) (linksScreen, tea.Cmd) {
 				s.source.setValue("")
 				s.mode = linksAdd
 				return s, s.source.focus()
+			case "n":
+				if s.hooks.NewRepo == nil {
+					s.err = "creating repositories is not available here"
+					return s, nil
+				}
+				s.name.SetValue("")
+				s.mode = linksNewName
+				return s, s.name.Focus()
 			case "e":
 				return s.startEdit()
 			case "u":
@@ -170,6 +194,52 @@ func (s linksScreen) update(msg tea.Msg) (linksScreen, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		s.source, cmd = s.source.update(msg)
+		return s, cmd
+	case linksConfirmInit:
+		if isKey {
+			switch strings.ToLower(key.String()) {
+			case "y":
+				return s.link(s.pending, true), nil
+			case "n", "esc":
+				s.err = ""
+				s.mode = linksList
+			}
+		}
+		return s, nil
+	case linksNewName:
+		if isKey {
+			switch key.Type {
+			case tea.KeyEnter:
+				name := strings.TrimSpace(s.name.Value())
+				if name == "" {
+					s.err = "the repository needs a name"
+					return s, nil
+				}
+				s.err = ""
+				s.where.setValue(home.Display(s.item.Project.VaultPath() + "/" + name))
+				s.mode = linksNewPath
+				return s, s.where.focus()
+			case tea.KeyEsc:
+				s.err = ""
+				s.mode = linksList
+				return s, nil
+			}
+		}
+		var cmd tea.Cmd
+		s.name, cmd = s.name.Update(msg)
+		return s, cmd
+	case linksNewPath:
+		if isKey {
+			switch key.Type {
+			case tea.KeyEnter:
+				return s.create(), nil
+			case tea.KeyEsc:
+				s.mode = linksNewName
+				return s, s.name.Focus()
+			}
+		}
+		var cmd tea.Cmd
+		s.where, cmd = s.where.update(msg)
 		return s, cmd
 	case linksEdit:
 		var cmd tea.Cmd
@@ -204,17 +274,51 @@ func (s linksScreen) add() linksScreen {
 		s.mode = linksList
 		return s
 	}
+	return s.link(target, false)
+}
+
+// link mounts a repository; a plain folder is offered a git init first.
+func (s linksScreen) link(target string, initGit bool) linksScreen {
 	if s.hooks.AddLink == nil {
 		s.err = "linking is not available here"
 		return s
 	}
-	page, err := s.hooks.AddLink(s.item.Project, target)
+	page, err := s.hooks.AddLink(s.item.Project, target, initGit)
+	var notRepo *vaults.NotRepoError
+	if errors.As(err, &notRepo) {
+		s.pending = target
+		s.err = ""
+		s.mode = linksConfirmInit
+		return s
+	}
 	if err != nil {
 		s.err = err.Error()
 		return s
 	}
 	s.err = ""
-	s.status = fmt.Sprintf("linked %s (%s)", page.Name, page.Kind)
+	s.status = "linked " + page.Name
+	if initGit {
+		s.status += "; it is a git repository now"
+	}
+	s.changed = true
+	s.mode = linksList
+	return s
+}
+
+// create makes a new repository where the fields say and mounts it.
+func (s linksScreen) create() linksScreen {
+	name := strings.TrimSpace(s.name.Value())
+	at := s.where.value()
+	if at == home.Display(s.item.Project.VaultPath()+"/"+name) {
+		at = ""
+	}
+	page, err := s.hooks.NewRepo(s.item.Project, name, at)
+	if err != nil {
+		s.err = err.Error()
+		return s
+	}
+	s.err = ""
+	s.status = "created " + home.Display(page.Path) + " with its own git history, and linked it"
 	s.changed = true
 	s.mode = linksList
 	return s
@@ -275,13 +379,13 @@ func (r linkRow) label() string {
 func (s linksScreen) view() string {
 	p := s.item.Project
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render(p.Name), catSt.Render("links"), dim.Render(home.Display(p.VaultPath())))
+	fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render(p.Name), catSt.Render("repositories"), dim.Render(home.Display(p.VaultPath())))
 	if s.mode == linksEdit {
 		b.WriteString(s.edit.view())
 		return b.String()
 	}
 	if len(s.rows) == 0 {
-		b.WriteString("  " + dim.Render("no links yet; press a to link a git repo or a folder of material") + "\n")
+		b.WriteString("  " + dim.Render("no repositories yet: a mounted git repository holds this project's deliverables. Press n to create one, or a to link one that exists.") + "\n")
 	}
 	width := min(72, max(32, s.width-6))
 	for i, row := range s.rows {
@@ -291,9 +395,13 @@ func (s linksScreen) view() string {
 			style = boxSelSt
 			name = selSt.Render(name)
 		}
-		kind := dim.Render(row.link.Kind)
-		pad := max(1, width-2-lipgloss.Width(row.label())-len(row.link.Kind))
-		lines := []string{name + strings.Repeat(" ", pad) + kind}
+		kind := "repository"
+		if row.link.Kind == links.Materials {
+			kind = "folder"
+		}
+		badge := dim.Render(kind)
+		pad := max(1, width-2-lipgloss.Width(row.label())-len(kind))
+		lines := []string{name + strings.Repeat(" ", pad) + badge}
 		if row.link.Path != "" && row.link.Name != "" {
 			lines = append(lines, home.Display(row.link.Path))
 		}
@@ -312,15 +420,25 @@ func (s linksScreen) view() string {
 	b.WriteString("\n")
 	switch s.mode {
 	case linksAdd:
-		b.WriteString("  " + activeL.Width(9).Render("Add") + s.source.view("           ") + "\n")
-		b.WriteString("  " + dim.Render("a folder path, or the name of a page another project links · "+pathHint()+" · Enter link · Esc cancel") + "\n")
+		b.WriteString("  " + activeL.Width(9).Render("Link") + s.source.view("           ") + "\n")
+		b.WriteString("  " + dim.Render("a repository's folder, or the name of one another project links · "+pathHint()+" · Enter link · Esc cancel") + "\n")
+	case linksConfirmInit:
+		fmt.Fprintf(&b, "  %s %s is not a git repository. Initialize one there, with one commit of what it holds?  %s\n",
+			errSt.Render("▲"), home.Display(s.pending), title.Render("y")+" / "+title.Render("n"))
+	case linksNewName:
+		b.WriteString("  " + activeL.Width(9).Render("Name") + s.name.View() + "\n")
+		b.WriteString("  " + dim.Render("a new repository for this project's deliverables, with its own git history · Enter next · Esc cancel") + "\n")
+	case linksNewPath:
+		b.WriteString("  " + label.Width(9).Render("Name") + strings.TrimSpace(s.name.Value()) + "\n")
+		b.WriteString("  " + activeL.Width(9).Render("Where") + s.where.view("           ") + "\n")
+		b.WriteString("  " + dim.Render("the default sits beside the wiki in the vault, ignored by the vault's git; any folder on this machine works · "+pathHint()+" · Enter create · Esc back") + "\n")
 	case linksConfirmUnlink:
-		fmt.Fprintf(&b, "  %s Unlink %s from %s? The page and the folder stay.  %s\n",
+		fmt.Fprintf(&b, "  %s Unlink %s from %s? The repository and its page stay.  %s\n",
 			errSt.Render("▲"), s.current().label(), p.Name, title.Render("y")+" / "+title.Render("n"))
 	default:
-		hints := "a add"
+		hints := "n new repository · a link existing"
 		if len(s.rows) > 0 {
-			hints = "↑↓ move · a add · e edit · u unlink"
+			hints = "↑↓ move · n new · a link existing · e edit · u unlink"
 		}
 		b.WriteString("  " + dim.Render(hints+" · Esc back") + "\n")
 	}
@@ -337,12 +455,11 @@ func indent(block, pad string) string {
 	return pad + strings.ReplaceAll(block, "\n", "\n"+pad)
 }
 
-// linkEditor edits one link page: its name, kind, and folder.
+// linkEditor edits one link page: its name and its folder.
 type linkEditor struct {
 	hooks     Hooks
 	page      links.Page
 	name      string
-	kind      string
 	path      string
 	field     int
 	text      textinput.Model
@@ -356,7 +473,6 @@ type linkEditor struct {
 
 const (
 	linkFieldName = iota
-	linkFieldKind
 	linkFieldPath
 	linkFieldCount
 )
@@ -366,11 +482,11 @@ func newLinkEditor(hooks Hooks, page links.Page) linkEditor {
 	text.Prompt = ""
 	text.CharLimit = 120
 	text.Width = 40
-	return linkEditor{hooks: hooks, page: page, name: page.Name, kind: page.Kind, path: page.Path, text: text, folder: newPathField("", 60)}
+	return linkEditor{hooks: hooks, page: page, name: page.Name, path: page.Path, text: text, folder: newPathField("", 60)}
 }
 
 func (e linkEditor) dirty() bool {
-	return e.name != e.page.Name || e.kind != e.page.Kind || e.path != e.page.Path
+	return e.name != e.page.Name || e.path != e.page.Path
 }
 
 func (e linkEditor) update(msg tea.Msg) (linkEditor, tea.Cmd) {
@@ -408,10 +524,6 @@ func (e linkEditor) update(msg tea.Msg) (linkEditor, tea.Cmd) {
 		e.field = (e.field + linkFieldCount - 1) % linkFieldCount
 	case tea.KeyDown:
 		e.field = (e.field + 1) % linkFieldCount
-	case tea.KeyLeft, tea.KeyRight:
-		if e.field == linkFieldKind {
-			e.toggleKind()
-		}
 	case tea.KeyEnter:
 		switch e.field {
 		case linkFieldName:
@@ -419,8 +531,6 @@ func (e linkEditor) update(msg tea.Msg) (linkEditor, tea.Cmd) {
 			e.text.CursorEnd()
 			e.typing = true
 			return e, e.text.Focus()
-		case linkFieldKind:
-			e.toggleKind()
 		case linkFieldPath:
 			e.folder.names = nil
 			e.folder.setValue(home.Display(e.path))
@@ -442,14 +552,6 @@ func (e linkEditor) update(msg tea.Msg) (linkEditor, tea.Cmd) {
 	return e, nil
 }
 
-func (e *linkEditor) toggleKind() {
-	if e.kind == links.Repo {
-		e.kind = links.Materials
-	} else {
-		e.kind = links.Repo
-	}
-}
-
 func (e linkEditor) save() linkEditor {
 	if !e.dirty() {
 		e.cancelled = true
@@ -458,9 +560,6 @@ func (e linkEditor) save() linkEditor {
 	edit := vaults.LinkEdit{}
 	if e.name != e.page.Name {
 		edit.Name = e.name
-	}
-	if e.kind != e.page.Kind {
-		edit.Kind = e.kind
 	}
 	if e.path != e.page.Path {
 		edit.Path = e.path
@@ -479,7 +578,7 @@ func (e linkEditor) view() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "  %s   %s\n\n", title.Render("Edit "+e.page.Name), dim.Render(e.page.Rel()+".md"))
 	rows := [linkFieldCount]struct{ name, content string }{
-		{"Name", e.name}, {"Kind", "◂ " + e.kind + " ▸"}, {"Path", home.Display(e.path)},
+		{"Name", e.name}, {"Path", home.Display(e.path)},
 	}
 	for f, r := range rows {
 		marker, name := "  ", label.Width(8).Render(r.name)
@@ -494,7 +593,7 @@ func (e linkEditor) view() string {
 				content = e.folder.view("            ")
 			}
 		}
-		changed := (f == linkFieldName && e.name != e.page.Name) || (f == linkFieldKind && e.kind != e.page.Kind) || (f == linkFieldPath && e.path != e.page.Path)
+		changed := (f == linkFieldName && e.name != e.page.Name) || (f == linkFieldPath && e.path != e.page.Path)
 		if changed {
 			content = strings.TrimRight(content, "\n") + modSt.Render("  •")
 		}
@@ -507,12 +606,12 @@ func (e linkEditor) view() string {
 	case e.typing:
 		b.WriteString("  " + dim.Render("Enter keep · Esc cancel") + "\n")
 	default:
-		hints := "↑↓ field · Enter edit · ←→ kind"
+		hints := "↑↓ field · Enter edit"
 		if e.dirty() {
 			hints += " · " + title.Render("s") + " save"
 		}
 		b.WriteString("  " + dim.Render(hints+" · Esc back") + "\n")
-		b.WriteString("  " + dim.Render("renaming or changing the kind rewrites every project that links this page") + "\n")
+		b.WriteString("  " + dim.Render("renaming rewrites every project that links this page; the path must be a git repository") + "\n")
 	}
 	if e.err != "" {
 		b.WriteString("  " + errSt.Render(e.err) + "\n")

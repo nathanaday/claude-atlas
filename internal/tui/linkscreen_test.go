@@ -11,15 +11,15 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/tree"
 )
 
-func TestLinksScreenAddsEditsAndUnlinks(t *testing.T) {
+func TestLinksScreenLinksCreatesEditsAndUnlinks(t *testing.T) {
 	cfg, v := atlasView(t)
 	repo := filepath.Join(cfg.VaultsDir, "code")
-	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	os.MkdirAll(repo, 0o755)
 	v = keyV(v, "l")
-	if v.links == nil || !strings.Contains(v.View(), "no links yet") || !strings.Contains(v.View(), "reading   links") {
-		t.Fatalf("l should open the links screen:\n%s", v.View())
+	if v.links == nil || !strings.Contains(v.View(), "no repositories yet") || !strings.Contains(v.View(), "reading   repositories") {
+		t.Fatalf("l should open the repositories screen:\n%s", v.View())
 	}
-	// Add: a missing folder is refused in place; a repo is linked and the box shows it.
+	// Link a plain folder: refused in place, then a yes makes it a repository.
 	v = keyV(v, "a")
 	if v.links.mode != linksAdd || !strings.Contains(v.View(), "Enter link") {
 		t.Fatalf("add mode:\n%s", v.View())
@@ -30,36 +30,72 @@ func TestLinksScreenAddsEditsAndUnlinks(t *testing.T) {
 		t.Fatalf("missing folder: mode=%d err=%q", v.links.mode, v.links.err)
 	}
 	v.links.source.setValue(repo)
-	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v = pressV(v, tea.KeyEnter)
+	if v.links.mode != linksConfirmInit || !strings.Contains(v.View(), "is not a git repository. Initialize one there") {
+		t.Fatalf("init confirmation:\n%s", v.View())
+	}
+	v = keyV(v, "n")
+	if v.links.mode != linksList || len(v.links.rows) != 0 {
+		t.Fatal("n should link nothing")
+	}
+	v = keyV(v, "a")
+	v.links.source.setValue(repo)
+	v = pressV(v, tea.KeyEnter)
+	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	v = next.(view)
-	if v.links.mode != linksList || len(v.links.rows) != 1 || v.links.rows[0].link.Name != "code" || cmd == nil || !v.changed {
-		t.Fatalf("after add: mode=%d rows=%+v cmd=%v changed=%v err=%q", v.links.mode, v.links.rows, cmd, v.changed, v.links.err)
+	if v.links.mode != linksList || len(v.links.rows) != 1 || v.links.rows[0].link.Name != "code" || cmd == nil || !v.changed || !strings.Contains(v.links.status, "git repository now") {
+		t.Fatalf("after init and link: mode=%d rows=%+v status=%q err=%q", v.links.mode, v.links.rows, v.links.status, v.links.err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git")); err != nil {
+		t.Fatal("the folder should be a repository now")
 	}
 	out := v.View()
-	for _, want := range []string{"╭", "code", "repo", "Vaults/code", "not refreshed yet", "linked code (repo)", "refreshing", "u unlink"} {
+	for _, want := range []string{"╭", "code", "repository", "Vaults/code", "not refreshed yet", "u unlink"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
 	projects, _, _ := tree.Walk(cfg.TreeRoot())
-	if p := tree.FindByRel(projects, "personal/reading"); len(p.Linked) != 1 || p.Linked[0].Path != repo {
+	if p := tree.FindByRel(projects, "personal/reading"); len(p.Linked) != 1 || p.Linked[0].Path != repo || p.Linked[0].Kind != "repo" {
 		t.Fatalf("page not updated: %+v", p.Linked)
 	}
-	// The background refresh lands: the screen stays open and reloads.
 	next, _ = v.Update(refreshedMsg{})
 	v = next.(view)
 	if v.links == nil || len(v.links.rows) != 1 || v.links.status != "refreshed" {
 		t.Fatalf("after refresh: %+v", v.links)
 	}
-	// Edit: rename the page and change its kind.
+	// Create a new repository beside the wiki.
+	v = keyV(v, "n")
+	if v.links.mode != linksNewName || !strings.Contains(v.View(), "own git history") {
+		t.Fatalf("new name mode:\n%s", v.View())
+	}
+	v = pressV(v, tea.KeyEnter)
+	if v.links.mode != linksNewName || v.links.err == "" {
+		t.Fatal("an empty name is refused")
+	}
+	v = typeV(v, "paper")
+	v = pressV(v, tea.KeyEnter)
+	vaultPath := tree.FindByRel(projects, "personal/reading").VaultPath()
+	if v.links.mode != linksNewPath || !strings.HasSuffix(v.links.where.value(), "/reading/paper") || !strings.Contains(v.View(), "beside the wiki") {
+		t.Fatalf("new path mode: %q\n%s", v.links.where.value(), v.View())
+	}
+	v = pressV(v, tea.KeyEnter)
+	if v.links.mode != linksList || len(v.links.rows) != 2 || !strings.Contains(v.links.status, "created") {
+		t.Fatalf("after create: mode=%d rows=%d status=%q err=%q", v.links.mode, len(v.links.rows), v.links.status, v.links.err)
+	}
+	if _, err := os.Stat(filepath.Join(vaultPath, "paper", ".git")); err != nil {
+		t.Fatal("paper should be a repository in the vault")
+	}
+	// Edit: rename the page.
+	v = pressV(v, tea.KeyUp)
 	v = keyV(v, "e")
-	if v.links.mode != linksEdit || !strings.Contains(v.View(), "Edit code") {
+	if v.links.mode != linksEdit || !strings.Contains(v.View(), "Edit code") || strings.Contains(v.View(), "Kind") {
 		t.Fatalf("edit mode:\n%s", v.View())
 	}
-	v = pressV(v, tea.KeyEnter) // name
+	v = pressV(v, tea.KeyEnter)
 	v.links.edit.text.SetValue("Atlas code")
-	v = pressV(v, tea.KeyEnter, tea.KeyDown, tea.KeyRight) // kind → materials
-	if !strings.Contains(v.View(), "◂ materials ▸") || !strings.Contains(v.View(), "s save") {
+	v = pressV(v, tea.KeyEnter)
+	if !strings.Contains(v.View(), "s save") {
 		t.Fatalf("edit form:\n%s", v.View())
 	}
 	v = pressV(v, tea.KeyEsc)
@@ -67,11 +103,11 @@ func TestLinksScreenAddsEditsAndUnlinks(t *testing.T) {
 		t.Fatalf("esc should warn first: mode=%d err=%q", v.links.mode, v.links.edit.err)
 	}
 	v = keyV(v, "s")
-	if v.links.mode != linksList || v.links.rows[0].link.Name != "Atlas code" || v.links.rows[0].link.Kind != "materials" {
-		t.Fatalf("after edit: mode=%d rows=%+v err=%q", v.links.mode, v.links.rows, v.links.edit.err)
+	if v.links.mode != linksList {
+		t.Fatalf("after edit: mode=%d err=%q", v.links.mode, v.links.edit.err)
 	}
-	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, "materials", "Atlas code.md")); err != nil {
-		t.Fatal("page should be renamed and moved")
+	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, "repos", "Atlas code.md")); err != nil {
+		t.Fatal("page should be renamed")
 	}
 	// Another project links the same page by name and sees who shares it.
 	v = pressV(v, tea.KeyEsc)
@@ -103,12 +139,8 @@ func TestLinksScreenAddsEditsAndUnlinks(t *testing.T) {
 	if len(v.links.rows) != 0 || !strings.Contains(v.links.status, "unlinked Atlas code") {
 		t.Fatalf("after unlink: rows=%+v status=%q err=%q", v.links.rows, v.links.status, v.links.err)
 	}
-	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, "materials", "Atlas code.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, "repos", "Atlas code.md")); err != nil {
 		t.Fatal("the page stays for the other project")
-	}
-	projects, _, _ = tree.Walk(cfg.TreeRoot())
-	if p := tree.FindByRel(projects, "personal/reading"); len(p.Linked) != 1 || p.Linked[0].Name != "Atlas code" {
-		t.Fatalf("reading should still link it: %+v", p.Linked)
 	}
 }
 

@@ -375,6 +375,40 @@ func Upgrade(root string, now time.Time) ([]string, error) {
 	return written, nil
 }
 
+// Ignore adds a pattern to the vault's .gitignore and commits it, so a repository
+// mounted inside the vault keeps its own history apart from the vault's. It reports
+// whether the file changed.
+func Ignore(root, pattern string, now time.Time) (bool, error) {
+	path := filepath.Join(root, ".gitignore")
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == pattern {
+			return false, nil
+		}
+	}
+	var b bytes.Buffer
+	b.Write(existing)
+	if len(existing) > 0 && !bytes.HasSuffix(existing, []byte("\n")) {
+		b.WriteString("\n")
+	}
+	b.WriteString("\n# a repository mounted in the vault; it keeps its own history\n" + pattern + "\n")
+	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
+		return false, err
+	}
+	repo := gitx.Repo{Dir: root}
+	if !repo.IsRepo() {
+		return true, nil
+	}
+	if err := repo.Add(".gitignore"); err != nil {
+		return true, err
+	}
+	_, err = repo.Commit(CommitMessage("setup", "ignore the mounted repository "+pattern, NewOperationID("setup", now)))
+	return true, err
+}
+
 // mergeGitignore appends the lines of the template ignore file that are missing.
 func mergeGitignore(root string, template []byte) error {
 	path := filepath.Join(root, ".gitignore")

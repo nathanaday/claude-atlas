@@ -17,7 +17,7 @@ tags:
   - task
 task_id: task-20260913-3f2a
 due: ""                  # optional date
-workdir: ""              # optional: the folder the work happens in
+workdir: ""              # optional: the repository the work happens in
 ---
 
 # Ingest skips the trust dialog

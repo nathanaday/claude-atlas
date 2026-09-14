@@ -45,7 +45,10 @@ func fakeAtlas(t *testing.T) (*home.Config, Hooks) {
 			pages, _, _ := links.Walk(cfg.AtlasVault)
 			return pages
 		},
-		AddLink:    func(p *tree.Project, target string) (links.Page, error) { return vaults.AddLink(cfg, p, "", target) },
+		AddLink: func(p *tree.Project, target string, initGit bool) (links.Page, error) {
+			return vaults.AddLink(cfg, p, target, initGit)
+		},
+		NewRepo:    func(p *tree.Project, name, at string) (links.Page, error) { return vaults.NewRepo(cfg, p, name, at) },
 		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
 		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
 			return vaults.UpdateLink(cfg, page, edit)

@@ -60,10 +60,11 @@ The atlas:
   show NAME              everything the atlas knows about a project
   edit NAME [flags]      change a project's name, purpose, category, priority, state, or vault
   remove NAME            remove a project from the atlas; the vault stays on disk
-  link NAME PATH|PAGE    link a git repo or a folder of material; PAGE names a folder another project links
-  unlink NAME PATH|PAGE  remove that link; the folder and its page are untouched
-  links [NAME]           a project's links, or every linked folder and the projects that use it
-  edit-link PAGE [flags] rename a linked folder's page, change its kind, or point it at another folder
+  link NAME PATH|PAGE    mount a git repository on a project; --init makes a plain folder one first
+  new-repo NAME REPO     create a repository for a project's deliverables and mount it; --at DIR places it
+  unlink NAME PATH|PAGE  remove that link; the repository and its page are untouched
+  links [NAME]           a project's repositories, or every one and the projects that use it
+  edit-link PAGE [flags] rename a repository's page or point it at a folder that moved
   relate NAME OTHER      record that two projects belong together
   unrelate NAME OTHER    remove that
   refresh                read every vault and rewrite Overview.md, Tree.md, and categories/
@@ -165,6 +166,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.ingest(rest[1:])
 	case "link":
 		code, err = e.link(rest[1:])
+	case "new-repo":
+		code, err = e.newRepo(rest[1:])
 	case "unlink":
 		code, err = e.unlink(rest[1:])
 	case "links":
@@ -414,8 +417,18 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 			pages, _, _ := links.Walk(cfg.AtlasVault)
 			return pages
 		},
-		AddLink:    func(p *tree.Project, target string) (links.Page, error) { return vaults.AddLink(cfg, p, "", target) },
+		AddLink: func(p *tree.Project, target string, initGit bool) (links.Page, error) {
+			return vaults.AddLink(cfg, p, target, initGit)
+		},
+		NewRepo:    func(p *tree.Project, name, at string) (links.Page, error) { return vaults.NewRepo(cfg, p, name, at) },
 		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
+		Sources: func(p *tree.Project) []string {
+			v, err := vault.Open(p.VaultPath())
+			if err != nil {
+				return nil
+			}
+			return capture.Sources(v)
+		},
 		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
 			return vaults.UpdateLink(cfg, page, edit)
 		},
@@ -450,9 +463,9 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 	}
 }
 
-// ingestSources are the paths an ingest reads: the given ones, or the project's linked
-// material folders when none is given.
-func ingestSources(p *tree.Project, given []string) ([]string, error) {
+// ingestSources are the paths an ingest reads: the given ones, or the folders the vault
+// staged from before when none is given.
+func ingestSources(v *vault.Vault, p *tree.Project, given []string) ([]string, error) {
 	if len(given) > 0 {
 		out := make([]string, 0, len(given))
 		for _, g := range given {
@@ -460,33 +473,33 @@ func ingestSources(p *tree.Project, given []string) ([]string, error) {
 		}
 		return out, nil
 	}
-	materials := p.Paths(links.Materials)
-	if len(materials) == 0 {
-		return nil, fmt.Errorf("name a file or folder to ingest; %s has no linked material folders yet", p.Name)
+	sources := capture.Sources(v)
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("name a file or folder to ingest; %s has not ingested from a folder yet", p.Name)
 	}
-	return materials, nil
+	return sources, nil
 }
 
 // stagePlan opens the project's vault and plans a staging from one source, or from the
-// linked material folders when source is empty.
+// folders staged from before when source is empty.
 func (e *env) stagePlan(p *tree.Project, source string) (*capture.StagePlan, error) {
 	var given []string
 	if strings.TrimSpace(source) != "" {
 		given = []string{strings.TrimSpace(source)}
 	}
-	sources, err := ingestSources(p, given)
+	v, err := vault.Open(p.VaultPath())
 	if err != nil {
 		return nil, err
 	}
-	v, err := vault.Open(p.VaultPath())
+	sources, err := ingestSources(v, p, given)
 	if err != nil {
 		return nil, err
 	}
 	return capture.PlanStage(v, sources, time.Now())
 }
 
-// stage copies a plan into the inbox and links every source folder that is not yet
-// material of the project, so a later ingest with no path picks up what is new.
+// stage copies a plan into the inbox; the vault remembers the folders, so a later
+// ingest with no path picks up what is new. It returns the folders newly remembered.
 func (e *env) stage(cfg *home.Config, p *tree.Project, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
 	v, err := vault.Open(p.VaultPath())
 	if err != nil {
@@ -496,24 +509,7 @@ func (e *env) stage(cfg *home.Config, p *tree.Project, plan *capture.StagePlan) 
 	if err != nil {
 		return res, nil, err
 	}
-	var linked []string
-	for _, dir := range plan.Dirs {
-		if p.LinkedTo(dir) {
-			continue
-		}
-		if _, err := vaults.AddLink(cfg, p, links.Materials, dir); err == nil {
-			linked = append(linked, dir)
-			if fresh, err := tree.Load(p.Path, cfg.TreeRoot()); err == nil {
-				*p = *fresh
-			}
-		}
-	}
-	if len(linked) > 0 {
-		if _, _, err := e.refreshAll(cfg); err != nil {
-			return res, linked, err
-		}
-	}
-	return res, linked, nil
+	return res, res.Remembered, nil
 }
 
 // adoptPath makes a directory a claude-atlas vault, registers it, and refreshes.
@@ -870,11 +866,11 @@ func (e *env) ingest(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	sources, err := ingestSources(p, positional[1:])
+	v, err := vault.Open(p.VaultPath())
 	if err != nil {
 		return 1, err
 	}
-	v, err := vault.Open(p.VaultPath())
+	sources, err := ingestSources(v, p, positional[1:])
 	if err != nil {
 		return 1, err
 	}
@@ -907,15 +903,6 @@ func (e *env) ingest(args []string) (int, error) {
 	}
 	if len(plan.New) > 0 {
 		question := fmt.Sprintf("Stage %d file%s into inbox/", len(plan.New), plural(len(plan.New)))
-		var toLink []string
-		for _, dir := range plan.Dirs {
-			if !p.LinkedTo(dir) {
-				toLink = append(toLink, home.Display(dir))
-			}
-		}
-		if len(toLink) > 0 {
-			question += " and link " + strings.Join(toLink, ", ") + " as material of " + p.Name
-		}
 		ok, err := c.Confirm(question+"?", true)
 		if err != nil {
 			return 1, err
@@ -923,13 +910,13 @@ func (e *env) ingest(args []string) (int, error) {
 		if !ok {
 			return 1, vaults.ErrCancelled
 		}
-		res, linked, err := e.stage(cfg, p, plan)
+		res, remembered, err := e.stage(cfg, p, plan)
 		if err != nil {
 			return 1, err
 		}
 		c.Step(console.OK, "staged", fmt.Sprintf("%d file%s in %s", len(res.Staged), plural(len(res.Staged)), home.Display(v.Path("inbox"))))
-		for _, dir := range linked {
-			c.Step(console.OK, "linked", home.Display(dir)+" as material; `claude-atlas ingest "+p.Rel+"` stages what is new next time")
+		for _, dir := range remembered {
+			c.Step(console.OK, "remembered", home.Display(dir)+"; `claude-atlas ingest "+p.Rel+"` stages what is new there next time")
 		}
 	} else {
 		c.Say("  nothing new to stage; %d file%s already waiting", plan.Waiting, plural(plan.Waiting))
@@ -1172,7 +1159,7 @@ func linkLabel(kind string) string {
 	if kind == links.Repo {
 		return "Repo"
 	}
-	return "Materials"
+	return "Folder"
 }
 
 // linkLine renders one linked folder: its page, its path, and what refresh found.
@@ -1195,16 +1182,13 @@ func relName(projects []*tree.Project, rel string) string {
 
 func (e *env) link(args []string) (int, error) {
 	fs := newFlags("link", e.stderr)
-	kind := fs.String("kind", "", "repo or materials (default: repo when the folder holds .git)")
+	initGit := fs.Bool("init", false, "make a plain folder a git repository first, with one commit of what it holds")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) != 2 {
-		return 2, errors.New("usage: claude-atlas link NAME PATH|PAGE [--kind repo|materials]")
-	}
-	if *kind != "" && *kind != links.Repo && *kind != links.Materials {
-		return 2, errors.New("--kind must be repo or materials")
+		return 2, errors.New("usage: claude-atlas link NAME PATH|PAGE [--init]")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
@@ -1215,7 +1199,18 @@ func (e *env) link(args []string) (int, error) {
 		return 1, err
 	}
 	before, _, _ := links.Walk(cfg.AtlasVault)
-	page, err := vaults.AddLink(cfg, p, *kind, positional[1])
+	page, err := vaults.AddLink(cfg, p, positional[1], *initGit)
+	var notRepo *vaults.NotRepoError
+	if errors.As(err, &notRepo) && e.console.Interactive() {
+		ok, cerr := e.console.Confirm(fmt.Sprintf("%s is not a git repository. Initialize one there, with one commit of what it holds?", home.Display(notRepo.Path)), true)
+		if cerr != nil {
+			return 1, cerr
+		}
+		if !ok {
+			return 1, vaults.ErrCancelled
+		}
+		page, err = vaults.AddLink(cfg, p, positional[1], true)
+	}
 	if err != nil {
 		return 1, err
 	}
@@ -1223,15 +1218,45 @@ func (e *env) link(args []string) (int, error) {
 	if links.FindByPath(before, page.Path) == nil {
 		pageNote += " (new)"
 	}
-	if *kind != "" && page.Kind != *kind {
-		pageNote += fmt.Sprintf("; the page is already a %s page, so that kind stays", page.Kind)
+	pageOut, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	e.console.Step(console.OK, "linked", fmt.Sprintf("%s (%s) → %s", page.Name, home.Display(page.Path), p.Name))
+	e.console.Step(console.OK, "page", pageNote)
+	e.console.Step(console.OK, "refreshed", home.Display(pageOut))
+	return 0, nil
+}
+
+func (e *env) newRepo(args []string) (int, error) {
+	fs := newFlags("new-repo", e.stderr)
+	at := fs.String("at", "", "where to create it (default: a folder of that name in the vault's root)")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) != 2 {
+		return 2, errors.New("usage: claude-atlas new-repo NAME REPO [--at DIR]")
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	p, err := e.project(cfg, positional[0])
+	if err != nil {
+		return 1, err
+	}
+	page, err := vaults.NewRepo(cfg, p, positional[1], *at)
+	if err != nil {
+		return 1, err
 	}
 	pageOut, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "linked", fmt.Sprintf("%s (%s, %s) → %s", page.Name, page.Kind, home.Display(page.Path), p.Name))
-	e.console.Step(console.OK, "page", pageNote)
+	e.console.Step(console.OK, "created", home.Display(page.Path)+" with its own git history")
+	e.console.Step(console.OK, "linked", fmt.Sprintf("%s → %s", page.Name, p.Name))
+	e.console.Step(console.OK, "page", page.Rel()+".md")
 	e.console.Step(console.OK, "refreshed", home.Display(pageOut))
 	return 0, nil
 }
@@ -1255,7 +1280,7 @@ func (e *env) unlink(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "unlinked", fmt.Sprintf("%s from %s; the folder and its page are untouched", args[1], p.Name))
+	e.console.Step(console.OK, "unlinked", fmt.Sprintf("%s from %s; the repository and its page are untouched", args[1], p.Name))
 	e.console.Step(console.OK, "refreshed", home.Display(page))
 	return 0, nil
 }
@@ -1277,7 +1302,7 @@ func (e *env) links(args []string) (int, error) {
 	}
 	state, _ := tree.ReadState(e.home.StateDir(), p.Rel)
 	if len(p.Linked) == 0 {
-		e.console.Say("%s has no links; add one with `claude-atlas link %s PATH`", p.Name, p.Rel)
+		e.console.Say("%s has no repositories; mount one with `claude-atlas link %s PATH` or create one with `claude-atlas new-repo %s NAME`", p.Name, p.Rel, p.Rel)
 		return 0, nil
 	}
 	for _, l := range p.Linked {
@@ -1297,7 +1322,7 @@ func (e *env) allLinks(cfg *home.Config) (int, error) {
 		e.console.Step(console.Fail, problem.File, problem.Reason)
 	}
 	if len(pages) == 0 {
-		e.console.Say("no linked folders yet; add one with `claude-atlas link NAME PATH`")
+		e.console.Say("no repositories yet; mount one with `claude-atlas link NAME PATH` or create one with `claude-atlas new-repo NAME REPO`")
 		return 0, nil
 	}
 	state, _ := refresh.ReadLinksState(e.home.StateDir())
@@ -1321,7 +1346,11 @@ func (e *env) allLinks(cfg *home.Config) (int, error) {
 		if used == "" {
 			used = "no project"
 		}
-		e.console.Say("  %-10s %-20s %s", page.Kind, page.Name, home.Display(page.Path))
+		kind := page.Kind
+		if kind == links.Materials {
+			kind = "folder"
+		}
+		e.console.Say("  %-10s %-20s %s", kind, page.Name, home.Display(page.Path))
 		e.console.Say("  %-10s %-20s %s", "", "", facts+" · "+used)
 	}
 	return 0, nil
@@ -1330,14 +1359,13 @@ func (e *env) allLinks(cfg *home.Config) (int, error) {
 func (e *env) editLink(args []string) (int, error) {
 	fs := newFlags("edit-link", e.stderr)
 	name := fs.String("name", "", "new page name")
-	kind := fs.String("kind", "", "repo or materials; moves the page between repos/ and materials/")
-	path := fs.String("path", "", "the folder the page points at")
+	path := fs.String("path", "", "the repository the page points at")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
-	if len(positional) != 1 || (*name == "" && *kind == "" && *path == "") {
-		return 2, errors.New("usage: claude-atlas edit-link PAGE [--name N] [--kind repo|materials] [--path DIR]")
+	if len(positional) != 1 || (*name == "" && *path == "") {
+		return 2, errors.New("usage: claude-atlas edit-link PAGE [--name N] [--path DIR]")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
@@ -1351,7 +1379,7 @@ func (e *env) editLink(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	updated, err := vaults.UpdateLink(cfg, *page, vaults.LinkEdit{Name: *name, Kind: *kind, Path: *path})
+	updated, err := vaults.UpdateLink(cfg, *page, vaults.LinkEdit{Name: *name, Path: *path})
 	if err != nil {
 		return 1, err
 	}
@@ -1488,8 +1516,8 @@ func (e *env) refresh(args []string) (int, error) {
 	for _, note := range refresh.LinkSignals(res) {
 		e.console.Step(console.Fail, "links", note)
 	}
-	if n := len(res.Upgraded); n > 0 {
-		e.console.Step(console.OK, "upgraded", fmt.Sprintf("%d project page%s: linked folders are pages now, under repos/ and materials/ (%s)", n, plural(n), strings.Join(res.Upgraded, ", ")))
+	for _, u := range res.Upgraded {
+		e.console.Step(console.OK, "upgraded", u)
 	}
 	e.console.Say("  wrote %s, Tree.md, and categories/", home.Display(page))
 	return 0, nil

@@ -894,10 +894,6 @@ func (v view) updateIngest(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	v.ingest = nil
 	item := s.item
-	if len(s.linked) > 0 {
-		v.changed = true
-		v.reloadKeeping(item.Project.Rel)
-	}
 	waiting := s.plan.Waiting
 	if s.result != nil {
 		waiting += len(s.result.Staged)

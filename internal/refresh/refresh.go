@@ -536,6 +536,9 @@ func LinkSignals(res *Result) []string {
 		if len(row.Projects) == 0 {
 			notes = append(notes, fmt.Sprintf("%s.md is linked by no project; link it with `claude-atlas link NAME %s` or delete the page", row.Page.Rel(), row.Page.Name))
 		}
+		if row.Page.Kind == links.Materials && row.Link.OK {
+			notes = append(notes, fmt.Sprintf("%s.md is a folder, not a repository; a link is a mounted git repository now. Initialize git in %s and refresh to move it under repos/, or unlink it", row.Page.Rel(), home.Display(row.Page.Path)))
+		}
 	}
 	return notes
 }
@@ -637,7 +640,7 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 	}
 
 	if len(res.Links) > 0 {
-		b.WriteString("## Repos and materials\n\n")
+		b.WriteString("## Repositories\n\n")
 		b.WriteString("| Kind | Page | Folder | Projects | Found |\n|:--|:--|:--|:--|:--|\n")
 		for _, row := range res.Links {
 			var projects []string
@@ -845,7 +848,7 @@ func calloutFor(note string) string {
 	switch {
 	case strings.HasPrefix(note, "vault unreachable"), strings.HasPrefix(note, "repo "), strings.HasPrefix(note, "materials "), strings.Contains(note, "is not a link page"):
 		return "failure"
-	case strings.Contains(note, "is linked by no project"):
+	case strings.Contains(note, "is linked by no project"), strings.Contains(note, "not a repository; a link is"):
 		return "info"
 	case strings.HasPrefix(note, "blocked on"), strings.HasPrefix(note, "an operation was interrupted"):
 		return "danger"

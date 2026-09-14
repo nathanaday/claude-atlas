@@ -53,15 +53,18 @@ type StagePlan struct {
 	Skipped   []Skip   `json:"skipped"`
 }
 
-// StageResult reports what was copied.
+// StageResult reports what was copied and which folders are newly remembered.
 type StageResult struct {
-	Staged []Staged `json:"staged"`
+	Staged     []Staged `json:"staged"`
+	Remembered []string `json:"remembered"`
 }
 
-// stageMap is the content of MapPath.
+// stageMap is the content of MapPath: every file staged, and the folders staged from,
+// so an ingest with no path knows where to look.
 type stageMap struct {
-	Schema string              `json:"schema"`
-	Staged map[string]mapEntry `json:"staged"`
+	Schema  string              `json:"schema"`
+	Sources []string            `json:"sources"`
+	Staged  map[string]mapEntry `json:"staged"`
 }
 
 type mapEntry struct {
@@ -77,8 +80,11 @@ func loadMap(v *vault.Vault) stageMap {
 		return m
 	}
 	var loaded stageMap
-	if json.Unmarshal(data, &loaded) == nil && loaded.Staged != nil {
-		m.Staged = loaded.Staged
+	if json.Unmarshal(data, &loaded) == nil {
+		if loaded.Staged != nil {
+			m.Staged = loaded.Staged
+		}
+		m.Sources = loaded.Sources
 	}
 	return m
 }
@@ -228,7 +234,7 @@ func ApplyStage(v *vault.Vault, plan *StagePlan, now time.Time) (*StageResult, e
 		return nil, fmt.Errorf("plan belongs to %s, not %s", plan.Vault, v.Root)
 	}
 	m := loadMap(v)
-	res := &StageResult{Staged: []Staged{}}
+	res := &StageResult{Staged: []Staged{}, Remembered: []string{}}
 	for _, f := range plan.New {
 		if err := copyFile(f.From, v.Path(f.To)); err != nil {
 			return res, err
@@ -236,10 +242,28 @@ func ApplyStage(v *vault.Vault, plan *StagePlan, now time.Time) (*StageResult, e
 		m.Staged[f.From] = mapEntry{SHA256: f.SHA256, StagedAt: now.UTC().Format(time.RFC3339), Inbox: f.To}
 		res.Staged = append(res.Staged, f)
 	}
+	for _, dir := range plan.Dirs {
+		known := false
+		for _, s := range m.Sources {
+			if s == dir {
+				known = true
+			}
+		}
+		if !known {
+			m.Sources = append(m.Sources, dir)
+			res.Remembered = append(res.Remembered, dir)
+		}
+	}
+	sort.Strings(m.Sources)
 	if err := m.save(v); err != nil {
 		return res, err
 	}
 	return res, nil
+}
+
+// Sources lists the folders the vault has staged from, for an ingest with no path.
+func Sources(v *vault.Vault) []string {
+	return append([]string{}, loadMap(v).Sources...)
 }
 
 func copyFile(from, to string) error {

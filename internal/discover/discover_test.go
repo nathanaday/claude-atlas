@@ -31,7 +31,7 @@ func TestVaultThroughALinkedFolder(t *testing.T) {
 	b, _ := vaults.Register(cfg, mk("b"), vaults.RegisterOptions{Name: "B"})
 	repo := filepath.Join(root, "code", "app")
 	os.MkdirAll(filepath.Join(repo, "src"), 0o755)
-	if _, err := vaults.AddLink(cfg, a, "", repo); err != nil {
+	if _, err := vaults.AddLink(cfg, a, repo, true); err != nil {
 		t.Fatal(err)
 	}
 	m, c, err := Vault(h, filepath.Join(repo, "src"))
@@ -41,7 +41,7 @@ func TestVaultThroughALinkedFolder(t *testing.T) {
 	if m, _, _ := Vault(h, filepath.Join(root, "code")); m != nil {
 		t.Fatal("the parent of a linked folder is not inside it")
 	}
-	if _, err := vaults.AddLink(cfg, b, "", repo); err != nil {
+	if _, err := vaults.AddLink(cfg, b, repo, true); err != nil {
 		t.Fatal(err)
 	}
 	m, c, err = Vault(h, repo)

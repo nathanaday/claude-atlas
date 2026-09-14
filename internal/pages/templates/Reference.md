@@ -46,7 +46,7 @@ claude-atlas open-vault my-project
 
 **View the atlas**
 
-> `claude-atlas` alone opens it; `view` says so explicitly. Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `t` shows its tasks, where `p` plants one, `c` continues one in Claude Code, and `o` opens its page; `l` shows its linked folders, where `a` adds, `e` edits, and `u` unlinks one; `e` edits it (or removes it with `r`); `T` boards every project's tasks; `n` creates a vault; `a` adopts one; `R` refreshes. Paths complete with Tab.
+> `claude-atlas` alone opens it; `view` says so explicitly. Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `t` shows its tasks, where `p` plants one, `c` continues one in Claude Code, and `o` opens its page; `l` shows its repositories, where `n` creates one, `a` links one, `e` edits, and `u` unlinks; `e` edits it (or removes it with `r`); `T` boards every project's tasks; `n` creates a vault; `a` adopts one; `R` refreshes. Paths complete with Tab.
 
 ```bash
 claude-atlas
@@ -114,7 +114,7 @@ claude-atlas config new-days 14
 claude-atlas open-claude my-project
 ```
 
-> Or stage a file or folder from anywhere and start the ingest in one step. Only files the vault has not seen are copied, so a growing folder can be ingested again and again; the folder is linked as material of the project, and `ingest` with no path stages what is new in every linked folder.
+> Or stage a file or folder from anywhere and start the ingest in one step. Only files the vault has not seen are copied, so a growing folder can be ingested again and again; the vault remembers the folder, and `ingest` with no path stages what is new in every folder it remembers.
 
 ```bash
 claude-atlas ingest my-project ~/Papers
@@ -184,25 +184,35 @@ claude-atlas open-claude my-project --task task-20260913-3f2a
 claude-atlas upgrade --all
 ```
 
-## Linking repos and material
+## Mounting repositories
 
-> Link a folder to a project: a git repository (detected by its `.git`) or a folder of static material such as slides, PDFs, and images. Nothing is copied. The folder gets a page under `repos/` or `materials/` that holds its path, and the project page links it, so the graph shows it. A folder two projects share is one page between them.
+> A link is a mounted git repository: where a project's deliverables are made, with the vault as the memory behind it. Create one beside the wiki in the vault's folder (ignored by the vault's own git), or anywhere with `--at`.
+
+```bash
+claude-atlas new-repo my-project paper
+```
+
+```bash
+claude-atlas new-repo my-project app --at ~/code/app
+```
+
+> Mount a repository that exists. A plain folder is refused until you agree to initialize a repository there; `--init` agrees up front.
 
 ```bash
 claude-atlas link my-project ~/code/my-project
 ```
 
 ```bash
-claude-atlas link my-project ~/Documents/lectures --kind materials
+claude-atlas link my-project ~/Documents/cs566-work --init
 ```
 
-> Link a folder another project already uses, by the name of its page.
+> Mount a repository another project already uses, by the name of its page.
 
 ```bash
 claude-atlas link other-project my-project
 ```
 
-> Show a project's links and what the last refresh found in them, or every linked folder and the projects that use it.
+> Show a project's repositories and what the last refresh found in them, or every repository and the projects that use it.
 
 ```bash
 claude-atlas links my-project
@@ -212,13 +222,13 @@ claude-atlas links my-project
 claude-atlas links
 ```
 
-> Remove a link. The folder and its page are untouched.
+> Remove a link. The repository and its page are untouched.
 
 ```bash
 claude-atlas unlink my-project my-project
 ```
 
-> Rename a page, change its kind, or point it at a folder that moved. Every project that links it is rewritten.
+> Rename a page or point it at a repository that moved. Every project that links it is rewritten.
 
 ```bash
 claude-atlas edit-link my-project --name "My project" --path ~/code/my-project

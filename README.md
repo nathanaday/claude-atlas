@@ -5,7 +5,7 @@ Knowledge vaults for Claude Code, and one view across all of them.
 [![License: MIT](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](.claude-plugin/plugin.json)
-[![Version](https://img.shields.io/badge/version-0.4.2-d97745.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.5.0-d97745.svg)](.claude-plugin/plugin.json)
 
 ## About
 
@@ -20,8 +20,11 @@ commit you can undo. The atlas is the page that shows all your vaults at once.
 - **Review, then commit.** Preview every change; undo reverts it. Your own
   Obsidian edits are committed first and never touched.
 - **Tasks that outlive a session.** Plant an idea in a word, plan it when
-  ready, and every session starts knowing what is open. A repo linked to the
-  project reaches the vault and its tasks with no file added to the repo.
+  ready, and every session starts knowing what is open.
+- **Deliverables in a repository, memory in the vault.** Mount a git
+  repository on a project, or create one, for the code, papers, and decks;
+  a session started inside it reaches the vault and its tasks with no file
+  added to the repo.
 - **One view across vaults.** Heat, open threads, unfinished work, and your
   declared priority, side by side. Projects, the repos and folders they
   share, and the tree itself draw as one graph in Obsidian.
@@ -88,6 +91,28 @@ claude-atlas
 Every command, the slash menu, linking repos, adopting an existing vault, and
 configuration: [docs/usage.md](docs/usage.md).
 
+## The wiki and the repository
+
+Two places hold a project, and they are different in kind.
+
+The **vault** is memory and thinking: the wiki pages Claude writes and cites,
+the hot cache a session starts from, the tasks and their history. It is
+structured, reviewed, and committed one operation at a time, and its shape is
+the wiki's.
+
+A **repository** is where the deliverables go: the code, the paper, the
+slides, the homework, the report. It is a plain git repository with its own
+history and whatever structure the work needs, and it owes nothing to the
+wiki's layout. Linking it to a project mounts it: a session started inside it
+reaches the vault and its tasks, the atlas reports its branch and last commit,
+and a task's work happens there. A course project keeps its papers and decks
+in one; a codebase is one, with the wiki as the knowledge behind it.
+
+Every link is a git repository. Create one beside the wiki in the vault's
+folder, ignored by the vault's own git, or anywhere on the machine, or mount
+one that exists. Folders of sources you ingest from need no link; the vault
+remembers where it staged from.
+
 ## Inside a vault
 
 ```
@@ -120,8 +145,7 @@ Change it with `claude-atlas mode sensor-triage lyt`.
 ├── About.md                  orientation
 ├── Reference.md              every command with examples
 ├── tree/                     yours: folders are categories, files are projects
-├── repos/                    one page per linked git repository
-├── materials/                one page per linked folder of sources
+├── repos/                    one page per mounted repository
 └── categories/               generated: one page per folder under tree/
 ```
 

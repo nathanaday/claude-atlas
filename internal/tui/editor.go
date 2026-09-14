@@ -40,10 +40,15 @@ type Hooks struct {
 	// Links lists the link pages in the atlas, so a folder another project uses can be
 	// linked by name. AddLink, RemoveLink, and EditLink act on one project's links and
 	// one link page; the view refreshes after each.
+	// Links lists the repository pages; AddLink mounts a repository by page name or
+	// folder, initializing git when asked; NewRepo creates one; RemoveLink and EditLink
+	// act on one link. Sources lists the folders a project's vault has ingested from.
 	Links      func() []links.Page
-	AddLink    func(*tree.Project, string) (links.Page, error)
+	AddLink    func(*tree.Project, string, bool) (links.Page, error)
+	NewRepo    func(*tree.Project, string, string) (links.Page, error)
 	RemoveLink func(*tree.Project, string) error
 	EditLink   func(links.Page, vaults.LinkEdit) (links.Page, error)
+	Sources    func(*tree.Project) []string
 	// Tasks reads a project's task ledger and the notes waiting in inbox/tasks/; Plant
 	// plants a task in its vault.
 	Tasks     func(*tree.Project) (tasks.Ledger, []string, error)

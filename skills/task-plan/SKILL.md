@@ -26,8 +26,9 @@ Read [tasks.md](../wiki/references/tasks.md). Tools: `status`, `tasks`,
   procedure governs the run.
 - Otherwise plan directly: the steps in order, each small enough to finish
   in one sitting, with what each produces.
-- Say where the work happens. Code goes in a repository: set `workdir` to
-  it. A paper or a deck goes in a linked material folder. Vault work has no
+- Say where the work happens. Deliverables, code or a paper or a deck, go in
+  a repository the project mounts: set `workdir` to it. If the project has
+  none yet, say so; `claude-atlas new-repo` creates one. Vault work has no
   workdir.
 
 ## Write the plan

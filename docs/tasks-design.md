@@ -155,10 +155,10 @@ every other operation. `wiki` routes task requests to `task`.
 
 ## Repos and the vault
 
-Most tasks are code in a linked repository; some produce a paper, a report,
-or a deck in a linked folder. The vault stays the command station: the
-ledger, the status, and the plan live there and nowhere else. The work
-happens in the repo, in a session that knows the vault.
+Most tasks are code in a mounted repository; some produce a paper, a report,
+or a deck, in a repository of their own. The vault stays the command station:
+the ledger, the status, and the plan live there and nowhere else. The work
+happens in the repository, in a session that knows the vault.
 
 Nothing has to be copied or written into the repo to make that so. The
 plugin is installed user-wide, so its MCP server and hooks already run in
@@ -194,7 +194,7 @@ the work, like the code.
 `claude-atlas open-claude NAME --task ID` starts Claude Code in the task's
 `workdir` with the vault selected, and `/claude-atlas:task-run ID` as the
 first message. From the atlas, `c` on a task does the same. A task with no workdir runs in the
-vault. The `t` screen offers the project's linked repos when setting one.
+vault.
 
 ## The atlas side
 

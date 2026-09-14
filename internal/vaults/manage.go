@@ -1,6 +1,7 @@
 package vaults
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -218,21 +219,24 @@ func currentLinks(p *tree.Project) []links.Page {
 	return out
 }
 
-// ResolveTarget finds what a user means by a link target: the name of a page of the
-// kind, or a folder on disk. kind may be empty to detect it from the folder.
-func ResolveTarget(cfg *home.Config, kind, target string) (links.Page, error) {
+// NotRepoError says a folder exists but is not a git repository; the caller may ask
+// the user and link again with init.
+type NotRepoError struct{ Path string }
+
+func (e *NotRepoError) Error() string {
+	return home.Display(e.Path) + " is not a git repository; a link is a mounted repository (initialize one there, or pass --init)"
+}
+
+// ResolveTarget finds what a user means by a link target: the name of a page, or a
+// folder on disk.
+func ResolveTarget(cfg *home.Config, target string) (links.Page, error) {
 	pages, _, err := links.Walk(cfg.AtlasVault)
 	if err != nil {
 		return links.Page{}, err
 	}
 	if !strings.ContainsAny(target, "/~") {
-		for _, k := range []string{links.Repo, links.Materials} {
-			if kind != "" && kind != k {
-				continue
-			}
-			if page := links.FindByName(pages, k, target); page != nil {
-				return *page, nil
-			}
+		if page, err := links.FindPage(pages, target); err == nil {
+			return *page, nil
 		}
 	}
 	abs, err := filepath.Abs(home.Expand(target))
@@ -241,29 +245,35 @@ func ResolveTarget(cfg *home.Config, kind, target string) (links.Page, error) {
 	}
 	info, err := os.Stat(abs)
 	if err != nil {
-		return links.Page{}, fmt.Errorf("%s is neither a linked folder's page nor a path on disk", target)
+		return links.Page{}, fmt.Errorf("%s is neither a repository's page nor a folder on disk", target)
 	}
-	if kind == "" {
-		kind = links.DetectKind(abs)
-	}
-	if kind == links.Repo && !info.IsDir() {
+	if !info.IsDir() {
 		return links.Page{}, fmt.Errorf("%s is not a directory", home.Display(abs))
 	}
 	if page := links.FindByPath(pages, abs); page != nil {
 		return *page, nil
 	}
-	return links.Page{Kind: kind, Path: abs}, nil
+	return links.Page{Kind: links.Repo, Path: abs}, nil
 }
 
-// AddLink links a folder to a project: target is a page name or a path; kind is
-// links.Repo, links.Materials, or "" to detect it. It returns the page, created if new.
-func AddLink(cfg *home.Config, p *tree.Project, kind, target string) (links.Page, error) {
-	page, err := ResolveTarget(cfg, kind, target)
+// AddLink mounts a repository on a project: target is a page name or a folder. A folder
+// that is not a git repository is refused with a NotRepoError unless initGit is set, in
+// which case it becomes one first. It returns the page, created if new.
+func AddLink(cfg *home.Config, p *tree.Project, target string, initGit bool) (links.Page, error) {
+	page, err := ResolveTarget(cfg, target)
 	if err != nil {
 		return links.Page{}, err
 	}
 	if p.LinkedTo(page.Path) {
 		return page, fmt.Errorf("%s is already linked to %s", home.Display(page.Path), p.Name)
+	}
+	if page.Kind == links.Repo && !links.IsRepo(page.Path) {
+		if !initGit {
+			return links.Page{}, &NotRepoError{Path: page.Path}
+		}
+		if err := links.InitRepo(page.Path, filepath.Base(page.Path)); err != nil {
+			return links.Page{}, err
+		}
 	}
 	pages := append(currentLinks(p), page)
 	if err := SetLinks(cfg, p, pages); err != nil {
@@ -276,6 +286,41 @@ func AddLink(cfg *home.Config, p *tree.Project, kind, target string) (links.Page
 		}
 	}
 	return page, nil
+}
+
+// NewRepo creates a git repository for a project's deliverables and mounts it. With no
+// location it goes in the vault's root, beside the wiki, and the vault ignores it so
+// the two histories stay apart.
+func NewRepo(cfg *home.Config, p *tree.Project, name, at string) (links.Page, error) {
+	name = links.CleanName(name)
+	if name == "" {
+		return links.Page{}, errors.New("the repository needs a name")
+	}
+	dir := filepath.Join(p.VaultPath(), name)
+	if at != "" {
+		abs, err := filepath.Abs(home.Expand(at))
+		if err != nil {
+			return links.Page{}, err
+		}
+		dir = abs
+	}
+	if _, err := os.Stat(dir); err == nil {
+		if entries, _ := os.ReadDir(dir); len(entries) > 0 {
+			return links.Page{}, fmt.Errorf("%s already exists; link it instead", home.Display(dir))
+		}
+	}
+	if rel, err := filepath.Rel(p.VaultPath(), dir); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+		if rel == "." || strings.HasPrefix(rel, vault.WikiDir+"/") || rel == vault.WikiDir || strings.HasPrefix(rel, ".") {
+			return links.Page{}, fmt.Errorf("a repository goes beside the wiki, not in %s", home.Display(dir))
+		}
+		if _, err := vault.Ignore(p.VaultPath(), "/"+filepath.ToSlash(rel)+"/", time.Now()); err != nil {
+			return links.Page{}, err
+		}
+	}
+	if err := links.CreateRepo(dir, name); err != nil {
+		return links.Page{}, err
+	}
+	return AddLink(cfg, p, dir, false)
 }
 
 // RemoveLink drops a folder from a project page, by path or page name. The page and the
@@ -351,6 +396,9 @@ func UpdateLink(cfg *home.Config, page links.Page, edit LinkEdit) (links.Page, e
 	}
 	if updated.Kind == links.Repo && !info.IsDir() {
 		return page, fmt.Errorf("%s is not a directory, so it cannot be a repo", home.Display(updated.Path))
+	}
+	if updated.Kind == links.Repo && edit.Path != "" && !links.IsRepo(updated.Path) {
+		return page, &NotRepoError{Path: updated.Path}
 	}
 	updated.File = filepath.Join(cfg.AtlasVault, links.Dir(updated.Kind), updated.Name+".md")
 	if updated.File != page.File {
@@ -456,15 +504,28 @@ func Unlink(p *tree.Project) error {
 	return tree.Unlink(p)
 }
 
-// UpgradeLinks gives every plain folder path in a repos or materials list a page and
-// rewrites the entry as a wikilink, so the graph shows the folder. It returns the rels
-// of the pages it changed. Pages that already use wikilinks are untouched.
+// UpgradeLinks brings older pages to the current shape: a plain folder path in a repos
+// or materials list gets a page and a wikilink, and a materials page whose folder is a
+// git repository moves under repos/. It returns what it changed.
 func UpgradeLinks(cfg *home.Config) ([]string, error) {
-	projects, _, err := tree.Walk(cfg.TreeRoot())
+	pages, _, err := links.Walk(cfg.AtlasVault)
 	if err != nil {
 		return nil, err
 	}
 	var upgraded []string
+	for _, page := range pages {
+		if page.Kind == links.Materials && links.IsRepo(page.Path) {
+			moved, err := UpdateLink(cfg, page, LinkEdit{Kind: links.Repo})
+			if err != nil {
+				return upgraded, fmt.Errorf("%s: %w", page.Rel(), err)
+			}
+			upgraded = append(upgraded, page.Rel()+" → "+moved.Rel())
+		}
+	}
+	projects, _, err := tree.Walk(cfg.TreeRoot())
+	if err != nil {
+		return nil, err
+	}
 	for _, p := range projects {
 		plain := false
 		for _, l := range p.Linked {
@@ -478,7 +539,7 @@ func UpgradeLinks(cfg *home.Config) ([]string, error) {
 		if err := SetLinks(cfg, p, currentLinks(p)); err != nil {
 			return upgraded, fmt.Errorf("%s: %w", p.Rel, err)
 		}
-		upgraded = append(upgraded, p.Rel)
+		upgraded = append(upgraded, "tree/"+p.Rel)
 	}
 	return upgraded, nil
 }

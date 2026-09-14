@@ -9,7 +9,7 @@
 | [[Reference]] | Every `claude-atlas` command with examples. |
 | [[Tree]] | The root of the graph: every top-level category and project. Regenerated with `categories/` on refresh. |
 | `tree/` | Your projects. Every markdown file is a project; every folder is a category. Arrange them however you think. |
-| `repos/`, `materials/` | One page per linked folder, holding its path. Project pages link these; a folder two projects share is one page. |
+| `repos/` | One page per mounted repository, holding its path. Project pages link these; a repository two projects share is one page. |
 | `categories/` | One generated page per folder under `tree/`, so the tree shows in the graph view. |
 
 ## How it fits together
@@ -17,7 +17,7 @@
 | Piece | Where | Who writes it |
 |:--|:--|:--|
 | Your vaults | `%VAULTS%` | You in Obsidian, and Claude Code through the claude-atlas plugin. Every change is one git commit. |
-| This atlas | `%ATLAS%` | You, in `tree/`, `repos/`, and `materials/`; claude-atlas writes [[Overview]], [[Tree]], `categories/`, [[About]], and [[Reference]] |
+| This atlas | `%ATLAS%` | You, in `tree/` and `repos/`; claude-atlas writes [[Overview]], [[Tree]], `categories/`, [[About]], and [[Reference]] |
 | Settings and derived state | `%HOME%` | claude-atlas. Derived state is rebuilt on every refresh and safe to delete. |
 
 > [!tip] Three rules
@@ -83,11 +83,14 @@ Open its page under `tree/`. The properties panel shows the fields the atlas rea
 | blocked_on | free text | What you are waiting for, when state is blocked. |
 | review_after | a date | When to revisit these fields. Overview flags it once it passes. |
 | purpose, definition_of_done | free text | Why this exists and what finished looks like. |
-| repos | links to pages under `repos/` | Git repositories on this machine the project works in. Overview shows the branch, uncommitted changes, and last commit. |
-| materials | links to pages under `materials/` | Folders of static material: slide decks, PDFs, images. Overview shows the file count, size, and newest file. |
+| repos | links to pages under `repos/` | The repositories mounted on the project, where its deliverables are made. Overview shows the branch, uncommitted changes, and last commit. |
 | related | links to other project pages | Projects that belong together. One page holds the link; the other shows it as a backlink. |
 
-A commit in a linked repo or a new file in a linked folder counts as touching the project, so its heat reflects all of your work on it, not only the wiki. Nothing is copied; the page under `repos/` or `materials/` remembers the path. Link a folder with `claude-atlas link`, with `l` in `claude-atlas view` (one box per link: add, edit, unlink), or by typing `[[` in the property here and picking a page.
+A commit in a mounted repository counts as touching the project, so its heat reflects all of your work on it, not only the wiki. Nothing is copied; the page under `repos/` remembers the path. Create a repository with `claude-atlas new-repo`, mount one with `claude-atlas link`, do either with `l` in `claude-atlas view`, or type `[[` in the property here and pick a page.
+
+## The wiki and the repository
+
+The vault is memory and thinking: the wiki, the hot cache, the tasks, structured and reviewed one operation at a time. A repository is where the deliverables are made: code, a paper, a deck, a report, in whatever shape the work needs, with its own git history. Mounting it on a project gives a session started inside it the vault and its tasks, and gives the atlas its branch and last commit. A repository created beside the wiki in the vault's folder is ignored by the vault's git, so the two histories stay apart.
 
 ## The graph
 

@@ -296,7 +296,7 @@ func TestWarningsAndLinkSignalsRender(t *testing.T) {
 		t.Fatalf("link signals %q", got)
 	}
 	page := Render(res, "2026-09-12T18:00:00Z", today)
-	for _, want := range []string{"> [!warning] x\n> Related: [[nope]] names no project", "> [!info] Repos/lonely.md is linked by no project", "> [!failure] Repos/bad.md is not a link page", "## Repos and materials", "| repo | [[repos/lonely\\|lonely]] | `/r` | — | ok |"} {
+	for _, want := range []string{"> [!warning] x\n> Related: [[nope]] names no project", "> [!info] Repos/lonely.md is linked by no project", "> [!failure] Repos/bad.md is not a link page", "## Repositories", "| repo | [[repos/lonely\\|lonely]] | `/r` | — | ok |"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("missing %q in:\n%s", want, page)
 		}

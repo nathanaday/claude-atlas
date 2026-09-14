@@ -476,7 +476,7 @@ func TestIngestFromTheTree(t *testing.T) {
 	v = typeV(v, src)
 	v = pressV(v, tea.KeyEnter)
 	out := v.View()
-	if v.ingest.step != ingestConfirm || !strings.Contains(out, "1 file → inbox/") || !strings.Contains(out, "Papers/a.pdf") || !strings.Contains(out, "1 already ingested") || !strings.Contains(out, "becomes material") {
+	if v.ingest.step != ingestConfirm || !strings.Contains(out, "1 file → inbox/") || !strings.Contains(out, "Papers/a.pdf") || !strings.Contains(out, "1 already ingested") || !strings.Contains(out, "so a later ingest") {
 		t.Fatalf("confirm step:\n%s", out)
 	}
 	v = pressV(v, tea.KeyEsc) // back to the path
@@ -488,7 +488,7 @@ func TestIngestFromTheTree(t *testing.T) {
 		t.Fatalf("launch step: ingest=%+v staged=%v", v.ingest, staged)
 	}
 	v = pressV(v, tea.KeyEsc) // later
-	if v.ingest != nil || !strings.Contains(v.status, "1 file waiting in inbox/") || launched != "" || !v.changed {
+	if v.ingest != nil || !strings.Contains(v.status, "1 file waiting in inbox/") || launched != "" {
 		t.Fatalf("later: status=%q launched=%q changed=%v", v.status, launched, v.changed)
 	}
 	// Nothing new but files waiting: Enter continues to the launch step instead of closing.

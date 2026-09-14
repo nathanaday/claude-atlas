@@ -18,7 +18,7 @@ one command, so scripts and muscle memory both work:
 | `o` open in Obsidian | `open-vault NAME` |
 | `c` start Claude Code | `open-claude NAME` |
 | `i` ingest sources | `ingest NAME [PATH...]` |
-| `l` links: add, edit, unlink | `link NAME PATH`, `edit-link PAGE`, `unlink`, `links` |
+| `l` repositories: create, link, edit, unlink | `new-repo NAME REPO`, `link NAME PATH`, `edit-link PAGE`, `unlink`, `links` |
 | `t` tasks, `p` plant, `c` continue | `tasks NAME`, `plant NAME TEXT`, `open-claude NAME --task ID` |
 | `T` every project's tasks | `tasks` |
 | Related in the editor | `relate NAME OTHER`, `unrelate` |
@@ -143,8 +143,8 @@ claude-atlas upgrade --all
 
 ## A repo reaches its vault
 
-A session started in a folder that a project links, a repository or a
-material folder, uses that project's vault: the atlas tools resolve it, and
+A session started in a repository that a project links uses that project's
+vault: the atlas tools resolve it, and
 the session hook says so and lists the open tasks, the ones whose workdir is
 that folder first. Nothing is written into the repository. If two projects
 link the same folder, pass `vault` to the tools or set `CLAUDE_ATLAS_VAULT`.
@@ -155,13 +155,14 @@ Point a project at a file or folder outside its vault. What is new is copied
 into the vault's `inbox/`; the originals stay where they are. A file whose
 bytes the vault already holds, ingested earlier or still waiting in the inbox,
 is skipped, so a folder that grows over time can be ingested again and only its
-new files cost anything. A folder is linked as material of the project, and an
-`ingest` with no path stages what is new in every linked folder.
+new files cost anything. The vault remembers the folders it staged from, and an
+`ingest` with no path stages what is new in every one of them. Source folders
+are not links; nothing about them is recorded in the atlas.
 
 ```bash
 claude-atlas ingest sensor-triage ~/Papers
 claude-atlas ingest sensor-triage ~/Papers/dinov2.pdf
-claude-atlas ingest sensor-triage                # every linked material folder
+claude-atlas ingest sensor-triage                # every folder ingested before
 claude-atlas ingest sensor-triage ~/Papers --dry-run
 claude-atlas ingest sensor-triage ~/Papers --no-claude
 ```
@@ -265,48 +266,59 @@ claude-atlas refresh
 claude-atlas list
 ```
 
-### Link repos and material
+### Mount repositories
 
-Link the folders a project works with: a git repository (detected by its
-`.git`) or a folder of static material such as slides, PDFs, and images. A
-single file is material too. Nothing is copied. Each linked folder gets a page
-in the atlas, `repos/<name>.md` or `materials/<name>.md`, holding its path;
-the project page links that page. A folder two projects share is one page,
-and one node in the graph, between them. To link a folder another project
-already uses, name its page instead of its path.
+A project has two kinds of place. The vault is memory: the wiki, the hot
+cache, the tasks. A repository is where the deliverables are made: the code,
+the paper, the slides, the report, in whatever structure the work needs. A
+link mounts a git repository on a project. Nothing is copied. Each gets a page
+in the atlas, `repos/<name>.md`, holding its path; the project page links the
+page, so a repository two projects share is one node in the graph. Refresh
+reports the branch, uncommitted changes, and last commit, and a commit counts
+as touching the project. A session started inside a mounted repository uses
+the project's vault.
+
+Create a repository for a project, or mount one that exists:
 
 ```bash
-claude-atlas link sensor-triage ~/code/sensor-triage
-claude-atlas link sensor-triage ~/Documents/sensor-datasheets --kind materials
-claude-atlas link field-notes sensor-triage        # the page repos/sensor-triage.md
+claude-atlas new-repo sensor-triage paper                     # in the vault's folder, beside the wiki
+claude-atlas new-repo sensor-triage app --at ~/code/sensor-app
+claude-atlas link sensor-triage ~/code/sensor-triage           # an existing repository
+claude-atlas link sensor-triage ~/Documents/cs566-work --init  # a plain folder becomes one first
+claude-atlas link field-notes sensor-triage                    # the page repos/sensor-triage.md
 claude-atlas links sensor-triage
-claude-atlas links                                  # every linked folder and who uses it
-claude-atlas unlink sensor-triage sensor-datasheets
+claude-atlas links                                             # every repository and who uses it
+claude-atlas unlink sensor-triage sensor-triage
 ```
 
-Refresh reports the repo's branch, uncommitted changes, and last commit, and
-the folder's file count, size, and newest file. A commit or a new file counts
-as touching the project. Unlinking leaves the page and the folder alone; a
-page no project links shows up as a signal on the overview until you link it
-again or delete it. A page decides its own kind: move it between `repos/` and
-`materials/` to change it.
+A repository created in the vault's folder gets its own git history, and the
+vault's `.gitignore` names it, so the vault's commits never include it;
+Obsidian still shows it. A plain folder is refused until you agree to
+initialize a repository there, which commits what the folder holds. Unlinking
+leaves the repository and its page alone; a page no project links shows up as
+a signal on the overview until you link it again or delete it.
 
-Rename a page, move it between `repos/` and `materials/`, or point it at a
-folder that moved. Every project that links the page is rewritten.
+Rename a page or point it at a repository that moved. Every project that
+links the page is rewritten.
 
 ```bash
 claude-atlas edit-link sensor-datasheets --name "Sensor datasheets"
-claude-atlas edit-link sensor-triage --kind materials
 claude-atlas edit-link Course --path ~/Documents/CS566/Course
 ```
 
-In `view`, `l` shows the project's links, one box per linked folder with the
-page name, the kind, the path, what the last refresh found, and the other
-projects that share it. `a` adds one: type a path, with Tab completion, or
-the name of an existing page; the kind is detected. `e` edits the page's
-name, kind, and path. `u` unlinks it after asking. Each action takes effect at
-once and refreshes the atlas in the background. In Obsidian, type `[[` in the
-`repos` or `materials` property of a project page and pick a page.
+In `view`, `l` shows the project's repositories, one box per repository with
+the page name, the path, what the last refresh found, and the other projects
+that share it. `n` creates one: a name, then a location that defaults to the
+vault's folder. `a` links one that exists, by path with Tab completion or by
+the name of an existing page, and asks before initializing git in a plain
+folder. `e` edits the page's name and path. `u` unlinks after asking. Each
+action takes effect at once and refreshes the atlas in the background. In
+Obsidian, type `[[` in the `repos` property of a project page and pick a
+page.
+
+Pages under `materials/` come from before links were repositories. Refresh
+moves the ones whose folder is a git repository under `repos/` and signals the
+rest: initialize git there and refresh, or unlink them.
 
 ### Relate projects
 
@@ -328,22 +340,20 @@ projects. In Obsidian, type `[[` in the `related` property.
 Every page in the atlas vault is a node in Obsidian's graph view, so the atlas
 draws itself: `Tree.md` links the top-level categories, each page under
 `categories/` links its subcategories and projects, each project links the
-pages under `repos/` and `materials/` it uses and the projects it relates
-to. Refresh regenerates `Tree.md` and `categories/` from the folders under
-`tree/`; edits there are lost. `repos/` and `materials/` are yours, like
-`tree/`.
+pages under `repos/` it uses and the projects it relates to. Refresh
+regenerates `Tree.md` and `categories/` from the folders under `tree/`; edits
+there are lost. `repos/` is yours, like `tree/`.
 
 On the first refresh, when the atlas has no graph settings yet, refresh writes
 defaults: the hub pages `Overview`, `About`, and `Reference` filtered out, and
 one color per kind of node. To get them back later, delete
 `.obsidian/graph.json` in the atlas and refresh. The filter is
 `-path:Overview.md -path:About.md -path:Reference.md`; the groups are
-`path:tree/`, `path:categories/ OR path:Tree.md`, `path:repos/`, and
-`path:materials/`.
+`path:tree/`, `path:categories/ OR path:Tree.md`, and `path:repos/`.
 
-Project pages from before this version held plain paths in `repos` and
-`materials`. The first refresh gives each a page and rewrites the entry as a
-link; it says which pages it changed.
+Project pages from before this version held plain paths in `repos`. The
+first refresh gives each a page and rewrites the entry as a link; it says
+which pages it changed.
 
 ### Edit the tree by hand
 
@@ -358,9 +368,9 @@ claude-atlas refresh
 
 A project page's properties are what the atlas reads: `vault`, `priority`
 (high, normal, low, someday), `state` (active, paused, blocked, archived),
-`blocked_on`, `review_after`, `purpose`, `definition_of_done`, `repos` and
-`materials` (links to pages under `repos/` and `materials/`), and `related`
-(links to other project pages). The body is yours.
+`blocked_on`, `review_after`, `purpose`, `definition_of_done`, `repos` (links
+to pages under `repos/`), and `related` (links to other project pages). The
+body is yours.
 
 ## Adopt an existing vault
 

@@ -8,7 +8,6 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
 )
 
 type ingestStep int
@@ -47,9 +46,11 @@ type ingestScreen struct {
 }
 
 func newIngest(hooks Hooks, item *Item) ingestScreen {
-	source := newPathField("~/Papers or ~/Papers/paper.pdf; blank: the linked material folders", 64)
-	for _, m := range item.Project.Paths(links.Materials) {
-		source.names = append(source.names, home.Display(m))
+	source := newPathField("~/Papers or ~/Papers/paper.pdf; blank: the folders ingested before", 64)
+	if hooks.Sources != nil {
+		for _, m := range hooks.Sources(item.Project) {
+			source.names = append(source.names, home.Display(m))
+		}
 	}
 	return ingestScreen{hooks: hooks, item: item, source: source}
 }
@@ -132,8 +133,8 @@ func (s ingestScreen) view() string {
 	case ingestPath:
 		fmt.Fprintf(&b, "  %s%s\n", activeL.Width(12).Render("Source"), s.source.view("              "))
 		hint := "a file or folder outside the vault; the originals stay where they are"
-		if n := len(p.Paths(links.Materials)); n > 0 {
-			hint = fmt.Sprintf("a file or folder; blank stages what is new in the %d linked material folder%s", n, plural(n))
+		if n := len(s.source.names); n > 0 {
+			hint = fmt.Sprintf("a file or folder; blank stages what is new in the %d folder%s ingested before", n, plural(n))
 		}
 		b.WriteString("              " + dim.Render(hint) + "\n")
 		if s.err != "" {
@@ -170,8 +171,14 @@ func (s ingestScreen) view() string {
 			row("Skipped", home.Display(sk.From)+dim.Render("  "+sk.Reason))
 		}
 		for _, dir := range s.plan.Dirs {
-			if !p.LinkedTo(dir) {
-				row("Link", home.Display(dir)+dim.Render("  becomes material of "+p.Name+", so `ingest` can stage what is new later"))
+			known := false
+			for _, name := range s.source.names {
+				if name == home.Display(dir) {
+					known = true
+				}
+			}
+			if !known {
+				row("Remember", home.Display(dir)+dim.Render("  so a later ingest with no path stages what is new there"))
 			}
 		}
 		if s.err != "" {
@@ -192,7 +199,7 @@ func (s ingestScreen) view() string {
 		waiting := s.plan.Waiting + len(s.result.Staged)
 		row("Inbox", fmt.Sprintf("%d file%s waiting to be ingested", waiting, plural(waiting)))
 		for _, dir := range s.linked {
-			row("Linked", home.Display(dir))
+			row("Remembered", home.Display(dir))
 		}
 		b.WriteString("\n  " + title.Render("Enter") + " start Claude Code with /claude-atlas:wiki-ingest   " + dim.Render("Esc later") + "\n")
 		b.WriteString("  " + dim.Render(trustNote) + "\n")
