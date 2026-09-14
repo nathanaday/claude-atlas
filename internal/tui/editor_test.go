@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
@@ -40,6 +41,10 @@ func fakeAtlas(t *testing.T) (*home.Config, Hooks) {
 		},
 		Update: func(p *tree.Project, edit vaults.Edit) error { return vaults.Update(cfg, p, edit) },
 		Unlink: vaults.Unlink,
+		Links: func() []links.Page {
+			pages, _, _ := links.Walk(cfg.AtlasVault)
+			return pages
+		},
 	}
 	return cfg, hooks
 }
@@ -154,7 +159,10 @@ func TestMoveVaultAsksFirst(t *testing.T) {
 	v = keyV(v, "e")
 	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyEnter) // vault field
 	target := filepath.Join(cfg.VaultsDir, "archive", "reading")
-	v.edit.text.SetValue(target)
+	if v.edit.mode != editPath {
+		t.Fatalf("the vault field completes paths: mode %d", v.edit.mode)
+	}
+	v.edit.path.setValue(target)
 	v = pressV(v, tea.KeyEnter)
 	v = keyV(v, "s")
 	if v.edit == nil || v.edit.mode != confirmMove {
@@ -173,24 +181,23 @@ func TestEditLinksThroughTheListEditor(t *testing.T) {
 	cfg, v := atlasView(t)
 	repo := filepath.Join(cfg.VaultsDir, "code")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
-	v = keyV(v, "e")
-	for i := 0; i < fieldRepos; i++ {
-		v = pressV(v, tea.KeyDown)
-	}
-	v = pressV(v, tea.KeyEnter) // list editor
-	if v.edit.mode != editList {
-		t.Fatalf("mode %d", v.edit.mode)
+	v = keyV(v, "l") // straight into the links list
+	if v.edit == nil || v.edit.mode != editList || v.edit.field != fieldLinks {
+		t.Fatalf("l should open the links list: %+v", v.edit)
 	}
 	v = keyV(v, "a")
-	v.edit.text.SetValue(filepath.Join(cfg.VaultsDir, "missing"))
+	v.edit.path.setValue(filepath.Join(cfg.VaultsDir, "missing"))
 	v = pressV(v, tea.KeyEnter)
-	if v.edit.mode != editListText || v.edit.err == "" {
+	if v.edit.mode != editListPath || v.edit.err == "" {
 		t.Fatalf("missing folder should be refused: mode=%d err=%q", v.edit.mode, v.edit.err)
 	}
-	v.edit.text.SetValue(repo)
+	v.edit.path.setValue(repo)
 	v = pressV(v, tea.KeyEnter)
-	if v.edit.mode != editList || len(v.edit.draft.Repos) != 1 || v.edit.draft.Repos[0] != repo {
-		t.Fatalf("add failed: mode=%d repos=%v", v.edit.mode, v.edit.draft.Repos)
+	if v.edit.mode != editList || len(v.edit.draft.Links) != 1 || v.edit.draft.Links[0].Path != repo || v.edit.draft.Links[0].Kind != "repo" {
+		t.Fatalf("add failed: mode=%d links=%v", v.edit.mode, v.edit.draft.Links)
+	}
+	if !strings.Contains(v.View(), "new page") {
+		t.Fatalf("a folder without a page says so:\n%s", v.View())
 	}
 	v = pressV(v, tea.KeyEsc)
 	if !v.edit.dirty() {
@@ -202,21 +209,84 @@ func TestEditLinksThroughTheListEditor(t *testing.T) {
 	}
 	projects, _, _ := tree.Walk(cfg.TreeRoot())
 	p := tree.FindByRel(projects, "personal/reading")
-	if len(p.Repos) != 1 || p.Repos[0] != repo {
-		t.Fatalf("page not updated: %v", p.Repos)
+	if len(p.Linked) != 1 || p.Linked[0].Name != "code" || p.Linked[0].Path != repo {
+		t.Fatalf("page not updated: %+v", p.Linked)
 	}
-	// remove it again
-	v = keyV(v, "e")
-	for i := 0; i < fieldRepos; i++ {
-		v = pressV(v, tea.KeyDown)
+	// Link the same page to another project by name, then remove it from the first.
+	v = pressV(v, tea.KeyUp, tea.KeyUp) // welcome
+	v = keyV(v, "l")
+	if !strings.Contains(v.View(), "none yet") {
+		t.Fatalf("welcome has no links:\n%s", v.View())
 	}
+	v = keyV(v, "a")
+	if !strings.Contains(v.View(), "code") {
+		t.Fatalf("known pages should be offered:\n%s", v.View())
+	}
+	v = typeV(v, "code")
 	v = pressV(v, tea.KeyEnter)
+	if len(v.edit.draft.Links) != 1 || v.edit.draft.Links[0].Name != "code" {
+		t.Fatalf("link by name: %+v err=%q", v.edit.draft.Links, v.edit.err)
+	}
+	v = pressV(v, tea.KeyEsc)
+	v = keyV(v, "s")
+	projects, _, _ = tree.Walk(cfg.TreeRoot())
+	if w := tree.FindByRel(projects, "welcome"); len(w.Linked) != 1 || w.Linked[0].Path != repo {
+		t.Fatalf("welcome not linked: %+v", w.Linked)
+	}
+	v = pressV(v, tea.KeyDown, tea.KeyDown) // reading
+	v = keyV(v, "l")
 	v = keyV(v, "d")
 	v = pressV(v, tea.KeyEsc)
 	v = keyV(v, "s")
 	projects, _, _ = tree.Walk(cfg.TreeRoot())
-	if p := tree.FindByRel(projects, "personal/reading"); len(p.Repos) != 0 {
-		t.Fatalf("remove failed: %v", p.Repos)
+	if p := tree.FindByRel(projects, "personal/reading"); len(p.Linked) != 0 {
+		t.Fatalf("remove failed: %+v", p.Linked)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, "repos", "code.md")); err != nil {
+		t.Fatal("the page stays for the other project")
+	}
+}
+
+func TestEditRelatedThroughThePicker(t *testing.T) {
+	cfg, v := atlasView(t)
+	v = keyV(v, "e")
+	for i := 0; i < fieldRelated; i++ {
+		v = pressV(v, tea.KeyDown)
+	}
+	v = pressV(v, tea.KeyEnter)
+	if v.edit.mode != editList || !strings.Contains(v.View(), "none yet; press a to relate") {
+		t.Fatalf("related list:\n%s", v.View())
+	}
+	v = keyV(v, "a")
+	if v.edit.mode != editListPick || !strings.Contains(v.View(), "capstone") || strings.Contains(v.View(), "▸ reading") {
+		t.Fatalf("picker should list the other projects:\n%s", v.View())
+	}
+	v = typeV(v, "cap")
+	v = pressV(v, tea.KeyEnter)
+	if len(v.edit.draft.Related) != 1 || v.edit.draft.Related[0] != "university/cs566/capstone" {
+		t.Fatalf("related %v", v.edit.draft.Related)
+	}
+	v = pressV(v, tea.KeyEsc)
+	v = keyV(v, "s")
+	if v.edit != nil || v.errMsg != "" {
+		t.Fatalf("save: err=%q", v.errMsg)
+	}
+	projects, _, _ := tree.Walk(cfg.TreeRoot())
+	if p := tree.FindByRel(projects, "personal/reading"); len(p.RelatedTo) != 1 || p.Related[0] != "[[tree/university/cs566/capstone|capstone]]" {
+		t.Fatalf("page: %v", p.Related)
+	}
+	// The other side sees it as related from, in the editor and the details.
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // university › cs566 › capstone
+	if r := v.current(); r == nil || r.kind != rowProject || r.item.Project.ID() != "capstone" {
+		t.Fatalf("cursor on %+v", r)
+	}
+	v = pressV(v, tea.KeyEnter)
+	if !strings.Contains(v.View(), "related from its page") {
+		t.Fatalf("details:\n%s", v.View())
+	}
+	v = keyV(v, "e")
+	if !strings.Contains(v.View(), "related from reading") {
+		t.Fatalf("editor:\n%s", v.View())
 	}
 }
 

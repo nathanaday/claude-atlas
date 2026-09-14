@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 )
 
 type ingestStep int
@@ -38,7 +38,7 @@ type ingestScreen struct {
 	hooks   Hooks
 	item    *Item
 	step    ingestStep
-	input   textinput.Model
+	source  pathField
 	plan    *capture.StagePlan
 	result  *capture.StageResult
 	linked  []string
@@ -47,13 +47,11 @@ type ingestScreen struct {
 }
 
 func newIngest(hooks Hooks, item *Item) ingestScreen {
-	input := textinput.New()
-	input.Prompt = ""
-	input.Placeholder = "~/Papers or ~/Papers/paper.pdf; blank: the linked material folders"
-	input.CharLimit = 400
-	input.Width = 64
-	input.Focus()
-	return ingestScreen{hooks: hooks, item: item, input: input}
+	source := newPathField("~/Papers or ~/Papers/paper.pdf; blank: the linked material folders", 64)
+	for _, m := range item.Project.Paths(links.Materials) {
+		source.names = append(source.names, home.Display(m))
+	}
+	return ingestScreen{hooks: hooks, item: item, source: source}
 }
 
 func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
@@ -66,7 +64,7 @@ func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
 				s.outcome = ingestCancelled
 				return s, nil
 			case tea.KeyEnter:
-				plan, err := s.hooks.StagePlan(s.item.Project, strings.TrimSpace(s.input.Value()))
+				plan, err := s.hooks.StagePlan(s.item.Project, s.source.value())
 				if err != nil {
 					s.err = err.Error()
 					return s, nil
@@ -78,7 +76,7 @@ func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
 			}
 		}
 		var cmd tea.Cmd
-		s.input, cmd = s.input.Update(msg)
+		s.source, cmd = s.source.update(msg)
 		s.err = ""
 		return s, cmd
 	case ingestConfirm:
@@ -89,7 +87,7 @@ func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
 		case tea.KeyEsc:
 			s.step = ingestPath
 			s.plan = nil
-			return s, s.input.Focus()
+			return s, s.source.focus()
 		case tea.KeyEnter:
 			if len(s.plan.New) == 0 {
 				if s.plan.Waiting == 0 {
@@ -132,16 +130,16 @@ func (s ingestScreen) view() string {
 	row := func(k, v string) { fmt.Fprintf(&b, "  %s%s\n", label.Width(12).Render(k), v) }
 	switch s.step {
 	case ingestPath:
-		fmt.Fprintf(&b, "  %s%s\n", activeL.Width(12).Render("Source"), s.input.View())
+		fmt.Fprintf(&b, "  %s%s\n", activeL.Width(12).Render("Source"), s.source.view("              "))
 		hint := "a file or folder outside the vault; the originals stay where they are"
-		if len(p.Materials) > 0 {
-			hint = fmt.Sprintf("a file or folder; blank stages what is new in the %d linked material folder%s", len(p.Materials), plural(len(p.Materials)))
+		if n := len(p.Paths(links.Materials)); n > 0 {
+			hint = fmt.Sprintf("a file or folder; blank stages what is new in the %d linked material folder%s", n, plural(n))
 		}
 		b.WriteString("              " + dim.Render(hint) + "\n")
 		if s.err != "" {
 			b.WriteString("              " + errSt.Render(s.err) + "\n")
 		}
-		b.WriteString("\n  " + dim.Render("Enter next · Esc cancel") + "\n")
+		b.WriteString("\n  " + dim.Render(pathHint()+" · Enter next · Esc cancel") + "\n")
 	case ingestConfirm:
 		for i, src := range s.plan.Sources {
 			k := "Source"
@@ -172,7 +170,7 @@ func (s ingestScreen) view() string {
 			row("Skipped", home.Display(sk.From)+dim.Render("  "+sk.Reason))
 		}
 		for _, dir := range s.plan.Dirs {
-			if !isLinked(p.Materials, dir) {
+			if !p.LinkedTo(dir) {
 				row("Link", home.Display(dir)+dim.Render("  becomes material of "+p.Name+", so `ingest` can stage what is new later"))
 			}
 		}
@@ -200,13 +198,4 @@ func (s ingestScreen) view() string {
 		b.WriteString("  " + dim.Render(trustNote) + "\n")
 	}
 	return b.String()
-}
-
-func isLinked(list []string, dir string) bool {
-	for _, item := range list {
-		if home.Expand(item) == dir {
-			return true
-		}
-	}
-	return false
 }

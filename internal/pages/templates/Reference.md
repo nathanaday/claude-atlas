@@ -26,7 +26,7 @@ claude-atlas new-vault my-project --category university/cs566
 
 **Refresh [[Overview]]**
 
-> Run it after editing anything under `tree/`.
+> Run it after editing anything under `tree/`. It rewrites [[Overview]], [[Tree]], and `categories/`.
 
 ```bash
 claude-atlas refresh
@@ -46,7 +46,7 @@ claude-atlas open-vault my-project
 
 **View the atlas**
 
-> Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `e` edits it (or removes it with `r`); `n` creates a vault; `a` adopts one; `R` refreshes.
+> Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `l` links a folder to it; `e` edits it (or removes it with `r`); `n` creates a vault; `a` adopts one; `R` refreshes. Paths complete with Tab.
 
 ```bash
 claude-atlas view
@@ -144,7 +144,7 @@ claude-atlas undo my-project ingest-20260912-150405-ab12
 
 ## Linking repos and material
 
-> Link a folder to a project: a git repository (detected by its `.git`) or a folder of static material such as slides, PDFs, and images. Nothing is copied; the atlas remembers the path and reports on it at every refresh.
+> Link a folder to a project: a git repository (detected by its `.git`) or a folder of static material such as slides, PDFs, and images. Nothing is copied. The folder gets a page under `repos/` or `materials/` that holds its path, and the project page links it, so the graph shows it. A folder two projects share is one page between them.
 
 ```bash
 claude-atlas link my-project ~/code/my-project
@@ -154,16 +154,38 @@ claude-atlas link my-project ~/code/my-project
 claude-atlas link my-project ~/Documents/lectures --kind materials
 ```
 
-> Show a project's links and what the last refresh found in them.
+> Link a folder another project already uses, by the name of its page.
+
+```bash
+claude-atlas link other-project my-project
+```
+
+> Show a project's links and what the last refresh found in them, or every linked folder and the projects that use it.
 
 ```bash
 claude-atlas links my-project
 ```
 
-> Remove a link. The folder is untouched.
+```bash
+claude-atlas links
+```
+
+> Remove a link. The folder and its page are untouched.
 
 ```bash
-claude-atlas unlink my-project ~/code/my-project
+claude-atlas unlink my-project my-project
+```
+
+## Relating projects
+
+> Record that two projects belong together. One page holds the link; the other shows it as a backlink, and `show` lists both directions.
+
+```bash
+claude-atlas relate my-project other-project
+```
+
+```bash
+claude-atlas unrelate my-project other-project
 ```
 
 ## Inside a vault

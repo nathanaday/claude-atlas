@@ -17,8 +17,9 @@ does is also one command, so scripts and muscle memory both work:
 | `o` open in Obsidian | `open-vault NAME` |
 | `c` start Claude Code | `open-claude NAME` |
 | `i` ingest sources | `ingest NAME [PATH...]` |
+| `l` link a folder | `link NAME PATH`, `unlink`, `links` |
+| Related in the editor | `relate NAME OTHER`, `unrelate` |
 | `R` refresh | `refresh` |
-| Repos and Materials in the editor | `link`, `unlink`, `links` |
 
 ## Create a vault
 
@@ -169,18 +170,22 @@ claude-atlas open-vault
 time. Space folds or unfolds the branch under the cursor; `-` and `+` fold and
 unfold every category. Enter shows everything the atlas knows about a project,
 `o` opens its vault in Obsidian, `c` starts Claude Code in it, `i` ingests a
-file or folder into it, and `e` edits its page: name, purpose, category, priority, state, what it is blocked on, a
-review date, what finished looks like, its vault path, and linked repos and
-material, or `r` to remove it from the atlas. `n` creates a vault, `a` adopts
+file or folder into it, `l` links a folder to it, and `e` edits its page:
+name, purpose, category, priority, state, what it is blocked on, a review
+date, what finished looks like, its vault path, linked folders, and related
+projects, or `r` to remove it from the atlas. `n` creates a vault, `a` adopts
 one, and `R` refreshes every vault in the background. Removing never touches
 the vault on disk.
+
+Every field that takes a path completes it as a shell does: Tab accepts the
+match shown in grey, the arrow keys cycle the others.
 
 ```bash
 claude-atlas view
 ```
 
-`refresh` reads every vault and rewrites `Overview.md`. Run it after editing
-anything under `tree/`.
+`refresh` reads every vault and linked folder and rewrites `Overview.md`,
+`Tree.md`, and `categories/`. Run it after editing anything under `tree/`.
 
 ```bash
 claude-atlas refresh
@@ -195,17 +200,70 @@ claude-atlas list
 ### Link repos and material
 
 Link the folders a project works with: a git repository (detected by its
-`.git`) or a folder of static material such as slides, PDFs, and images.
-Nothing is copied. Refresh reports the repo's branch, uncommitted changes, and
-last commit, and the folder's file count and newest file. A commit or a new
-file counts as touching the project.
+`.git`) or a folder of static material such as slides, PDFs, and images. A
+single file is material too. Nothing is copied. Each linked folder gets a page
+in the atlas, `repos/<name>.md` or `materials/<name>.md`, holding its path;
+the project page links that page. A folder two projects share is one page,
+and one node in the graph, between them. To link a folder another project
+already uses, name its page instead of its path.
 
 ```bash
 claude-atlas link sensor-triage ~/code/sensor-triage
 claude-atlas link sensor-triage ~/Documents/sensor-datasheets --kind materials
+claude-atlas link field-notes sensor-triage        # the page repos/sensor-triage.md
 claude-atlas links sensor-triage
-claude-atlas unlink sensor-triage ~/code/sensor-triage
+claude-atlas links                                  # every linked folder and who uses it
+claude-atlas unlink sensor-triage sensor-datasheets
 ```
+
+Refresh reports the repo's branch, uncommitted changes, and last commit, and
+the folder's file count, size, and newest file. A commit or a new file counts
+as touching the project. Unlinking leaves the page and the folder alone; a
+page no project links shows up as a signal on the overview until you link it
+again or delete it. A page decides its own kind: move it between `repos/` and
+`materials/` to change it.
+
+In `view`, `l` opens the project's links with the cursor ready to add one.
+Type a path, with Tab completion, or the name of an existing page; the kind
+is detected. In Obsidian, type `[[` in the `repos` or `materials` property of
+a project page and pick a page.
+
+### Relate projects
+
+Record that two projects belong together. The relation lives on one page as
+`related: ["[[tree/work/other|other]]"]`; the other page shows it as a
+backlink, and the atlas reads both directions.
+
+```bash
+claude-atlas relate sensor-triage field-notes
+claude-atlas unrelate sensor-triage field-notes
+claude-atlas show sensor-triage                     # Related, and Related from
+```
+
+In `view`, edit the project (`e`) and add to Related from a list of the other
+projects. In Obsidian, type `[[` in the `related` property.
+
+### The graph
+
+Every page in the atlas vault is a node in Obsidian's graph view, so the atlas
+draws itself: `Tree.md` links the top-level categories, each page under
+`categories/` links its subcategories and projects, each project links the
+pages under `repos/` and `materials/` it uses and the projects it relates
+to. Refresh regenerates `Tree.md` and `categories/` from the folders under
+`tree/`; edits there are lost. `repos/` and `materials/` are yours, like
+`tree/`.
+
+On the first refresh, when the atlas has no graph settings yet, refresh writes
+defaults: the hub pages `Overview`, `About`, and `Reference` filtered out, and
+one color per kind of node. To get them back later, delete
+`.obsidian/graph.json` in the atlas and refresh. The filter is
+`-path:Overview.md -path:About.md -path:Reference.md`; the groups are
+`path:tree/`, `path:categories/ OR path:Tree.md`, `path:repos/`, and
+`path:materials/`.
+
+Project pages from before this version held plain paths in `repos` and
+`materials`. The first refresh gives each a page and rewrites the entry as a
+link; it says which pages it changed.
 
 ### Edit the tree by hand
 
@@ -220,8 +278,9 @@ claude-atlas refresh
 
 A project page's properties are what the atlas reads: `vault`, `priority`
 (high, normal, low, someday), `state` (active, paused, blocked, archived),
-`blocked_on`, `review_after`, `purpose`, `definition_of_done`, `repos`,
-`materials`. The body is yours.
+`blocked_on`, `review_after`, `purpose`, `definition_of_done`, `repos` and
+`materials` (links to pages under `repos/` and `materials/`), and `related`
+(links to other project pages). The body is yours.
 
 ## Adopt an existing vault
 

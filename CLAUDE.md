@@ -12,6 +12,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 | Thing | Location |
 |---|---|
 | Core design and the reasons behind it | `docs/core-design.md` |
+| The atlas side: tree, link pages, graph | `docs/atlas-design.md` |
 | Original brainstorm (not a contract) | `docs/spec.md` |
 | The skills' contracts | `skills/<name>/SKILL.md` and `skills/wiki/references/` |
 
@@ -40,7 +41,10 @@ safety net, and adds the cross-vault view.
 2. A vault never learns the atlas exists. A project page records a vault path;
    the vault records nothing.
 3. The atlas never stores a fact it can compute. `~/.claude-atlas/state/` is
-   rebuilt in full by `refresh`.
+   rebuilt in full by `refresh`, and so are `Overview.md`, `Tree.md`, and
+   `categories/`. `tree/`, `repos/`, and `materials/` are the user's; refresh
+   touches a project page for one reason only, to turn a plain folder path in
+   `repos` or `materials` into a link to its page.
 
 ## Two layers, one backend
 
@@ -74,10 +78,10 @@ internal/mcpserver/     the tools, thin over the packages above
 internal/hooks/         session-start, guard, stop
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
 internal/tree/          project pages (frontmatter) and derived state files
-internal/refresh/       derive state, render Overview.md
+internal/refresh/       derive state, generate categories/ and Tree.md, render Overview.md
 internal/pages/         About.md and Reference.md from templates
-internal/vaults/        create, register, edit project pages, link folders
-internal/links/         inspect linked git repos and material folders
+internal/vaults/        create, register, edit project pages, link folders, relate projects
+internal/links/         link pages under repos/ and materials/, and the facts about their folders
 internal/tui/           Bubble Tea screens: the tree (view), the project editor, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
 internal/home/          ~/.claude-atlas and config.json
@@ -109,7 +113,10 @@ the vaults directory (default `~/Documents/Vaults`).
 - Tests never touch a real `~/.claude-atlas`, never install a plugin, and skip
   when `git` is missing. MCP tools are tested in-process over the SDK's
   in-memory transport.
-- Atlas edits a project page only through `tree.UpdateFrontmatter`.
+- Atlas edits a project page only through `tree.UpdateFrontmatter`. Links to
+  other atlas pages are written as `[[dir/name|name]]`, double-quoted, the way
+  Obsidian writes them; `tree.Walk` resolves them and reports what resolves to
+  nothing in `Project.Warnings`.
 - Prose follows the user's global writing guide.
 
 ## Claude Code plugin facts, verified on 2.1.270
@@ -128,6 +135,15 @@ the vaults directory (default `~/Documents/Vaults`).
   for development (`claude-atlas setup --plugin-source /path/to/checkout`).
 
 ## Obsidian facts
+
+- A `[[link]]` inside a text or list property is a real link: it shows in
+  the graph view and the backlinks pane, `[[` in the property editor offers
+  completion, and renames update it. Full paths (`[[repos/name|name]]`) avoid
+  the ambiguity of two files with one base name.
+- The graph view's filter and groups take search syntax: `path:repos/`,
+  `-path:Overview.md`, `OR`. `.obsidian/graph.json` stores groups as
+  `{"query": ..., "color": {"a": 1, "rgb": <int>}}`; refresh writes it only
+  when it is missing.
 
 - `obsidian://open?path=` only opens vaults Obsidian already knows. Obsidian
   reads its registry (`obsidian.json` under its config dir) once at launch,

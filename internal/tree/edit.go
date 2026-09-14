@@ -85,7 +85,8 @@ func scalar(value any) *yaml.Node {
 		return seq
 	case string:
 		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v}
-		if v == "" {
+		// Obsidian writes wikilinks in properties with double quotes; match it.
+		if v == "" || strings.HasPrefix(v, "[[") {
 			node.Style = yaml.DoubleQuotedStyle
 		}
 		return node

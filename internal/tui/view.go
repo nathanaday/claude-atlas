@@ -13,6 +13,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 )
@@ -553,7 +554,7 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "R":
 			return v.refresh()
 		}
-		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" {
+		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" || key == "l" {
 			var item *Item
 			if v.detail != nil {
 				item = v.detail
@@ -568,6 +569,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v.claude(item, "")
 			case "e":
 				return v.openEditor(item)
+			case "l":
+				return v.openLinks(item)
 			case "i":
 				return v.openIngest(item)
 			}
@@ -700,6 +703,29 @@ func (v view) openEditor(item *Item) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
+// openLinks starts the editor on the project's links, ready to add one.
+func (v view) openLinks(item *Item) (tea.Model, tea.Cmd) {
+	if v.hooks.Load == nil || v.hooks.Update == nil {
+		v.errMsg = "editing is not available here"
+		return v, nil
+	}
+	ed := newEditor(v.hooks, item.Project)
+	ed.field = fieldLinks
+	ed.mode = editList
+	v.edit = &ed
+	return v, nil
+}
+
+// nameOf is a project's display name by rel, or the rel when it is unknown.
+func (v view) nameOf(rel string) string {
+	for _, it := range v.items {
+		if it.Project.Rel == rel {
+			return it.Project.Name
+		}
+	}
+	return rel
+}
+
 // updateEdit forwards keys to the editor and folds its outcome back into the view.
 func (v view) updateEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 	ed, cmd := v.edit.update(msg)
@@ -732,7 +758,7 @@ func (v view) openIngest(item *Item) (tea.Model, tea.Cmd) {
 	}
 	s := newIngest(v.hooks, item)
 	v.ingest = &s
-	return v, textinput.Blink
+	return v, tea.Batch(textinput.Blink, s.source.focus())
 }
 
 // updateIngest forwards keys to the ingest screen and acts on how it ended.
@@ -895,7 +921,7 @@ func (v view) treeHints() string {
 	if r := v.current(); r != nil {
 		switch r.kind {
 		case rowProject:
-			hints += " · Enter details · o Obsidian · c Claude · i ingest · e edit · Space fold"
+			hints += " · Enter details · o Obsidian · c Claude · i ingest · e edit · l links · Space fold"
 		case rowCategory:
 			if v.collapsed[r.path] {
 				hints += " · Enter unfold"
@@ -974,24 +1000,41 @@ func (v view) viewDetail() string {
 			b.WriteString("    " + line + "\n")
 		}
 	}
-	if s != nil && len(s.Links) > 0 {
+	if len(p.Linked) > 0 {
 		b.WriteString("\n  " + catSt.Render("Links") + "\n")
-		for _, l := range s.Links {
-			facts := refresh.LinkSummary(l)
-			if !l.OK {
-				facts = errSt.Render(facts)
+		for _, l := range p.Linked {
+			name := l.Name
+			if name == "" {
+				name = dim.Render("(no page yet)")
 			}
-			fmt.Fprintf(&b, "    %-10s %s\n               %s\n", l.Kind, home.Display(home.Expand(l.Path)), dim.Render(facts))
-		}
-	} else if len(p.Repos)+len(p.Materials) > 0 {
-		b.WriteString("\n  " + catSt.Render("Links") + "\n")
-		for _, r := range p.Repos {
-			fmt.Fprintf(&b, "    %-10s %s\n", "repo", home.Display(home.Expand(r)))
-		}
-		for _, r := range p.Materials {
-			fmt.Fprintf(&b, "    %-10s %s\n", "materials", home.Display(home.Expand(r)))
+			where := home.Display(l.Path)
+			if l.Path == "" {
+				where = errSt.Render("names no page")
+			}
+			fmt.Fprintf(&b, "    %-10s %-24s %s\n", l.Kind, name, where)
+			if s != nil {
+				for _, f := range s.Links {
+					if f.Path == l.Path && f.Kind == l.Kind {
+						facts := refresh.LinkSummary(f)
+						if !f.OK {
+							facts = errSt.Render(facts)
+						}
+						b.WriteString("               " + dim.Render(facts) + "\n")
+					}
+				}
+			}
 		}
 	}
+	if from := tree.RelatedFrom(v.projects(), p); len(p.RelatedTo)+len(from) > 0 {
+		b.WriteString("\n  " + catSt.Render("Related") + "\n")
+		for _, rel := range p.RelatedTo {
+			fmt.Fprintf(&b, "    %-24s %s\n", v.nameOf(rel), dim.Render(rel))
+		}
+		for _, q := range from {
+			fmt.Fprintf(&b, "    %-24s %s\n", q.Name, dim.Render(q.Rel+"  · related from its page"))
+		}
+	}
+	_ = links.Repo
 	section("Purpose", p.Purpose)
 	section("Done when", p.DefinitionOfDone)
 	if s != nil && len(s.OpenThreads) > 0 {
@@ -1000,8 +1043,17 @@ func (v view) viewDetail() string {
 			b.WriteString("    - " + t + "\n")
 		}
 	}
-	b.WriteString("\n" + v.footer("o Obsidian · c Claude Code · i ingest · e edit · R refresh · Esc back · q quit"))
+	b.WriteString("\n" + v.footer("o Obsidian · c Claude Code · i ingest · e edit · l links · R refresh · Esc back · q quit"))
 	return b.String()
+}
+
+// projects lists every project the view holds.
+func (v view) projects() []*tree.Project {
+	out := make([]*tree.Project, 0, len(v.items))
+	for i := range v.items {
+		out = append(out, v.items[i].Project)
+	}
+	return out
 }
 
 // RunView shows the tree until the user quits. It reports whether any project was edited.

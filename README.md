@@ -5,7 +5,7 @@ Knowledge vaults for Claude Code, and one view across all of them.
 [![License: MIT](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](.claude-plugin/plugin.json)
-[![Version](https://img.shields.io/badge/version-0.2.1-d97745.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.3.0-d97745.svg)](.claude-plugin/plugin.json)
 
 ## About
 
@@ -20,7 +20,8 @@ commit you can undo. The atlas is the page that shows all your vaults at once.
 - **Review, then commit.** Preview every change; undo reverts it. Your own
   Obsidian edits are committed first and never touched.
 - **One view across vaults.** Heat, open threads, unfinished work, and your
-  declared priority, side by side.
+  declared priority, side by side. Projects, the repos and folders they
+  share, and the tree itself draw as one graph in Obsidian.
 - **Native Obsidian.** Plain Markdown, wikilinks, Canvas boards, Bases views.
 
 
@@ -72,8 +73,9 @@ pages; `/claude-atlas:wiki-query` answers from the vault. Claude shows a
 preview before every change, and `claude-atlas undo` takes one back.
 
 See every vault at once. The tree does everything the commands do: `o` opens
-a vault in Obsidian, `c` starts Claude Code in it, `i` ingests sources, `e`
-edits its project page, `n` creates a vault, `a` adopts one, `R` refreshes:
+a vault in Obsidian, `c` starts Claude Code in it, `i` ingests sources, `l`
+links a repo or a folder, `e` edits its project page, `n` creates a vault,
+`a` adopts one, `R` refreshes:
 
 ```bash
 claude-atlas view
@@ -107,15 +109,23 @@ Change it with `claude-atlas mode sensor-triage lyt`.
 ```
 ~/Documents/Atlas/            an Obsidian vault; open it like any other
 ├── Overview.md               every project, its heat, threads, and signals
+├── Tree.md                   the root of the graph
 ├── About.md                  orientation
 ├── Reference.md              every command with examples
-└── tree/                     yours: folders are categories, files are projects
+├── tree/                     yours: folders are categories, files are projects
+├── repos/                    one page per linked git repository
+├── materials/                one page per linked folder of sources
+└── categories/               generated: one page per folder under tree/
 ```
 
 Each project page under `tree/` holds your intent: purpose, priority, state,
-what it is blocked on. Everything else is derived from the vault on every
-refresh, so the overview never goes stale. The most useful line on it is where
-the two disagree: a project marked `high` whose vault has been cold for weeks.
+what it is blocked on, the repos and folders it works with, and the projects
+it belongs with. Everything else is derived from the vault on every refresh,
+so the overview never goes stale. The most useful line on it is where the two
+disagree: a project marked `high` whose vault has been cold for weeks.
+
+Every page is a node, so the graph view shows the whole ecosystem: categories
+to projects, projects to the repos and folders they share.
 
 ## Conventions
 
@@ -132,7 +142,7 @@ Full reasoning in [docs/core-design.md](docs/core-design.md).
 ## Documentation
 
 - Usage — [docs/usage.md](docs/usage.md)
-- Design and decisions — [docs/core-design.md](docs/core-design.md)
+- Design and decisions — [docs/core-design.md](docs/core-design.md), [docs/atlas-design.md](docs/atlas-design.md)
 - Skills — [skills/](skills/), one `SKILL.md` per skill
 - Plugin manifest — [.claude-plugin/plugin.json](.claude-plugin/plugin.json)
 

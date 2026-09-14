@@ -19,6 +19,23 @@ const Repository = "https://github.com/nathanaday/claude-atlas"
 //go:embed templates/*.md
 var templates embed.FS
 
+//go:embed graph.json
+var graphDefaults []byte
+
+// WriteGraph writes the atlas vault's graph view settings when it has none: the
+// generated hub pages filtered out, and one color per kind of node. It reports whether
+// it wrote the file.
+func WriteGraph(atlas string) (bool, error) {
+	path := filepath.Join(atlas, ".obsidian", "graph.json")
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(path, graphDefaults, 0o644)
+}
+
 // Write renders every template into the atlas vault.
 func Write(cfg *home.Config, homeRoot, version string) error {
 	r := strings.NewReplacer(

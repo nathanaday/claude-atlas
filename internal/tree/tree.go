@@ -41,6 +41,17 @@ type Frontmatter struct {
 	ReviewAfter      string   `yaml:"review_after"`
 	Repos            []string `yaml:"repos"`
 	Materials        []string `yaml:"materials"`
+	Related          []string `yaml:"related"`
+}
+
+// Linked is one entry of a project's repos or materials list, resolved against the link
+// pages beside the tree. Name is empty for a plain path with no page yet; Path is empty
+// for a wikilink that names no page.
+type Linked struct {
+	Kind  string `json:"kind"`
+	Entry string `json:"entry"`
+	Name  string `json:"name,omitempty"`
+	Path  string `json:"path,omitempty"`
 }
 
 // Project is one markdown file under the tree root.
@@ -49,10 +60,125 @@ type Project struct {
 	Rel  string // path relative to the tree root without .md, forward slashes
 	Body string // markdown after the frontmatter; not interpreted
 	Frontmatter
+	// Linked resolves Repos and Materials; RelatedTo resolves Related to project rels;
+	// Warnings lists entries that name nothing. Walk fills all three, Load the first.
+	Linked    []Linked
+	RelatedTo []string
+	Warnings  []string
 }
 
 // ID is the file name without extension.
 func (p *Project) ID() string { return strings.TrimSuffix(filepath.Base(p.Path), ".md") }
+
+// Wikilink is how another atlas page refers to this project.
+func (p *Project) Wikilink() string { return "[[tree/" + p.Rel + "|" + p.Name + "]]" }
+
+// Paths lists the linked folders of a kind that resolve to a path.
+func (p *Project) Paths(kind string) []string {
+	var out []string
+	for _, l := range p.Linked {
+		if l.Kind == kind && l.Path != "" {
+			out = append(out, l.Path)
+		}
+	}
+	return out
+}
+
+// LinkedTo reports whether a folder is linked to the project, whatever its kind.
+func (p *Project) LinkedTo(path string) bool {
+	target := filepath.Clean(home.Expand(path))
+	for _, l := range p.Linked {
+		if l.Path != "" && filepath.Clean(l.Path) == target {
+			return true
+		}
+	}
+	return false
+}
+
+// Atlas is the vault the tree sits in; link pages live beside the tree.
+func Atlas(root string) string { return filepath.Dir(root) }
+
+// ResolveLinks fills Linked from the repos and materials lists against the given pages.
+func ResolveLinks(p *Project, pages []links.Page) {
+	p.Linked = nil
+	for _, kind := range []string{links.Repo, links.Materials} {
+		entries := p.Repos
+		if kind == links.Materials {
+			entries = p.Materials
+		}
+		for _, entry := range entries {
+			l := Linked{Kind: kind, Entry: entry}
+			page, isLink := links.Resolve(pages, kind, entry)
+			switch {
+			case page != nil:
+				l.Name, l.Path = page.Name, page.Path
+			case isLink:
+				target, _, _ := links.ParseWikilink(entry)
+				l.Name = strings.TrimSuffix(filepath.Base(target), ".md")
+				p.Warnings = append(p.Warnings, fmt.Sprintf("%s: %s names no page under %s/", kind, entry, links.Dir(kind)))
+			default:
+				abs, err := filepath.Abs(home.Expand(entry))
+				if err != nil {
+					abs = home.Expand(entry)
+				}
+				l.Path = abs
+			}
+			p.Linked = append(p.Linked, l)
+		}
+	}
+}
+
+// relatedTarget reads a related entry: "[[tree/a/b|B]]", "[[b]]", or a bare rel or id.
+func relatedTarget(entry string) string {
+	target, _, ok := links.ParseWikilink(entry)
+	if !ok {
+		target = strings.TrimSpace(entry)
+	}
+	target = strings.TrimSuffix(strings.Trim(target, "/"), ".md")
+	return strings.TrimPrefix(target, "tree/")
+}
+
+// resolveRelated fills RelatedTo for every project once all of them are loaded.
+func resolveRelated(projects []*Project) {
+	byID := map[string][]*Project{}
+	for _, p := range projects {
+		byID[strings.ToLower(p.ID())] = append(byID[strings.ToLower(p.ID())], p)
+	}
+	for _, p := range projects {
+		p.RelatedTo = nil
+		for _, entry := range p.Related {
+			target := relatedTarget(entry)
+			if target == "" {
+				continue
+			}
+			var found *Project
+			if q := FindByRel(projects, target); q != nil && q.Rel == target {
+				found = q
+			} else if same := byID[strings.ToLower(target)]; len(same) == 1 {
+				found = same[0]
+			}
+			switch {
+			case found == nil:
+				p.Warnings = append(p.Warnings, fmt.Sprintf("related: %s names no project", entry))
+			case found == p:
+				p.Warnings = append(p.Warnings, "related: names the project itself")
+			case !contains(p.RelatedTo, found.Rel):
+				p.RelatedTo = append(p.RelatedTo, found.Rel)
+			}
+		}
+	}
+}
+
+// RelatedFrom lists the projects whose related list names p.
+func RelatedFrom(projects []*Project, p *Project) []*Project {
+	var out []*Project
+	for _, q := range projects {
+		if q != p && contains(q.RelatedTo, p.Rel) {
+			out = append(out, q)
+		}
+	}
+	return out
+}
 
 // Category is the directory part of Rel, or "" at the top level.
 func (p *Project) Category() string {
@@ -160,6 +286,8 @@ func Load(path, root string) (*Project, error) {
 	if !contains(States, p.State) {
 		return nil, fmt.Errorf("state must be one of %s", strings.Join(States, ", "))
 	}
+	pages, _, _ := links.Walk(Atlas(root))
+	ResolveLinks(p, pages)
 	return p, nil
 }
 
@@ -202,6 +330,7 @@ func Walk(root string) ([]*Project, []Problem, error) {
 		byVault[key] = p
 		projects = append(projects, p)
 	}
+	resolveRelated(projects)
 	return projects, problems, nil
 }
 
@@ -283,6 +412,7 @@ func Create(root string, opts ProjectOptions) (string, error) {
 		State:     "active",
 		Repos:     []string{},
 		Materials: []string{},
+		Related:   []string{},
 	}
 	body := "# " + opts.Name + "\n\nNotes that belong to the atlas rather than the vault.\n"
 	data, err := Render(front, body)

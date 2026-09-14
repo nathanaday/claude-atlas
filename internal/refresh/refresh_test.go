@@ -9,6 +9,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -168,7 +169,7 @@ func TestRenderListsRowsAndSignals(t *testing.T) {
 	res := &Result{Rows: []Row{{node, state}}, Problems: []tree.Problem{{Rel: "stray", Reason: "missing frontmatter"}}}
 	page := Render(res, "2026-09-11T20:00:00Z", today)
 	for _, want := range []string{
-		"| ❄️ cold | [[tree/work/v\\|x]] | work | normal | active | 41d | 3 | 1 | 3 |",
+		"| ❄️ cold | [[tree/work/v\\|x]] | [[categories/work\\|work]] | normal | active | 41d | 3 | 1 | 3 |",
 		"| Vault | `/Users/me/v` |",
 		"## Signals", "> [!failure] tree/stray.md\n> Not a project: missing frontmatter.", "> [!warning] work/v", "cold for 41 days",
 		"## work\n\n### x\n\n> [!abstract] Purpose\n> Why.", "> - thread one",
@@ -216,6 +217,27 @@ func TestRunAgainstARealVault(t *testing.T) {
 	if filepath.Base(page) != "Overview.md" || !strings.Contains(string(text), "[[tree/area/fresh\\|fresh]]") || len(res.Rows) != 1 {
 		t.Fatalf("page:\n%s", text)
 	}
+	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, ".obsidian", "graph.json")); err != nil {
+		t.Fatal("refresh should write graph defaults when there are none")
+	}
+	// A plain path in the page is upgraded to a page on the next run, and links.json lists it.
+	code := filepath.Join(root, "code")
+	os.MkdirAll(filepath.Join(code, ".git"), 0o755)
+	if err := tree.UpdateFrontmatter(project.Path, map[string]any{"repos": []string{code}}); err != nil {
+		t.Fatal(err)
+	}
+	_, res, err = Run(cfg, stateDir, time.Now())
+	if err != nil || len(res.Upgraded) != 1 || len(res.Links) != 1 || res.Links[0].Page.Name != "code" || len(res.Links[0].Projects) != 1 {
+		t.Fatalf("second run: err=%v upgraded=%v links=%+v", err, res.Upgraded, res.Links)
+	}
+	ls, err := ReadLinksState(stateDir)
+	if err != nil || len(ls.Links) != 1 || ls.Links[0].Page.Name != "code" || ls.Links[0].Projects[0] != project.Rel {
+		t.Fatalf("links state %+v %v", ls, err)
+	}
+	state, _ = tree.ReadState(stateDir, project.Rel)
+	if len(state.Links) != 1 || state.Links[0].Name != "code" {
+		t.Fatalf("project state links %+v", state.Links)
+	}
 }
 
 func TestLinksCountAsActivityAndMissingOnesSignal(t *testing.T) {
@@ -226,6 +248,7 @@ func TestLinksCountAsActivityAndMissingOnesSignal(t *testing.T) {
 	node := leaf(vault)
 	node.Materials = []string{docs}
 	node.Repos = []string{filepath.Join(t.TempDir(), "gone")}
+	tree.ResolveLinks(node, nil)
 	state := Derive(node, time.Now(), "t")
 	if len(state.Links) != 2 || !state.Links[1].OK || state.Links[0].OK {
 		t.Fatalf("links %+v", state.Links)
@@ -240,5 +263,77 @@ func TestLinksCountAsActivityAndMissingOnesSignal(t *testing.T) {
 	page := Render(&Result{Rows: []Row{{node, state}}}, "2026-09-12T18:00:00Z", time.Now())
 	if !strings.Contains(page, "| Materials | `") || !strings.Contains(page, "1 file") || !strings.Contains(page, "> [!failure] x") {
 		t.Fatalf("page:\n%s", page)
+	}
+	// With a page, the link renders as a wikilink and the name shows in the signal.
+	node.Linked[0].Name = "gone"
+	state = Derive(node, time.Now(), "t")
+	if state.Links[0].Name != "gone" {
+		t.Fatalf("name should carry: %+v", state.Links)
+	}
+	notes = strings.Join(Signals(node, state, time.Now()), "\n")
+	page = Render(&Result{Rows: []Row{{node, state}}}, "2026-09-12T18:00:00Z", time.Now())
+	if !strings.Contains(notes, "repo gone (") || !strings.Contains(page, "| Repo | [[repos/gone\\|gone]] · not found |") {
+		t.Fatalf("notes %q page:\n%s", notes, page)
+	}
+}
+
+func TestWarningsAndLinkSignalsRender(t *testing.T) {
+	node := leaf("/v")
+	node.Warnings = []string{"related: [[nope]] names no project"}
+	notes := Signals(node, &tree.State{VaultOK: true, Heat: "hot"}, today)
+	if len(notes) != 1 || notes[0] != node.Warnings[0] {
+		t.Fatalf("notes %v", notes)
+	}
+	res := &Result{Rows: []Row{{node, &tree.State{VaultOK: true}}},
+		Links:        []LinkRow{{Page: links.Page{Kind: links.Repo, Name: "lonely", Path: "/r"}, Link: links.Link{Kind: links.Repo, Name: "lonely", Path: "/r", OK: true}, Projects: []string{}}},
+		LinkProblems: []links.Problem{{File: "repos/bad.md", Reason: "missing frontmatter"}}}
+	got := strings.Join(LinkSignals(res), "\n")
+	if !strings.Contains(got, "repos/bad.md is not a link page: missing frontmatter") || !strings.Contains(got, "repos/lonely.md is linked by no project") {
+		t.Fatalf("link signals %q", got)
+	}
+	page := Render(res, "2026-09-12T18:00:00Z", today)
+	for _, want := range []string{"> [!warning] x\n> Related: [[nope]] names no project", "> [!info] Repos/lonely.md is linked by no project", "> [!failure] Repos/bad.md is not a link page", "## Repos and materials", "| repo | [[repos/lonely\\|lonely]] | `/r` | — | ok |"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("missing %q in:\n%s", want, page)
+		}
+	}
+}
+
+func TestCategoriesMakeTheTreeAGraph(t *testing.T) {
+	a := leaf("/a")
+	a.Rel, a.Name, a.Purpose = "work/field/a", "A", "First line.\nSecond."
+	b := leaf("/b")
+	b.Rel, b.Name = "work/b", "B"
+	c := leaf("/c")
+	c.Rel, c.Name = "c", "C"
+	cats := categories([]*tree.Project{a, b, c})
+	if len(cats) != 3 || len(cats[""].children) != 1 || cats[""].children[0] != "work" || len(cats[""].projects) != 1 {
+		t.Fatalf("cats %+v", cats)
+	}
+	if countProjects(cats, "work") != 2 || len(cats["work"].projects) != 1 || cats["work"].children[0] != "work/field" {
+		t.Fatalf("work %+v", cats["work"])
+	}
+	field := renderCategory(cats, cats["work/field"])
+	for _, want := range []string{"schema: atlas.category.v1", "name: field", "path: work/field", "Part of [[categories/work|work]].", "- [[tree/work/field/a|A]] — First line."} {
+		if !strings.Contains(field, want) {
+			t.Errorf("missing %q in:\n%s", want, field)
+		}
+	}
+	root := renderCategory(cats, cats[""])
+	if !strings.Contains(root, "title: Tree") || !strings.Contains(root, "- [[categories/work|work]] · 2 projects") || !strings.Contains(root, "- [[tree/c|C]]") {
+		t.Fatalf("root:\n%s", root)
+	}
+	cfg := &home.Config{AtlasVault: t.TempDir()}
+	os.MkdirAll(filepath.Join(cfg.AtlasVault, CategoriesDir, "stale"), 0o755)
+	if err := WriteCategories(cfg, []*tree.Project{a, b, c}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"Tree.md", "categories/work.md", "categories/work/field.md"} {
+		if _, err := os.Stat(filepath.Join(cfg.AtlasVault, path)); err != nil {
+			t.Errorf("missing %s", path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, CategoriesDir, "stale")); err == nil {
+		t.Fatal("stale category pages should be removed")
 	}
 }

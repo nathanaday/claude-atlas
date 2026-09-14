@@ -375,7 +375,7 @@ func TestNewAndAdoptFromTheTree(t *testing.T) {
 	if v.add.step != stepName || v.add.err == "" {
 		t.Fatalf("a plain directory is not adoptable: step=%d err=%q", v.add.step, v.add.err)
 	}
-	v.add.name.SetValue(dir)
+	v.add.where.setValue(dir)
 	v = pressV(v, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter)
 	if v.add != nil || len(got) != 2 || !got[1].Adopt || got[1].Path != dir || got[1].Name != "Old Notes" || got[1].Slug != "old-notes" {
 		t.Fatalf("adopt: add=%v got=%+v", v.add, got)

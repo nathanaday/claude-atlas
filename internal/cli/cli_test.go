@@ -143,8 +143,16 @@ func TestLinkCommands(t *testing.T) {
 	docs := filepath.Join(vaults, "docs")
 	os.MkdirAll(docs, 0o755)
 	os.WriteFile(filepath.Join(docs, "a.pdf"), []byte("x"), 0o644)
-	if code := h.run("link", "welcome", docs); code != 0 || !strings.Contains(h.out.String(), "(materials)") {
+	atlas := filepath.Join(filepath.Dir(h.home), "Atlas")
+	if code := h.run("link", "welcome", docs); code != 0 || !strings.Contains(h.out.String(), "docs (materials,") || !strings.Contains(h.out.String(), "materials/docs.md (new)") {
 		t.Fatalf("link exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(atlas, "materials", "docs.md")); err != nil {
+		t.Fatal("link should create the page")
+	}
+	page, _ := os.ReadFile(filepath.Join(atlas, "tree", "welcome.md"))
+	if !strings.Contains(string(page), `- "[[materials/docs|docs]]"`) {
+		t.Fatalf("project page should hold a wikilink:\n%s", page)
 	}
 	if code := h.run("link", "welcome", docs); code != 1 || !strings.Contains(h.err.String(), "already linked") {
 		t.Fatalf("duplicate: %d %s", code, h.err.String())
@@ -152,14 +160,84 @@ func TestLinkCommands(t *testing.T) {
 	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "materials") || !strings.Contains(h.out.String(), "1 file") {
 		t.Fatalf("links exit %d:\n%s", code, h.out.String())
 	}
-	if code := h.run("unlink", "welcome", docs); code != 0 {
-		t.Fatalf("unlink exit %d %s", code, h.err.String())
+	if code := h.run("links"); code != 0 || !strings.Contains(h.out.String(), "docs") || !strings.Contains(h.out.String(), "· welcome") {
+		t.Fatalf("all links exit %d:\n%s", code, h.out.String())
+	}
+	overview, _ := os.ReadFile(filepath.Join(atlas, "Overview.md"))
+	if !strings.Contains(string(overview), "## Repos and materials") || !strings.Contains(string(overview), "[[materials/docs\\|docs]]") {
+		t.Fatalf("overview:\n%s", overview)
+	}
+	if code := h.run("unlink", "welcome", "docs"); code != 0 {
+		t.Fatalf("unlink by name exit %d %s", code, h.err.String())
 	}
 	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "no links") {
 		t.Fatalf("after unlink:\n%s", h.out.String())
 	}
+	if code := h.run("links"); code != 0 || !strings.Contains(h.out.String(), "no project") {
+		t.Fatalf("an unused page shows as such:\n%s", h.out.String())
+	}
 	if code := h.run("link", "welcome", docs, "--kind", "bogus"); code != 2 {
 		t.Fatalf("bad kind exit %d", code)
+	}
+	if code := h.run("link", "welcome", "docs"); code != 0 {
+		t.Fatalf("link by page name exit %d %s", code, h.err.String())
+	}
+}
+
+func TestRelateCommands(t *testing.T) {
+	h, _ := setup(t)
+	if code := h.run("new-vault", "triage", "--category", "work"); code != 0 {
+		t.Fatalf("new-vault exit %d %s", code, h.err.String())
+	}
+	if code := h.run("relate", "welcome", "triage"); code != 0 || !strings.Contains(h.out.String(), "welcome ↔ triage") {
+		t.Fatalf("relate exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("relate", "triage", "welcome"); code != 1 || !strings.Contains(h.err.String(), "already related") {
+		t.Fatalf("relate twice: %d %s", code, h.err.String())
+	}
+	if code := h.run("show", "triage"); code != 0 || !strings.Contains(h.out.String(), "Related from     welcome") {
+		t.Fatalf("show triage:\n%s", h.out.String())
+	}
+	atlas := filepath.Join(filepath.Dir(h.home), "Atlas")
+	overview, _ := os.ReadFile(filepath.Join(atlas, "Overview.md"))
+	if !strings.Contains(string(overview), "| Related | [[tree/work/triage\\|triage]] |") || !strings.Contains(string(overview), "| Related | [[tree/welcome\\|welcome]] |") {
+		t.Fatalf("overview should show the relation on both projects:\n%s", overview)
+	}
+	if code := h.run("unrelate", "triage", "welcome"); code != 0 {
+		t.Fatalf("unrelate exit %d %s", code, h.err.String())
+	}
+	if code := h.run("show", "triage"); code != 0 || strings.Contains(h.out.String(), "Related") {
+		t.Fatalf("still related:\n%s", h.out.String())
+	}
+	if code := h.run("relate", "welcome", "welcome"); code != 1 {
+		t.Fatalf("self relate exit %d", code)
+	}
+}
+
+func TestRefreshWritesTheGraphPages(t *testing.T) {
+	h, _ := setup(t)
+	if code := h.run("new-vault", "triage", "--category", "work/field"); code != 0 {
+		t.Fatalf("new-vault exit %d %s", code, h.err.String())
+	}
+	atlas := filepath.Join(filepath.Dir(h.home), "Atlas")
+	for _, path := range []string{"Tree.md", "categories/work.md", "categories/work/field.md", ".obsidian/graph.json"} {
+		if _, err := os.Stat(filepath.Join(atlas, path)); err != nil {
+			t.Errorf("missing %s", path)
+		}
+	}
+	work, _ := os.ReadFile(filepath.Join(atlas, "categories", "work.md"))
+	if !strings.Contains(string(work), "Part of [[Tree]]") || !strings.Contains(string(work), "[[categories/work/field|field]] · 1 project") {
+		t.Fatalf("work.md:\n%s", work)
+	}
+	root, _ := os.ReadFile(filepath.Join(atlas, "Tree.md"))
+	if !strings.Contains(string(root), "[[tree/welcome|welcome]]") || !strings.Contains(string(root), "[[categories/work|work]] · 1 project") {
+		t.Fatalf("Tree.md:\n%s", root)
+	}
+	if code := h.run("edit", "triage", "--category", ""); code != 0 {
+		t.Fatalf("edit exit %d %s", code, h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(atlas, "categories", "work")); err == nil {
+		t.Fatal("an empty category should be gone after refresh")
 	}
 }
 

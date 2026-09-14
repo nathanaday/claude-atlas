@@ -213,3 +213,56 @@ func TestCategoriesMayContainDotsButNotClimb(t *testing.T) {
 		t.Fatal("a category must not climb out of the tree")
 	}
 }
+
+func TestWalkResolvesLinkPagesAndRelated(t *testing.T) {
+	atlas := t.TempDir()
+	root := filepath.Join(atlas, "tree")
+	repo := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(repo, 0o755)
+	os.MkdirAll(filepath.Join(atlas, "repos"), 0o755)
+	os.WriteFile(filepath.Join(atlas, "repos", "code.md"), []byte("---\nschema: atlas.link.v1\npath: "+repo+"\n---\n"), 0o644)
+	os.MkdirAll(filepath.Join(root, "work"), 0o755)
+	write := func(rel, front string) {
+		os.WriteFile(filepath.Join(root, rel+".md"), []byte("---\nschema: atlas.project.v1\nvault: /v/"+rel+"\n"+front+"---\n"), 0o644)
+	}
+	write("work/a", "name: A\nrepos:\n  - \"[[repos/code|code]]\"\n  - \"[[repos/gone]]\"\nmaterials:\n  - /plain/path\nrelated:\n  - \"[[tree/work/b|B]]\"\n  - \"[[c]]\"\n  - \"[[nobody]]\"\n  - \"[[tree/work/a]]\"\n")
+	write("work/b", "name: B\nrelated:\n  - a\n")
+	write("c", "name: C\n")
+	projects, problems, err := Walk(root)
+	if err != nil || len(problems) != 0 || len(projects) != 3 {
+		t.Fatalf("%v %v %d", err, problems, len(projects))
+	}
+	a := FindByRel(projects, "work/a")
+	if len(a.Linked) != 3 || a.Linked[0].Name != "code" || a.Linked[0].Path != repo || a.Linked[1].Name != "gone" || a.Linked[1].Path != "" || a.Linked[2].Name != "" || a.Linked[2].Path != "/plain/path" {
+		t.Fatalf("linked %+v", a.Linked)
+	}
+	if got := a.Paths("repo"); len(got) != 1 || got[0] != repo {
+		t.Fatalf("paths %v", got)
+	}
+	if !a.LinkedTo(repo) || a.LinkedTo("/nowhere") {
+		t.Fatal("LinkedTo")
+	}
+	if strings.Join(a.RelatedTo, ",") != "work/b,c" {
+		t.Fatalf("related to %v", a.RelatedTo)
+	}
+	warnings := strings.Join(a.Warnings, "\n")
+	for _, want := range []string{"repo: [[repos/gone]] names no page under repos/", "related: [[nobody]] names no project", "related: names the project itself"} {
+		if !strings.Contains(warnings, want) {
+			t.Errorf("missing warning %q in %q", want, warnings)
+		}
+	}
+	b := FindByRel(projects, "work/b")
+	if len(b.RelatedTo) != 1 || b.RelatedTo[0] != "work/a" {
+		t.Fatalf("a bare id resolves: %v", b.RelatedTo)
+	}
+	if from := RelatedFrom(projects, a); len(from) != 1 || from[0].Rel != "work/b" {
+		t.Fatalf("related from %v", from)
+	}
+	if a.Wikilink() != "[[tree/work/a|A]]" {
+		t.Fatalf("wikilink %q", a.Wikilink())
+	}
+	loaded, err := Load(a.Path, root)
+	if err != nil || len(loaded.Linked) != 3 || loaded.Linked[0].Name != "code" {
+		t.Fatalf("Load resolves links too: %+v %v", loaded.Linked, err)
+	}
+}

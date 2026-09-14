@@ -61,6 +61,7 @@ type model struct {
 	categories []string
 	step       step
 	name       textinput.Model
+	where      pathField // the vault's path when adopting
 	category   picker
 	mode       string
 	purpose    textinput.Model
@@ -89,16 +90,24 @@ func newModel(vaultsDir string, categories []string) model {
 func newAdoptModel(categories []string) model {
 	m := newModel("", categories)
 	m.adopting = true
-	m.name.Placeholder = "~/Documents/OldVault"
-	m.name.CharLimit = 300
-	m.name.Width = 60
+	m.name.Blur()
+	m.where = newPathField("~/Documents/OldVault", 60)
+	m.where.focus()
 	return m
 }
 
 func (m model) Init() tea.Cmd { return textinput.Blink }
 
+// typed is the text of the first step: a name, or a path when adopting.
+func (m model) typed() string {
+	if m.adopting {
+		return m.where.value()
+	}
+	return strings.TrimSpace(m.name.Value())
+}
+
 func (m model) slug() string {
-	source := m.name.Value()
+	source := m.typed()
 	if m.adopting {
 		source = filepath.Base(m.path())
 	}
@@ -111,7 +120,7 @@ func (m model) slug() string {
 
 func (m model) path() string {
 	if m.adopting {
-		abs, err := filepath.Abs(home.Expand(strings.TrimSpace(m.name.Value())))
+		abs, err := filepath.Abs(home.Expand(m.typed()))
 		if err != nil {
 			return ""
 		}
@@ -124,7 +133,7 @@ func (m model) nameError() string {
 	if m.adopting {
 		return m.pathError()
 	}
-	if strings.TrimSpace(m.name.Value()) == "" {
+	if m.typed() == "" {
 		return "type a name"
 	}
 	if m.slug() == "" {
@@ -137,7 +146,7 @@ func (m model) nameError() string {
 }
 
 func (m model) pathError() string {
-	if strings.TrimSpace(m.name.Value()) == "" {
+	if m.typed() == "" {
 		return "type the vault's path"
 	}
 	info, err := os.Stat(m.path())
@@ -155,10 +164,14 @@ func (m model) pathError() string {
 
 func (m *model) focus() tea.Cmd {
 	m.name.Blur()
+	m.where.blur()
 	m.category.blur()
 	m.purpose.Blur()
 	switch m.step {
 	case stepName:
+		if m.adopting {
+			return m.where.focus()
+		}
 		return m.name.Focus()
 	case stepCategory:
 		return m.category.focus()
@@ -190,7 +203,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch m.step {
 	case stepName:
-		m.name, cmd = m.name.Update(msg)
+		if m.adopting {
+			m.where, cmd = m.where.update(msg)
+		} else {
+			m.name, cmd = m.name.Update(msg)
+		}
 		m.err = ""
 	case stepCategory:
 		m.category, cmd = m.category.update(msg)
@@ -238,7 +255,7 @@ func (m model) result() *AddVault {
 	if m.cancelled || !m.done {
 		return nil
 	}
-	name := strings.TrimSpace(m.name.Value())
+	name := m.typed()
 	if m.adopting {
 		name = filepath.Base(m.path())
 	}
@@ -261,7 +278,13 @@ func (m model) View() string {
 	}
 	b.WriteString("\n  " + title.Render(heading) + "\n\n")
 
-	b.WriteString(m.row(stepName, first, m.name.View()))
+	if m.adopting && m.step == stepName {
+		b.WriteString(m.row(stepName, first, m.where.view("             ")))
+	} else if m.adopting {
+		b.WriteString(m.row(stepName, first, m.typed()))
+	} else {
+		b.WriteString(m.row(stepName, first, m.name.View()))
+	}
 	if m.step == stepName {
 		if m.err != "" {
 			b.WriteString("             " + errSt.Render(m.err) + "\n")
@@ -323,6 +346,10 @@ func (m model) View() string {
 	} else {
 		hints := "Enter next"
 		switch m.step {
+		case stepName:
+			if m.adopting {
+				hints += " · " + pathHint()
+			}
 		case stepCategory:
 			hints += " · ↑↓ choose · type to filter or name a new category"
 		case stepMode:

@@ -9,10 +9,11 @@ import (
 
 const topLevel = "(top level)"
 
-// option is one row of the category picker.
+// option is one row of a picker.
 type option struct {
 	label  string // what the row shows
-	value  string // category path; "" for the top level
+	value  string // what choosing it means; "" for the top level
+	match  string // what the filter matches against; the label when empty
 	create bool   // the row creates a new category
 }
 
@@ -38,25 +39,51 @@ func categoryOptions(known []string, typed string) []option {
 	return opts
 }
 
-// picker is a filterable category list that also accepts a new name.
+// filterOptions keeps the options whose match text contains the typed text.
+func filterOptions(all []option, typed string) []option {
+	typed = strings.ToLower(strings.TrimSpace(typed))
+	var opts []option
+	for _, opt := range all {
+		text := opt.match
+		if text == "" {
+			text = opt.label
+		}
+		if typed == "" || strings.Contains(strings.ToLower(text), typed) {
+			opts = append(opts, opt)
+		}
+	}
+	return opts
+}
+
+// picker is a filterable list. The category picker also accepts a new name.
 type picker struct {
-	known  []string
-	input  textinput.Model
-	cursor int
+	options func(typed string) []option
+	input   textinput.Model
+	cursor  int
+}
+
+func newInput(placeholder string) textinput.Model {
+	input := textinput.New()
+	input.Placeholder = placeholder
+	input.Prompt = ""
+	input.CharLimit = 120
+	return input
 }
 
 func newPicker(known []string) picker {
-	input := textinput.New()
-	input.Placeholder = "type to filter, or a new name"
-	input.Prompt = ""
-	input.CharLimit = 120
-	return picker{known: known, input: input}
+	return picker{options: func(typed string) []option { return categoryOptions(known, typed) }, input: newInput("type to filter, or a new name")}
 }
 
-func (p picker) options() []option { return categoryOptions(p.known, p.input.Value()) }
+// newOptionPicker chooses among fixed options.
+func newOptionPicker(all []option) picker {
+	return picker{options: func(typed string) []option { return filterOptions(all, typed) }, input: newInput("type to filter")}
+}
 
 func (p picker) selected() option {
-	opts := p.options()
+	opts := p.options(p.input.Value())
+	if len(opts) == 0 {
+		return option{}
+	}
 	if p.cursor >= len(opts) {
 		return opts[0]
 	}
@@ -74,13 +101,17 @@ func (p *picker) blur()          { p.input.Blur() }
 // update handles movement keys itself and passes everything else to the input.
 func (p picker) update(msg tea.Msg) (picker, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
-		n := len(p.options())
+		n := len(p.options(p.input.Value()))
 		switch key.Type {
 		case tea.KeyUp:
-			p.cursor = (p.cursor + n - 1) % n
+			if n > 0 {
+				p.cursor = (p.cursor + n - 1) % n
+			}
 			return p, nil
 		case tea.KeyDown:
-			p.cursor = (p.cursor + 1) % n
+			if n > 0 {
+				p.cursor = (p.cursor + 1) % n
+			}
 			return p, nil
 		}
 	}
@@ -97,7 +128,11 @@ func (p picker) update(msg tea.Msg) (picker, tea.Cmd) {
 func (p picker) view(pad string) string {
 	var b strings.Builder
 	b.WriteString(p.input.View() + "\n")
-	for i, opt := range p.options() {
+	opts := p.options(p.input.Value())
+	if len(opts) == 0 {
+		b.WriteString(pad + dim.Render("no match") + "\n")
+	}
+	for i, opt := range opts {
 		marker := "  "
 		text := opt.label
 		if opt.create {

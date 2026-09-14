@@ -23,6 +23,7 @@ const (
 // Link is the derived view of one linked folder.
 type Link struct {
 	Kind  string `json:"kind"`
+	Name  string `json:"name,omitempty"` // the link page, when the folder has one
 	Path  string `json:"path"`
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
@@ -46,7 +47,7 @@ func (l Link) Touched() (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// DetectKind says what a path is: a repo when it holds .git, else materials.
+// DetectKind says what a path is: a repo when it is a directory holding .git, else materials.
 func DetectKind(path string) string {
 	if _, err := os.Stat(filepath.Join(home.Expand(path), ".git")); err == nil {
 		return Repo
@@ -64,7 +65,14 @@ func Inspect(kind, path string) Link {
 		return link
 	}
 	if !info.IsDir() {
-		link.Error = "not a directory"
+		if kind == Repo {
+			link.Error = "not a directory"
+			return link
+		}
+		// A single file is material too: one file, its size, its date.
+		link.OK = true
+		one, size := 1, info.Size()
+		link.Files, link.Bytes, link.Newest = &one, &size, info.ModTime().Format("2006-01-02")
 		return link
 	}
 	link.OK = true

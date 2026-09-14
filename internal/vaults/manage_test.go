@@ -3,6 +3,7 @@ package vaults
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
@@ -95,38 +96,173 @@ func TestUnlinkLeavesTheVault(t *testing.T) {
 	}
 }
 
-func TestAddAndRemoveLinks(t *testing.T) {
+func reload(t *testing.T, cfg *home.Config, p *tree.Project) *tree.Project {
+	t.Helper()
+	projects, _, err := tree.Walk(cfg.TreeRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := tree.FindByRel(projects, p.Rel)
+	if q == nil {
+		t.Fatalf("%s vanished", p.Rel)
+	}
+	return q
+}
+
+func TestAddAndRemoveLinksThroughPages(t *testing.T) {
 	cfg, p := setup(t)
 	repo := filepath.Join(cfg.VaultsDir, "code")
 	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
 	docs := filepath.Join(cfg.VaultsDir, "docs")
 	os.MkdirAll(docs, 0o755)
-	if err := AddLink(p, links.DetectKind(repo), repo); err != nil {
+	page, err := AddLink(cfg, p, "", repo)
+	if err != nil {
 		t.Fatal(err)
 	}
-	p, _ = tree.Load(p.Path, cfg.TreeRoot())
-	if err := AddLink(p, links.DetectKind(docs), docs); err != nil {
+	if page.Kind != links.Repo || page.Name != "code" || page.File != filepath.Join(cfg.AtlasVault, "repos", "code.md") {
+		t.Fatalf("page %+v", page)
+	}
+	text, _ := os.ReadFile(page.File)
+	if !strings.Contains(string(text), "schema: atlas.link.v1") || !strings.Contains(string(text), "path: "+repo) {
+		t.Fatalf("page text:\n%s", text)
+	}
+	p = reload(t, cfg, p)
+	if len(p.Repos) != 1 || p.Repos[0] != "[[repos/code|code]]" {
+		t.Fatalf("repos entry %v", p.Repos)
+	}
+	if _, err := AddLink(cfg, p, "", docs); err != nil {
 		t.Fatal(err)
 	}
-	p, _ = tree.Load(p.Path, cfg.TreeRoot())
-	if len(p.Repos) != 1 || p.Repos[0] != repo || len(p.Materials) != 1 || p.Materials[0] != docs {
-		t.Fatalf("got repos=%v materials=%v", p.Repos, p.Materials)
+	p = reload(t, cfg, p)
+	if len(p.Linked) != 2 || p.Linked[0].Name != "code" || p.Linked[0].Path != repo || p.Linked[1].Kind != links.Materials || p.Linked[1].Path != docs {
+		t.Fatalf("linked %+v", p.Linked)
 	}
-	if err := AddLink(p, links.Materials, repo); err == nil {
+	if !p.LinkedTo(repo) || len(p.Paths(links.Materials)) != 1 {
+		t.Fatal("helpers should see both links")
+	}
+	if _, err := AddLink(cfg, p, links.Materials, repo); err == nil {
 		t.Fatal("duplicate link should fail")
 	}
-	if err := AddLink(p, links.Materials, filepath.Join(cfg.VaultsDir, "nope")); err == nil {
-		t.Fatal("missing directory should fail")
+	if _, err := AddLink(cfg, p, "", filepath.Join(cfg.VaultsDir, "nope")); err == nil {
+		t.Fatal("missing path should fail")
 	}
-	if err := RemoveLink(p, repo); err != nil {
+	// Another project links the same repo by page name and shares the node.
+	other := fakeVault(t, filepath.Join(cfg.VaultsDir, "b"))
+	q, err := Register(cfg, other, RegisterOptions{Name: "B"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	p, _ = tree.Load(p.Path, cfg.TreeRoot())
+	shared, err := AddLink(cfg, q, "", "code")
+	if err != nil || shared.File != page.File {
+		t.Fatalf("link by name: %v %+v", err, shared)
+	}
+	pages, _, _ := links.Walk(cfg.AtlasVault)
+	if len(pages) != 2 {
+		t.Fatalf("pages %+v", pages)
+	}
+	if err := RemoveLink(cfg, p, "code"); err != nil {
+		t.Fatal(err)
+	}
+	p = reload(t, cfg, p)
 	if len(p.Repos) != 0 || len(p.Materials) != 1 {
 		t.Fatalf("after remove: repos=%v materials=%v", p.Repos, p.Materials)
 	}
-	if err := RemoveLink(p, repo); err == nil {
+	if _, err := os.Stat(page.File); err != nil {
+		t.Fatal("removing a link must not delete the page")
+	}
+	if err := RemoveLink(cfg, p, repo); err == nil {
 		t.Fatal("removing an unlinked path should fail")
+	}
+	if err := RemoveLink(cfg, p, docs); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLinkPageDecidesTheKind(t *testing.T) {
+	cfg, p := setup(t)
+	slides := filepath.Join(cfg.VaultsDir, "slides")
+	os.MkdirAll(slides, 0o755)
+	if _, err := AddLink(cfg, p, links.Materials, slides); err != nil {
+		t.Fatal(err)
+	}
+	other := fakeVault(t, filepath.Join(cfg.VaultsDir, "b"))
+	q, _ := Register(cfg, other, RegisterOptions{Name: "B"})
+	page, err := AddLink(cfg, q, links.Repo, slides)
+	if err != nil || page.Kind != links.Materials {
+		t.Fatalf("an existing page keeps its kind: %v %+v", err, page)
+	}
+	q = reload(t, cfg, q)
+	if len(q.Materials) != 1 || len(q.Repos) != 0 {
+		t.Fatalf("q lists %v %v", q.Repos, q.Materials)
+	}
+}
+
+func TestUpgradeLinksGivesPlainPathsPages(t *testing.T) {
+	cfg, p := setup(t)
+	repo := filepath.Join(cfg.VaultsDir, "code")
+	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	docs := filepath.Join(cfg.VaultsDir, "docs")
+	os.MkdirAll(docs, 0o755)
+	if err := tree.UpdateFrontmatter(p.Path, map[string]any{"repos": []string{repo}, "materials": []string{docs}}); err != nil {
+		t.Fatal(err)
+	}
+	p = reload(t, cfg, p)
+	if p.Linked[0].Name != "" || p.Linked[0].Path != repo {
+		t.Fatalf("a plain path resolves to itself: %+v", p.Linked)
+	}
+	upgraded, err := UpgradeLinks(cfg)
+	if err != nil || len(upgraded) != 1 || upgraded[0] != p.Rel {
+		t.Fatalf("upgraded %v %v", upgraded, err)
+	}
+	p = reload(t, cfg, p)
+	if p.Repos[0] != "[[repos/code|code]]" || p.Materials[0] != "[[materials/docs|docs]]" || p.Linked[1].Path != docs {
+		t.Fatalf("after upgrade repos=%v materials=%v linked=%+v", p.Repos, p.Materials, p.Linked)
+	}
+	if again, _ := UpgradeLinks(cfg); len(again) != 0 {
+		t.Fatalf("second upgrade should change nothing: %v", again)
+	}
+}
+
+func TestRelateAndUnrelate(t *testing.T) {
+	cfg, a := setup(t)
+	b, _ := Register(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "b")), RegisterOptions{Name: "B", Category: "work"})
+	if err := Relate(cfg, a, a); err == nil {
+		t.Fatal("self relation should fail")
+	}
+	if err := Relate(cfg, a, b); err != nil {
+		t.Fatal(err)
+	}
+	a, b = reload(t, cfg, a), reload(t, cfg, b)
+	if len(a.Related) != 1 || a.Related[0] != "[[tree/work/b|B]]" || len(a.RelatedTo) != 1 || a.RelatedTo[0] != "work/b" {
+		t.Fatalf("a: related=%v to=%v", a.Related, a.RelatedTo)
+	}
+	projects, _, _ := tree.Walk(cfg.TreeRoot())
+	if from := tree.RelatedFrom(projects, tree.FindByRel(projects, b.Rel)); len(from) != 1 || from[0].Rel != a.Rel {
+		t.Fatalf("b should see a as related from: %v", from)
+	}
+	if err := Relate(cfg, b, a); err == nil {
+		t.Fatal("relating from the other side should say they are related already")
+	}
+	if err := Unrelate(cfg, b, a); err != nil {
+		t.Fatal("unrelate works from either side:", err)
+	}
+	a = reload(t, cfg, a)
+	if len(a.RelatedTo) != 0 {
+		t.Fatalf("still related: %v", a.Related)
+	}
+	if err := Unrelate(cfg, a, b); err == nil {
+		t.Fatal("unrelating unrelated projects should fail")
+	}
+	// Edit replaces the whole list.
+	if err := Update(cfg, a, Edit{Related: &[]string{b.Rel}}); err != nil {
+		t.Fatal(err)
+	}
+	a = reload(t, cfg, a)
+	if len(a.RelatedTo) != 1 {
+		t.Fatalf("edit related: %v", a.Related)
+	}
+	if err := Update(cfg, a, Edit{Related: &[]string{"nope"}}); err == nil {
+		t.Fatal("unknown project should fail")
 	}
 }
 

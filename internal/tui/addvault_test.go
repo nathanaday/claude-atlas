@@ -154,17 +154,17 @@ func TestAdoptModelValidatesPath(t *testing.T) {
 		t.Fatalf("empty: %q", m.nameError())
 	}
 	plain := t.TempDir()
-	m.name.SetValue(plain)
+	m.where.setValue(plain)
 	if !strings.Contains(m.nameError(), "not a vault") {
 		t.Fatalf("plain dir: %q", m.nameError())
 	}
-	m.name.SetValue(filepath.Join(plain, "missing"))
+	m.where.setValue(filepath.Join(plain, "missing"))
 	if !strings.Contains(m.nameError(), "not a directory") {
 		t.Fatalf("missing: %q", m.nameError())
 	}
 	old := filepath.Join(plain, "My Vault")
 	os.MkdirAll(filepath.Join(old, "wiki"), 0o755)
-	m.name.SetValue(old)
+	m.where.setValue(old)
 	if m.nameError() != "" || m.slug() != "my-vault" || m.path() != old {
 		t.Fatalf("adoptable: err=%q slug=%q path=%q", m.nameError(), m.slug(), m.path())
 	}
@@ -176,6 +176,28 @@ func TestAdoptModelValidatesPath(t *testing.T) {
 	r := m.result()
 	if r == nil || !r.Adopt || r.Name != "My Vault" || r.Path != old {
 		t.Fatalf("result %+v", r)
+	}
+}
+
+func TestAdoptPathCompletes(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "Vaults", "old"), 0o755)
+	os.MkdirAll(filepath.Join(root, "Videos"), 0o755)
+	m := newAdoptModel(nil)
+	m = typeText(m, filepath.Join(root, "V"))
+	if got := m.where.input.MatchedSuggestions(); len(got) != 2 || got[0] != filepath.Join(root, "Vaults")+"/" {
+		t.Fatalf("suggestions %v", got)
+	}
+	m = press(m, tea.KeyTab)
+	if m.where.value() != filepath.Join(root, "Vaults")+"/" {
+		t.Fatalf("tab should complete: %q", m.where.value())
+	}
+	if !strings.Contains(m.View(), "old/") {
+		t.Fatalf("matches should show under the line:\n%s", m.View())
+	}
+	m = press(m, tea.KeyTab)
+	if m.where.value() != filepath.Join(root, "Vaults", "old")+"/" {
+		t.Fatalf("second tab: %q", m.where.value())
 	}
 }
 

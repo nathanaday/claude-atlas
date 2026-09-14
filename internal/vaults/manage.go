@@ -28,8 +28,10 @@ type Edit struct {
 	Category         *string // nil: unchanged; "" : top level
 	Vault            string  // new vault path; "" unchanged
 	MoveVault        bool    // move the directory on disk to Vault
-	Repos            *[]string
-	Materials        *[]string
+	// Links replaces the linked folders; a page without a Name is created on save.
+	Links *[]links.Page
+	// Related replaces the related projects, by rel.
+	Related *[]string
 }
 
 // ValidReviewDate reports whether s is empty or a YYYY-MM-DD date.
@@ -76,11 +78,19 @@ func Update(cfg *home.Config, p *tree.Project, edit Edit) error {
 	if edit.State != "" && edit.State != p.State {
 		fields["state"] = edit.State
 	}
-	if edit.Repos != nil {
-		fields["repos"] = orEmpty(*edit.Repos)
+	if edit.Links != nil {
+		repos, materials, err := linkEntries(cfg, *edit.Links)
+		if err != nil {
+			return err
+		}
+		fields["repos"], fields["materials"] = repos, materials
 	}
-	if edit.Materials != nil {
-		fields["materials"] = orEmpty(*edit.Materials)
+	if edit.Related != nil {
+		related, err := relatedEntries(cfg, p, *edit.Related)
+		if err != nil {
+			return err
+		}
+		fields["related"] = related
 	}
 	if edit.Vault != "" {
 		target, err := filepath.Abs(home.Expand(edit.Vault))
@@ -133,64 +143,237 @@ func orEmpty(list []string) []string {
 	return list
 }
 
-// SetLinks replaces a project's repo and materials lists.
-func SetLinks(p *tree.Project, repos, materials []string) error {
-	if repos == nil {
-		repos = []string{}
+// linkEntries turns pages into the repos and materials lists, creating the page for any
+// folder that has none yet.
+func linkEntries(cfg *home.Config, pages []links.Page) (repos, materials []string, err error) {
+	repos, materials = []string{}, []string{}
+	existing, _, err := links.Walk(cfg.AtlasVault)
+	if err != nil {
+		return nil, nil, err
 	}
-	if materials == nil {
-		materials = []string{}
+	seen := map[string]bool{}
+	for _, page := range pages {
+		if page.Name == "" {
+			created, err := links.Create(cfg.AtlasVault, page.Kind, page.Path, existing)
+			if err != nil {
+				return nil, nil, err
+			}
+			existing = append(existing, created)
+			page = created
+		}
+		if seen[page.Rel()] {
+			continue
+		}
+		seen[page.Rel()] = true
+		if page.Kind == links.Repo {
+			repos = append(repos, page.Wikilink())
+		} else {
+			materials = append(materials, page.Wikilink())
+		}
+	}
+	return repos, materials, nil
+}
+
+// relatedEntries turns project rels into wikilinks, in the order given.
+func relatedEntries(cfg *home.Config, p *tree.Project, rels []string) ([]string, error) {
+	projects, _, err := tree.Walk(cfg.TreeRoot())
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, rel := range rels {
+		q := tree.FindByRel(projects, rel)
+		if q == nil {
+			return nil, fmt.Errorf("no project named %q", rel)
+		}
+		if q.Rel == p.Rel {
+			return nil, fmt.Errorf("%s cannot relate to itself", p.Name)
+		}
+		if !contains(out, q.Wikilink()) {
+			out = append(out, q.Wikilink())
+		}
+	}
+	return out, nil
+}
+
+// SetLinks replaces a project's linked folders.
+func SetLinks(cfg *home.Config, p *tree.Project, pages []links.Page) error {
+	repos, materials, err := linkEntries(cfg, pages)
+	if err != nil {
+		return err
 	}
 	return tree.UpdateFrontmatter(p.Path, map[string]any{"repos": repos, "materials": materials})
 }
 
-// AddLink records a folder on a project page; kind is links.Repo or links.Materials.
-func AddLink(p *tree.Project, kind, path string) error {
-	abs, err := filepath.Abs(home.Expand(path))
+// currentLinks lists a project's linked folders as pages, keeping plain paths as
+// pages without a name so a save gives them one.
+func currentLinks(p *tree.Project) []links.Page {
+	var out []links.Page
+	for _, l := range p.Linked {
+		if l.Path == "" {
+			continue
+		}
+		out = append(out, links.Page{Kind: l.Kind, Name: l.Name, Path: l.Path})
+	}
+	return out
+}
+
+// ResolveTarget finds what a user means by a link target: the name of a page of the
+// kind, or a folder on disk. kind may be empty to detect it from the folder.
+func ResolveTarget(cfg *home.Config, kind, target string) (links.Page, error) {
+	pages, _, err := links.Walk(cfg.AtlasVault)
+	if err != nil {
+		return links.Page{}, err
+	}
+	if !strings.ContainsAny(target, "/~") {
+		for _, k := range []string{links.Repo, links.Materials} {
+			if kind != "" && kind != k {
+				continue
+			}
+			if page := links.FindByName(pages, k, target); page != nil {
+				return *page, nil
+			}
+		}
+	}
+	abs, err := filepath.Abs(home.Expand(target))
+	if err != nil {
+		return links.Page{}, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return links.Page{}, fmt.Errorf("%s is neither a linked folder's page nor a path on disk", target)
+	}
+	if kind == "" {
+		kind = links.DetectKind(abs)
+	}
+	if kind == links.Repo && !info.IsDir() {
+		return links.Page{}, fmt.Errorf("%s is not a directory", home.Display(abs))
+	}
+	if page := links.FindByPath(pages, abs); page != nil {
+		return *page, nil
+	}
+	return links.Page{Kind: kind, Path: abs}, nil
+}
+
+// AddLink links a folder to a project: target is a page name or a path; kind is
+// links.Repo, links.Materials, or "" to detect it. It returns the page, created if new.
+func AddLink(cfg *home.Config, p *tree.Project, kind, target string) (links.Page, error) {
+	page, err := ResolveTarget(cfg, kind, target)
+	if err != nil {
+		return links.Page{}, err
+	}
+	if p.LinkedTo(page.Path) {
+		return page, fmt.Errorf("%s is already linked to %s", home.Display(page.Path), p.Name)
+	}
+	pages := append(currentLinks(p), page)
+	if err := SetLinks(cfg, p, pages); err != nil {
+		return links.Page{}, err
+	}
+	if page.Name == "" {
+		existing, _, _ := links.Walk(cfg.AtlasVault)
+		if created := links.FindByPath(existing, page.Path); created != nil {
+			page = *created
+		}
+	}
+	return page, nil
+}
+
+// RemoveLink drops a folder from a project page, by path or page name. The page and the
+// folder are untouched.
+func RemoveLink(cfg *home.Config, p *tree.Project, target string) error {
+	abs, _ := filepath.Abs(home.Expand(target))
+	var keep []links.Page
+	found := false
+	for _, l := range p.Linked {
+		match := (l.Path != "" && filepath.Clean(l.Path) == filepath.Clean(abs)) || (l.Name != "" && strings.EqualFold(l.Name, target))
+		if match {
+			found = true
+			continue
+		}
+		if l.Path == "" {
+			continue
+		}
+		keep = append(keep, links.Page{Kind: l.Kind, Name: l.Name, Path: l.Path})
+	}
+	if !found {
+		return fmt.Errorf("%s is not linked to %s", target, p.Name)
+	}
+	return SetLinks(cfg, p, keep)
+}
+
+// Relate records that a and b belong together. One side holds the link; the other
+// side's page shows it as a backlink, and the atlas reads both directions.
+func Relate(cfg *home.Config, a, b *tree.Project) error {
+	if a.Rel == b.Rel {
+		return fmt.Errorf("%s cannot relate to itself", a.Name)
+	}
+	if contains(a.RelatedTo, b.Rel) || contains(b.RelatedTo, a.Rel) {
+		return fmt.Errorf("%s and %s are already related", a.Name, b.Name)
+	}
+	related, err := relatedEntries(cfg, a, append(append([]string{}, a.RelatedTo...), b.Rel))
 	if err != nil {
 		return err
 	}
-	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", home.Display(abs))
-	}
-	for _, existing := range append(append([]string{}, p.Repos...), p.Materials...) {
-		if filepath.Clean(home.Expand(existing)) == abs {
-			return fmt.Errorf("%s is already linked", home.Display(abs))
-		}
-	}
-	repos, materials := p.Repos, p.Materials
-	if kind == links.Repo {
-		repos = append(repos, abs)
-	} else {
-		materials = append(materials, abs)
-	}
-	return SetLinks(p, repos, materials)
+	return tree.UpdateFrontmatter(a.Path, map[string]any{"related": related})
 }
 
-// RemoveLink drops a folder from a project page, whichever list holds it.
-func RemoveLink(p *tree.Project, path string) error {
-	target := filepath.Clean(home.Expand(path))
-	keep := func(list []string) ([]string, bool) {
-		var out []string
-		found := false
-		for _, item := range list {
-			if filepath.Clean(home.Expand(item)) == target {
-				found = true
-				continue
-			}
-			out = append(out, item)
+// Unrelate removes the relation between a and b from whichever side holds it.
+func Unrelate(cfg *home.Config, a, b *tree.Project) error {
+	found := false
+	for _, pair := range [][2]*tree.Project{{a, b}, {b, a}} {
+		from, to := pair[0], pair[1]
+		if !contains(from.RelatedTo, to.Rel) {
+			continue
 		}
-		return out, found
+		found = true
+		var keep []string
+		for _, rel := range from.RelatedTo {
+			if rel != to.Rel {
+				keep = append(keep, rel)
+			}
+		}
+		related, err := relatedEntries(cfg, from, keep)
+		if err != nil {
+			return err
+		}
+		if err := tree.UpdateFrontmatter(from.Path, map[string]any{"related": related}); err != nil {
+			return err
+		}
 	}
-	repos, inRepos := keep(p.Repos)
-	materials, inMaterials := keep(p.Materials)
-	if !inRepos && !inMaterials {
-		return fmt.Errorf("%s is not linked to %s", home.Display(target), p.Name)
+	if !found {
+		return fmt.Errorf("%s and %s are not related", a.Name, b.Name)
 	}
-	return SetLinks(p, repos, materials)
+	return nil
 }
 
 // Unlink removes a project from the atlas. The vault stays on disk.
 func Unlink(p *tree.Project) error {
 	return tree.Unlink(p)
+}
+
+// UpgradeLinks gives every plain folder path in a repos or materials list a page and
+// rewrites the entry as a wikilink, so the graph shows the folder. It returns the rels
+// of the pages it changed. Pages that already use wikilinks are untouched.
+func UpgradeLinks(cfg *home.Config) ([]string, error) {
+	projects, _, err := tree.Walk(cfg.TreeRoot())
+	if err != nil {
+		return nil, err
+	}
+	var upgraded []string
+	for _, p := range projects {
+		plain := false
+		for _, l := range p.Linked {
+			if l.Name == "" && l.Path != "" {
+				plain = true
+			}
+		}
+		if !plain {
+			continue
+		}
+		if err := SetLinks(cfg, p, currentLinks(p)); err != nil {
+			return upgraded, fmt.Errorf("%s: %w", p.Rel, err)
+		}
+		upgraded = append(upgraded, p.Rel)
+	}
+	return upgraded, nil
 }

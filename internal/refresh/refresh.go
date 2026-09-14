@@ -1,7 +1,9 @@
-// Package refresh derives state.json for every node and renders Atlas.md.
+// Package refresh derives state for every project and link page, rewrites the generated
+// pages of the atlas vault, and renders Overview.md.
 package refresh
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,9 +16,11 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
+	"github.com/nathanaday/claude-atlas/internal/pages"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 const (
@@ -195,6 +199,11 @@ func baseState(generatedAt string) *tree.State {
 // Derive observes one project's vault: a claude-atlas vault, or a claude-obsidian vault
 // that has not been adopted yet, which reads the same way but is marked legacy.
 func Derive(project *tree.Project, today time.Time, generatedAt string) *tree.State {
+	return derive(project, today, generatedAt, nil)
+}
+
+// derive is Derive with the link facts already known, keyed by folder path.
+func derive(project *tree.Project, today time.Time, generatedAt string, facts map[string]links.Link) *tree.State {
 	state := baseState(generatedAt)
 	state.Project = project.Rel
 	root := project.VaultPath()
@@ -218,7 +227,7 @@ func Derive(project *tree.Project, today time.Time, generatedAt string) *tree.St
 		touched, touchedFound = mt, true
 	}
 	// Work in a linked repo or on linked material counts as work on the project.
-	state.Links = inspectLinks(project)
+	state.Links = inspectLinks(project, facts)
 	for _, link := range state.Links {
 		if t, ok := link.Touched(); ok && (!touchedFound || t.After(touched)) {
 			touched, touchedFound = t, true
@@ -263,15 +272,36 @@ func Derive(project *tree.Project, today time.Time, generatedAt string) *tree.St
 	return state
 }
 
-func inspectLinks(project *tree.Project) []links.Link {
+func inspectLinks(project *tree.Project, facts map[string]links.Link) []links.Link {
 	out := []links.Link{}
-	for _, path := range project.Repos {
-		out = append(out, links.Inspect(links.Repo, path))
-	}
-	for _, path := range project.Materials {
-		out = append(out, links.Inspect(links.Materials, path))
+	for _, l := range project.Linked {
+		if l.Path == "" {
+			continue
+		}
+		link, ok := facts[l.Path]
+		if !ok || link.Kind != l.Kind {
+			link = links.Inspect(l.Kind, l.Path)
+		}
+		link.Name = l.Name
+		out = append(out, link)
 	}
 	return out
+}
+
+// linkLabel names a link by its page, or by its path when it has none.
+func linkLabel(l links.Link) string {
+	if l.Name != "" {
+		return l.Name + " (" + home.Display(home.Expand(l.Path)) + ")"
+	}
+	return home.Display(home.Expand(l.Path))
+}
+
+// linkCell renders a link for a table: the page, or the path when it has none.
+func linkCell(l links.Link) string {
+	if l.Name != "" {
+		return "[[" + links.Dir(l.Kind) + "/" + l.Name + "\\|" + l.Name + "]]"
+	}
+	return "`" + home.Display(home.Expand(l.Path)) + "`"
 }
 
 // LinkSummary renders one link's derived facts on a line.
@@ -330,30 +360,58 @@ type Row struct {
 	State   *tree.State
 }
 
-// Result is one refresh: rows in tree order plus files that could not be read as projects.
+// Result is one refresh: rows in tree order, files that could not be read as projects,
+// every link page with its facts, and the project pages whose links were upgraded.
 type Result struct {
-	Rows     []Row
-	Problems []tree.Problem
+	Rows         []Row
+	Problems     []tree.Problem
+	Links        []LinkRow
+	LinkProblems []links.Problem
+	Upgraded     []string
 }
 
-// Tree derives state for every project and rewrites the state directory from scratch.
+// Tree derives state for every project and link page, rewrites the state directory from
+// scratch, and regenerates the category pages.
 func Tree(cfg *home.Config, stateDir string, today time.Time, generatedAt string) (*Result, error) {
+	upgraded, err := vaults.UpgradeLinks(cfg)
+	if err != nil {
+		return nil, err
+	}
 	projects, problems, err := tree.Walk(cfg.TreeRoot())
 	if err != nil {
 		return nil, err
+	}
+	pages, linkProblems, err := links.Walk(cfg.AtlasVault)
+	if err != nil {
+		return nil, err
+	}
+	linkRows := inspectPages(pages, projects)
+	facts := map[string]links.Link{}
+	for _, r := range linkRows {
+		facts[r.Page.Path] = r.Link
 	}
 	if err := os.RemoveAll(stateDir); err != nil {
 		return nil, err
 	}
 	rows := make([]Row, 0, len(projects))
 	for _, project := range projects {
-		state := Derive(project, today, generatedAt)
+		state := derive(project, today, generatedAt, facts)
 		if err := tree.WriteState(stateDir, project.Rel, state); err != nil {
 			return nil, err
 		}
 		rows = append(rows, Row{project, state})
 	}
-	return &Result{Rows: rows, Problems: problems}, nil
+	data, err := json.MarshalIndent(LinksState{Schema: LinksStateSchema, GeneratedAt: generatedAt, Links: linkRows}, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(linksStatePath(stateDir), append(data, '\n'), 0o644); err != nil {
+		return nil, err
+	}
+	if err := WriteCategories(cfg, projects); err != nil {
+		return nil, err
+	}
+	return &Result{Rows: rows, Problems: problems, Links: linkRows, LinkProblems: linkProblems, Upgraded: upgraded}, nil
 }
 
 var (
@@ -400,9 +458,10 @@ func Signals(node *tree.Project, state *tree.State, today time.Time) []string {
 	}
 	for _, link := range state.Links {
 		if !link.OK {
-			notes = append(notes, fmt.Sprintf("%s %s: %s", link.Kind, home.Display(home.Expand(link.Path)), link.Error))
+			notes = append(notes, fmt.Sprintf("%s %s: %s", link.Kind, linkLabel(link), link.Error))
 		}
 	}
+	notes = append(notes, node.Warnings...)
 	if node.State == "blocked" {
 		on := node.BlockedOn
 		if on == "" {
@@ -418,6 +477,53 @@ func Signals(node *tree.Project, state *tree.State, today time.Time) []string {
 		}
 	}
 	return notes
+}
+
+// LinkSignals lists what is wrong across the link pages: files that are not link pages,
+// and pages no project links.
+func LinkSignals(res *Result) []string {
+	var notes []string
+	for _, problem := range res.LinkProblems {
+		notes = append(notes, fmt.Sprintf("%s is not a link page: %s", problem.File, problem.Reason))
+	}
+	for _, row := range res.Links {
+		if len(row.Projects) == 0 {
+			notes = append(notes, fmt.Sprintf("%s.md is linked by no project; link it with `claude-atlas link NAME %s` or delete the page", row.Page.Rel(), row.Page.Name))
+		}
+	}
+	return notes
+}
+
+// related lists the projects related to p, in either direction, as table cells.
+func related(rows []Row, p *tree.Project) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, rel := range p.RelatedTo {
+		for _, r := range rows {
+			if r.Project.Rel == rel && !seen[rel] {
+				seen[rel] = true
+				out = append(out, "[[tree/"+rel+"\\|"+r.Project.Name+"]]")
+			}
+		}
+	}
+	for _, r := range rows {
+		if r.Project != p && !seen[r.Project.Rel] {
+			for _, rel := range r.Project.RelatedTo {
+				if rel == p.Rel {
+					seen[r.Project.Rel] = true
+					out = append(out, "[[tree/"+r.Project.Rel+"\\|"+r.Project.Name+"]]")
+				}
+			}
+		}
+	}
+	return out
+}
+
+func categoryCell(category string) string {
+	if category == "" {
+		return "—"
+	}
+	return "[[" + CategoriesDir + "/" + category + "\\|" + category + "]]"
 }
 
 // Render writes the overview page: callouts and tables, nothing else.
@@ -459,7 +565,7 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 	})
 	for _, r := range sorted {
 		fmt.Fprintf(&b, "| %s | [[tree/%s\\|%s]] | %s | %s | %s | %s | %s | %d | %s |\n",
-			heatLabel(r.State.Heat), r.Project.Rel, r.Project.Name, categoryLabel(r.Project.Category()),
+			heatLabel(r.State.Heat), r.Project.Rel, r.Project.Name, categoryCell(r.Project.Category()),
 			r.Project.Priority, r.Project.State, idle(r.State),
 			intOr(r.State.Pages, "—"), len(r.State.OpenThreads), unfinishedTotal(r.State.Unfinished))
 	}
@@ -476,8 +582,31 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 			fmt.Fprintf(&b, "> [!%s] %s\n> %s\n\n", calloutFor(note), r.Project.Rel, capitalize(note))
 		}
 	}
+	for _, note := range LinkSignals(res) {
+		flagged++
+		fmt.Fprintf(&b, "> [!%s] %s\n\n", calloutFor(note), capitalize(note))
+	}
 	if flagged == 0 {
 		b.WriteString("> [!success] Nothing needs attention\n> No project is cold against its declared priority, blocked, unreachable, or past its review date.\n\n")
+	}
+
+	if len(res.Links) > 0 {
+		b.WriteString("## Repos and materials\n\n")
+		b.WriteString("| Kind | Page | Folder | Projects | Found |\n|:--|:--|:--|:--|:--|\n")
+		for _, row := range res.Links {
+			var projects []string
+			for _, rel := range row.Projects {
+				name := rel
+				for _, r := range rows {
+					if r.Project.Rel == rel {
+						name = r.Project.Name
+					}
+				}
+				projects = append(projects, "[[tree/"+rel+"\\|"+name+"]]")
+			}
+			fmt.Fprintf(&b, "| %s | %s | `%s` | %s | %s |\n", row.Page.Kind, linkCell(row.Link), home.Display(row.Page.Path), dash(strings.Join(projects, ", ")), LinkSummary(row.Link))
+		}
+		b.WriteString("\n")
 	}
 
 	category := "\x00"
@@ -537,7 +666,10 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 			if link.Kind == links.Materials {
 				label = "Materials"
 			}
-			fmt.Fprintf(&b, "| %s | `%s` · %s |\n", label, home.Display(home.Expand(link.Path)), LinkSummary(link))
+			fmt.Fprintf(&b, "| %s | %s · %s |\n", label, linkCell(link), LinkSummary(link))
+		}
+		if rel := related(rows, r.Project); len(rel) > 0 {
+			fmt.Fprintf(&b, "| Related | %s |\n", strings.Join(rel, ", "))
 		}
 		if r.Project.DefinitionOfDone != "" {
 			fmt.Fprintf(&b, "\n> [!success] Done when\n> %s\n", strings.TrimSpace(r.Project.DefinitionOfDone))
@@ -552,11 +684,11 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 	return b.String()
 }
 
-func categoryLabel(category string) string {
-	if category == "" {
+func dash(s string) string {
+	if s == "" {
 		return "—"
 	}
-	return category
+	return s
 }
 
 func heatLabel(heat string) string {
@@ -576,8 +708,10 @@ func heatLabel(heat string) string {
 
 func calloutFor(note string) string {
 	switch {
-	case strings.HasPrefix(note, "vault unreachable"), strings.HasPrefix(note, "repo "), strings.HasPrefix(note, "materials "):
+	case strings.HasPrefix(note, "vault unreachable"), strings.HasPrefix(note, "repo "), strings.HasPrefix(note, "materials "), strings.Contains(note, "is not a link page"):
 		return "failure"
+	case strings.Contains(note, "is linked by no project"):
+		return "info"
 	case strings.HasPrefix(note, "blocked on"), strings.HasPrefix(note, "an operation was interrupted"):
 		return "danger"
 	case strings.HasPrefix(note, "claude-obsidian vault"):
@@ -620,6 +754,9 @@ func Run(cfg *home.Config, stateDir string, today time.Time) (string, *Result, e
 	}
 	page := filepath.Join(cfg.AtlasVault, "Overview.md")
 	if err := os.WriteFile(page, []byte(Render(res, generatedAt, today)), 0o644); err != nil {
+		return "", nil, err
+	}
+	if _, err := pages.WriteGraph(cfg.AtlasVault); err != nil {
 		return "", nil, err
 	}
 	return page, res, nil
