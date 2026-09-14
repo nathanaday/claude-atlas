@@ -745,6 +745,10 @@ func (v view) updateIngest(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ingestCancelled:
 		v.ingest = nil
 		return v, nil
+	case ingestNothing:
+		v.ingest = nil
+		v.status = fmt.Sprintf("nothing to ingest: %d file%s already ingested, nothing waiting in inbox/", len(s.plan.Unchanged), plural(len(s.plan.Unchanged)))
+		return v, nil
 	}
 	v.ingest = nil
 	item := s.item
@@ -756,14 +760,14 @@ func (v view) updateIngest(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.detail = nil
 		}
 	}
-	n := 0
+	waiting := s.plan.Waiting
 	if s.result != nil {
-		n = len(s.result.Staged)
+		waiting += len(s.result.Staged)
 	}
 	if s.outcome == ingestStartNow {
 		return v.claude(item, claudecode.IngestPrompt)
 	}
-	v.status = fmt.Sprintf("staged %d file%s in inbox/; press c and run /claude-atlas:wiki-ingest when ready", n, plural(n))
+	v.status = fmt.Sprintf("%d file%s waiting in inbox/; press c and run /claude-atlas:wiki-ingest when ready", waiting, plural(waiting))
 	return v, nil
 }
 

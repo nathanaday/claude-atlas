@@ -472,8 +472,38 @@ func TestIngestFromTheTree(t *testing.T) {
 		t.Fatalf("launch step: ingest=%+v staged=%v", v.ingest, staged)
 	}
 	v = pressV(v, tea.KeyEsc) // later
-	if v.ingest != nil || !strings.Contains(v.status, "staged 1 file") || launched != "" || !v.changed {
+	if v.ingest != nil || !strings.Contains(v.status, "1 file waiting in inbox/") || launched != "" || !v.changed {
 		t.Fatalf("later: status=%q launched=%q changed=%v", v.status, launched, v.changed)
+	}
+	// Nothing new but files waiting: Enter continues to the launch step instead of closing.
+	nothingNew := hooks
+	nothingNew.StagePlan = func(p *tree.Project, source string) (*capture.StagePlan, error) {
+		return &capture.StagePlan{Vault: p.VaultPath(), Sources: []string{source}, Unchanged: []string{"a"}, Waiting: 2}, nil
+	}
+	w := newView(sample(), op, nothingNew)
+	w = pressV(w, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	w = keyV(w, "i")
+	w = typeV(w, src)
+	w = pressV(w, tea.KeyEnter)
+	if !strings.Contains(w.View(), "2 files waiting") || !strings.Contains(w.View(), "continue with what is waiting") {
+		t.Fatalf("waiting files should be offered:\n%s", w.View())
+	}
+	w = pressV(w, tea.KeyEnter)
+	if w.ingest == nil || w.ingest.step != ingestLaunch || !strings.Contains(w.View(), "trust the folder") {
+		t.Fatalf("should reach the launch step: %+v\n%s", w.ingest, w.View())
+	}
+	// Nothing new and nothing waiting: Enter closes with a note.
+	nothingAtAll := hooks
+	nothingAtAll.StagePlan = func(p *tree.Project, source string) (*capture.StagePlan, error) {
+		return &capture.StagePlan{Vault: p.VaultPath(), Sources: []string{source}, Unchanged: []string{"a", "b"}}, nil
+	}
+	w = newView(sample(), op, nothingAtAll)
+	w = pressV(w, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	w = keyV(w, "i")
+	w = typeV(w, src)
+	w = pressV(w, tea.KeyEnter, tea.KeyEnter)
+	if w.ingest != nil || !strings.Contains(w.status, "nothing to ingest: 2 files already ingested") {
+		t.Fatalf("nothing at all: ingest=%v status=%q", w.ingest, w.status)
 	}
 	// Once more, starting Claude Code this time.
 	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown)

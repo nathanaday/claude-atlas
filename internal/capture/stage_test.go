@@ -39,7 +39,7 @@ func TestStagePlansOnlyNewFiles(t *testing.T) {
 
 	// Staging again: both files are waiting in the inbox, so nothing is new.
 	plan, _ = PlanStage(v, []string{src}, now)
-	if len(plan.New) != 0 || len(plan.Unchanged) != 2 {
+	if len(plan.New) != 0 || len(plan.Unchanged) != 2 || plan.Waiting != 2 {
 		t.Fatalf("second plan %+v", plan)
 	}
 

@@ -706,6 +706,9 @@ func (e *env) openVault(args []string) (int, error) {
 // skillHint is printed before handing the terminal to Claude Code.
 const skillHint = "skills: " + hooks.Skills
 
+// trustNote explains Claude Code's own first-run dialog, whose default answer quits.
+const trustNote = "The first time in a vault, Claude Code asks whether you trust the folder; choose Yes."
+
 func (e *env) openClaude(args []string) (int, error) {
 	if len(args) != 1 {
 		return 2, errors.New("usage: claude-atlas open-claude NAME")
@@ -734,6 +737,7 @@ func (e *env) openClaude(args []string) (int, error) {
 	}
 	e.console.Say("  %s", home.Display(project.VaultPath()))
 	e.console.Say("  %s", skillHint)
+	e.console.Say("  %s", trustNote)
 	e.console.Say("")
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
@@ -789,43 +793,51 @@ func (e *env) ingest(args []string) (int, error) {
 	for _, sk := range plan.Skipped {
 		c.Say("  %-10s %s (%s)", "skipped", home.Display(sk.From), sk.Reason)
 	}
-	if len(plan.New) == 0 {
-		c.Say("  nothing new to ingest")
-		return 0, nil
+	if plan.Waiting > 0 {
+		c.Say("  %-10s %d file%s waiting to be ingested", "inbox", plan.Waiting, plural(plan.Waiting))
 	}
 	if *dryRun {
 		return 0, nil
 	}
-	question := fmt.Sprintf("Stage %d file%s into inbox/", len(plan.New), plural(len(plan.New)))
-	var toLink []string
-	for _, dir := range plan.Dirs {
-		if !linkedMaterial(p, dir) {
-			toLink = append(toLink, home.Display(dir))
+	if len(plan.New) == 0 && plan.Waiting == 0 {
+		c.Say("  nothing to ingest")
+		return 0, nil
+	}
+	if len(plan.New) > 0 {
+		question := fmt.Sprintf("Stage %d file%s into inbox/", len(plan.New), plural(len(plan.New)))
+		var toLink []string
+		for _, dir := range plan.Dirs {
+			if !linkedMaterial(p, dir) {
+				toLink = append(toLink, home.Display(dir))
+			}
 		}
-	}
-	if len(toLink) > 0 {
-		question += " and link " + strings.Join(toLink, ", ") + " as material of " + p.Name
-	}
-	ok, err := c.Confirm(question+"?", true)
-	if err != nil {
-		return 1, err
-	}
-	if !ok {
-		return 1, vaults.ErrCancelled
-	}
-	res, linked, err := e.stage(cfg, p, plan)
-	if err != nil {
-		return 1, err
-	}
-	c.Step(console.OK, "staged", fmt.Sprintf("%d file%s in %s", len(res.Staged), plural(len(res.Staged)), home.Display(v.Path("inbox"))))
-	for _, dir := range linked {
-		c.Step(console.OK, "linked", home.Display(dir)+" as material; `claude-atlas ingest "+p.Rel+"` stages what is new next time")
+		if len(toLink) > 0 {
+			question += " and link " + strings.Join(toLink, ", ") + " as material of " + p.Name
+		}
+		ok, err := c.Confirm(question+"?", true)
+		if err != nil {
+			return 1, err
+		}
+		if !ok {
+			return 1, vaults.ErrCancelled
+		}
+		res, linked, err := e.stage(cfg, p, plan)
+		if err != nil {
+			return 1, err
+		}
+		c.Step(console.OK, "staged", fmt.Sprintf("%d file%s in %s", len(res.Staged), plural(len(res.Staged)), home.Display(v.Path("inbox"))))
+		for _, dir := range linked {
+			c.Step(console.OK, "linked", home.Display(dir)+" as material; `claude-atlas ingest "+p.Rel+"` stages what is new next time")
+		}
+	} else {
+		c.Say("  nothing new to stage; %d file%s already waiting", plan.Waiting, plural(plan.Waiting))
 	}
 	if *noClaude || !c.Interactive() {
 		c.Say("  Next: claude-atlas open-claude %s, then /claude-atlas:wiki-ingest", p.Rel)
 		return 0, nil
 	}
-	ok, err = c.Confirm("Start Claude Code now and run /claude-atlas:wiki-ingest?", true)
+	c.Say("  %s", trustNote)
+	ok, err := c.Confirm("Start Claude Code now and run /claude-atlas:wiki-ingest?", true)
 	if err != nil {
 		return 1, err
 	}

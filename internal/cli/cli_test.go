@@ -264,8 +264,8 @@ func TestIngestStagesNewFilesAndLinksTheFolder(t *testing.T) {
 	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "materials") {
 		t.Fatalf("folder should be linked:\n%s", h.out.String())
 	}
-	// With no path, the linked folder is the source; nothing is new yet.
-	if code := h.run("ingest", "welcome", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "nothing new") {
+	// With no path, the linked folder is the source; nothing is new, but the staged file still waits.
+	if code := h.run("ingest", "welcome", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "nothing new to stage; 1 file already waiting") || !strings.Contains(h.out.String(), "wiki-ingest") {
 		t.Fatalf("second ingest exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 	os.WriteFile(filepath.Join(src, "b.md"), []byte("bbb"), 0o644)

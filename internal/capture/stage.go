@@ -44,6 +44,8 @@ type Skip struct {
 type StagePlan struct {
 	Vault   string   `json:"vault"`
 	Sources []string `json:"sources"`
+	// Waiting counts files already in the inbox that no operation has captured yet.
+	Waiting int `json:"waiting"`
 	// Dirs lists the sources that are directories, so a caller can remember them.
 	Dirs      []string `json:"dirs"`
 	New       []Staged `json:"new"`
@@ -127,6 +129,9 @@ func PlanStage(v *vault.Vault, sources []string, now time.Time) (*StagePlan, err
 	files, _ := ListInbox(v, now)
 	for _, f := range files {
 		taken[strings.ToLower(f.Path)] = true
+		if !f.Captured {
+			plan.Waiting++
+		}
 	}
 	for _, source := range sources {
 		abs, err := filepath.Abs(source)

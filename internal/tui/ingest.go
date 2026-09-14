@@ -24,9 +24,13 @@ type ingestOutcome int
 const (
 	ingestOpen ingestOutcome = iota
 	ingestCancelled
+	ingestNothing  // nothing new and nothing waiting; the screen closes with a note
 	ingestDone     // staged; the user will start Claude Code later
 	ingestStartNow // staged; start Claude Code with the ingest skill
 )
+
+// trustNote explains Claude Code's own first-run dialog, whose default answer quits.
+const trustNote = "The first time in a vault, Claude Code asks whether you trust the folder; choose Yes."
 
 // ingestScreen stages sources from outside the vault into its inbox, then offers to start
 // Claude Code on them. It is embedded in the view.
@@ -88,7 +92,13 @@ func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
 			return s, s.input.Focus()
 		case tea.KeyEnter:
 			if len(s.plan.New) == 0 {
-				s.outcome = ingestCancelled
+				if s.plan.Waiting == 0 {
+					s.outcome = ingestNothing
+					return s, nil
+				}
+				// Nothing to copy, but files staged earlier still wait: go straight to the launch.
+				s.result = &capture.StageResult{Staged: []capture.Staged{}}
+				s.step = ingestLaunch
 				return s, nil
 			}
 			res, linked, err := s.hooks.Stage(s.item.Project, s.plan)
@@ -141,7 +151,7 @@ func (s ingestScreen) view() string {
 			row(k, home.Display(src))
 		}
 		if len(s.plan.New) == 0 {
-			row("New", dim.Render("nothing; every file is already ingested or waiting in the inbox"))
+			row("New", dim.Render("nothing; every file is already ingested or already waiting"))
 		} else {
 			row("New", fmt.Sprintf("%d file%s → inbox/", len(s.plan.New), plural(len(s.plan.New))))
 			for i, f := range s.plan.New {
@@ -155,6 +165,9 @@ func (s ingestScreen) view() string {
 		if n := len(s.plan.Unchanged); n > 0 {
 			row("Unchanged", fmt.Sprintf("%d already ingested or waiting", n))
 		}
+		if s.plan.Waiting > 0 {
+			row("Inbox", fmt.Sprintf("%d file%s waiting to be ingested", s.plan.Waiting, plural(s.plan.Waiting)))
+		}
 		for _, sk := range s.plan.Skipped {
 			row("Skipped", home.Display(sk.From)+dim.Render("  "+sk.Reason))
 		}
@@ -166,17 +179,25 @@ func (s ingestScreen) view() string {
 		if s.err != "" {
 			b.WriteString("  " + errSt.Render(s.err) + "\n")
 		}
-		if len(s.plan.New) == 0 {
-			b.WriteString("\n  " + dim.Render("Enter close · Esc back") + "\n")
-		} else {
+		switch {
+		case len(s.plan.New) == 0 && s.plan.Waiting == 0:
+			b.WriteString("\n  " + dim.Render("Nothing to ingest. Enter close · Esc back") + "\n")
+		case len(s.plan.New) == 0:
+			b.WriteString("\n  " + title.Render("Enter") + " continue with what is waiting   " + dim.Render("Esc back") + "\n")
+		default:
 			b.WriteString("\n  " + title.Render("Enter") + " stage these files   " + dim.Render("Esc back") + "\n")
 		}
 	case ingestLaunch:
-		row("Staged", fmt.Sprintf("%d file%s in inbox/", len(s.result.Staged), plural(len(s.result.Staged))))
+		if len(s.result.Staged) > 0 {
+			row("Staged", fmt.Sprintf("%d file%s in inbox/", len(s.result.Staged), plural(len(s.result.Staged))))
+		}
+		waiting := s.plan.Waiting + len(s.result.Staged)
+		row("Inbox", fmt.Sprintf("%d file%s waiting to be ingested", waiting, plural(waiting)))
 		for _, dir := range s.linked {
 			row("Linked", home.Display(dir))
 		}
 		b.WriteString("\n  " + title.Render("Enter") + " start Claude Code with /claude-atlas:wiki-ingest   " + dim.Render("Esc later") + "\n")
+		b.WriteString("  " + dim.Render(trustNote) + "\n")
 	}
 	return b.String()
 }

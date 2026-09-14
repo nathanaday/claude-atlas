@@ -100,7 +100,12 @@ claude-atlas ingest sensor-triage ~/Papers --no-claude
 
 After staging, the command offers to start Claude Code with
 `/claude-atlas:wiki-ingest` as its first message, so the review and the
-apply happen in the session. `--no-claude` stages and stops.
+apply happen in the session. `--no-claude` stages and stops. Nothing is
+ingested until that session runs the skill; files stay in `inbox/` until then,
+and an `ingest` with nothing new still offers to start the session on them.
+
+The first time Claude Code opens a vault it asks whether you trust the folder,
+with `No, exit` selected. Choose `Yes`; pressing Enter on the default quits.
 
 ## History and undo
 
