@@ -409,3 +409,23 @@ func TestTaskCommands(t *testing.T) {
 		t.Fatalf("upgrade --all exit %d\n%s", code, h.out.String())
 	}
 }
+
+func TestBareCommandOpensTheTreeOrExplains(t *testing.T) {
+	// Piped: the usage, as before.
+	var out, errOut bytes.Buffer
+	c := console.NewWith(false, strings.NewReader(""), &out, false)
+	if code := run([]string{"--home", filepath.Join(t.TempDir(), "none")}, strings.NewReader(""), &out, &errOut, c); code != 0 || !strings.Contains(out.String(), "Usage:") || strings.Contains(out.String(), "No atlas yet") {
+		t.Fatalf("piped: %d\n%s", code, out.String())
+	}
+	// A terminal with no atlas: the usage and the missing step.
+	out.Reset()
+	c = console.NewWith(false, strings.NewReader(""), &out, true)
+	if code := run([]string{"--home", filepath.Join(t.TempDir(), "none")}, strings.NewReader(""), &out, &errOut, c); code != 0 || !strings.Contains(out.String(), "claude-atlas                       open the atlas") || !strings.Contains(out.String(), "No atlas yet; run `claude-atlas setup`") {
+		t.Fatalf("no atlas: %d\n%s", code, out.String())
+	}
+	// help still prints the usage whatever the terminal.
+	out.Reset()
+	if code := run([]string{"help"}, strings.NewReader(""), &out, &errOut, c); code != 0 || !strings.Contains(out.String(), "Usage:") {
+		t.Fatalf("help: %d", code)
+	}
+}

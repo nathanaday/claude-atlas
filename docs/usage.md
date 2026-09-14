@@ -4,8 +4,9 @@ Every command, with examples. `claude-atlas help` prints the short form.
 
 ## Two layers
 
-`claude-atlas view` is the whole atlas as one interactive screen. Everything it
-does is also one command, so scripts and muscle memory both work:
+`claude-atlas` on its own opens the whole atlas as one interactive screen
+(`claude-atlas view` says the same explicitly). Everything it does is also
+one command, so scripts and muscle memory both work:
 
 | In `view` | Command |
 |---|---|
@@ -232,8 +233,8 @@ claude-atlas open-vault
 
 ## The atlas
 
-`view` is an interactive tree of every project, three category layers at a
-time. Space folds or unfolds the branch under the cursor; `-` and `+` fold and
+`claude-atlas` with no command, or `claude-atlas view`, is an interactive
+tree of every project, three category layers at a time. Space folds or unfolds the branch under the cursor; `-` and `+` fold and
 unfold every category. Enter shows everything the atlas knows about a project,
 `o` opens its vault in Obsidian, `c` starts Claude Code in it, `i` ingests a
 file or folder into it, `l` shows its linked repos and folders, and `e` edits
@@ -247,6 +248,7 @@ Every field that takes a path completes it as a shell does: Tab accepts the
 match shown in grey, the arrow keys cycle the others.
 
 ```bash
+claude-atlas
 claude-atlas view
 ```
 

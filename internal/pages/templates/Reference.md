@@ -46,10 +46,10 @@ claude-atlas open-vault my-project
 
 **View the atlas**
 
-> Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `t` shows its tasks, where `p` plants one, `c` continues one in Claude Code, and `o` opens its page; `l` shows its linked folders, where `a` adds, `e` edits, and `u` unlinks one; `e` edits it (or removes it with `r`); `T` boards every project's tasks; `n` creates a vault; `a` adopts one; `R` refreshes. Paths complete with Tab.
+> `claude-atlas` alone opens it; `view` says so explicitly. Everything in one screen. Navigate your projects as a tree; Space folds a branch, `-` and `+` fold and unfold everything. Enter shows everything the atlas knows about a project; `o` opens its vault in Obsidian; `c` starts Claude Code in it; `i` ingests a file or folder into it; `t` shows its tasks, where `p` plants one, `c` continues one in Claude Code, and `o` opens its page; `l` shows its linked folders, where `a` adds, `e` edits, and `u` unlinks one; `e` edits it (or removes it with `r`); `T` boards every project's tasks; `n` creates a vault; `a` adopts one; `R` refreshes. Paths complete with Tab.
 
 ```bash
-claude-atlas view
+claude-atlas
 ```
 
 **List and show projects**

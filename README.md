@@ -5,7 +5,7 @@ Knowledge vaults for Claude Code, and one view across all of them.
 [![License: MIT](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](.claude-plugin/plugin.json)
-[![Version](https://img.shields.io/badge/version-0.4.0-d97745.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.4.1-d97745.svg)](.claude-plugin/plugin.json)
 
 ## About
 
@@ -82,7 +82,7 @@ folders, `e` edits its project page, `T` boards every project's tasks, `n`
 creates a vault, `a` adopts one, `R` refreshes:
 
 ```bash
-claude-atlas view
+claude-atlas
 ```
 
 Every command, the slash menu, linking repos, adopting an existing vault, and

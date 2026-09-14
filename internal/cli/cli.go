@@ -41,6 +41,7 @@ var Version = "dev"
 const usage = `claude-atlas: knowledge vaults for Claude Code, and one view across them.
 
 Usage:
+  claude-atlas                       open the atlas: every project as one interactive tree
   claude-atlas [--home DIR] [-y] <command> [options]
 
 Vaults:
@@ -53,7 +54,7 @@ Vaults:
   ingest NAME [PATH...]  stage new files from outside the vault into its inbox, then ingest them
 
 The atlas:
-  view                   the whole atlas as one interactive tree
+  view                   the interactive tree; the same as no command at all
   list                   list every project
   show NAME              everything the atlas knows about a project
   edit NAME [flags]      change a project's name, purpose, category, priority, state, or vault
@@ -117,7 +118,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		return 2
 	}
 	rest := global.Args()
-	if len(rest) == 0 || rest[0] == "help" || rest[0] == "--help" || rest[0] == "-h" {
+	if len(rest) > 0 && (rest[0] == "help" || rest[0] == "--help" || rest[0] == "-h") {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
@@ -128,6 +129,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		c.AssumeYes = c.AssumeYes || *yes
 	}
 	e := &env{home: home.Resolve(*homeFlag), console: c, stdin: stdin, stdout: stdout, stderr: stderr}
+	if len(rest) == 0 {
+		// Bare, in a terminal, with an atlas: the tree. Otherwise the usage, with the
+		// one step that is missing.
+		switch {
+		case !c.Interactive():
+			fmt.Fprint(stdout, usage)
+			return 0
+		case !e.home.Exists():
+			fmt.Fprint(stdout, usage)
+			fmt.Fprintf(stdout, "\nNo atlas yet; run `claude-atlas setup`. Afterwards, `claude-atlas` alone opens the tree.\n")
+			return 0
+		}
+		rest = []string{"view"}
+	}
 
 	var err error
 	var code int
