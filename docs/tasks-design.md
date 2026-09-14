@@ -150,16 +150,48 @@ finish, and view is the router.
 Each skill is one plan of kind `task` per change, previewed and applied like
 every other operation. `wiki` routes task requests to `task`.
 
-## Where the work happens
+## Repos and the vault
 
-A task in a knowledge vault is often work in a linked repository. A session
-started in the vault can read and write anywhere the user allows, but a
-coding task is better run from the repo. The task page's `workdir` names the
-folder; `claude-atlas task run ID` starts Claude Code there with the vault
-selected through `CLAUDE_ATLAS_VAULT`, so the session has the repo as its
-project and the vault's tools at hand, with `/claude-atlas:task-run ID` as its
-first message. The atlas knows the project's linked repos, so the `t` screen
-can offer them when a task has no workdir yet.
+Most tasks are code in a linked repository; some produce a paper, a report,
+or a deck in a linked folder. The vault stays the command station: the
+ledger, the status, and the plan live there and nowhere else. The work
+happens in the repo, in a session that knows the vault.
+
+Nothing has to be copied or written into the repo to make that so. The
+plugin is installed user-wide, so its MCP server and hooks already run in
+every Claude Code session, including one started in a repo; today they do
+nothing there because no vault is selected. The atlas knows which projects
+link which repos. So:
+
+- When no vault is selected, the server and the hooks look the working
+  directory up in the atlas: inside a folder that exactly one project links,
+  that project's vault is the session's vault. Inside a folder several
+  projects link, the tools name the candidates and ask for `vault`; the hook
+  names them too. Outside any linked folder, silence, as today.
+  `CLAUDE_ATLAS_VAULT` still overrides everything.
+- The session-start hook then prints, in a repo: the project and its vault;
+  the rule to search the wiki before answering from the code alone; the open
+  tasks whose `workdir` is this repo, and the rest of the project's open
+  tasks in one line; and the hot cache, bounded as in a vault. All marked as
+  data.
+- The skills work unchanged: `wiki-query` answers from the linked wiki,
+  `save` keeps a decision made while coding, `task-run` continues a task.
+  The write guard already protects every vault's `wiki/` by the target path,
+  whichever directory the session started in.
+
+The alternative, a `docs/atlas/<task>.md` copy in the repo plus a `CLAUDE.md`
+pointer, was considered and set aside. Two copies of a task drift; the
+pointer must be kept in sync and lands in the repo's history for everyone
+who clones it. A repo-side record still has a place: when a plan or a
+write-up belongs with the code, `task-plan` writes it as an ordinary repo
+file, under `docs/atlas/` by convention, and the task page links to it. The
+vault page remains the record of the task; the repo file is an artifact of
+the work, like the code.
+
+`claude-atlas task run ID` starts Claude Code in the task's `workdir` with the
+vault selected, and `/claude-atlas:task-run ID` as the first message. From
+the atlas, `c` on a task does the same. A task with no workdir runs in the
+vault. The `t` screen offers the project's linked repos when setting one.
 
 ## The atlas side
 
@@ -188,14 +220,13 @@ atlas; the plugin does, the way the CLI already does.
 1. Core: the task page rules, the `task` kind, the ledger, the generated
    index, `plant`, `tasks`, and `route type=task`; task lines in `status` and
    the session hook; `inbox/tasks/` and `ideas/` in the template and in adopt;
-   lint's `task_errors`; `claude-atlas plant` and `tasks`.
+   lint's `task_errors`; `claude-atlas plant` and `tasks`. Vault discovery
+   from a linked folder, in the server and the hooks.
 2. Skills: `task`, `task-plant`, `task-plan`, `task-run`, `task-finish`; the
    router and the ingest skill updated.
 3. Atlas: refresh, overview, the `t` and `T` screens, `task run`.
 
 ## Open questions
 
-- Execution in a repo: is starting the session in the repo with the vault
-  selected the right shape for most tasks, or are most tasks vault work?
 - Stale after 14 days: right threshold?
 - Cross-vault planting through a `vaults` tool: wanted in the first cut?
