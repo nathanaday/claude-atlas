@@ -194,27 +194,29 @@ var folderIndexes = map[string]bool{vault.TasksIndex: true, vault.CanvasIndex: t
 // mounts have one of each.
 var rootPages = map[string]bool{"index": true, "log": true, "hot": true, "overview": true}
 
-// wikiRoot reports whether dir is a wiki's top folder: the vault's own, or the one a
-// mount points at.
-func wikiRoot(dir string) bool {
-	if dir == vault.WikiDir {
-		return true
-	}
+// mountRoot reports whether dir is a mount's top folder, kb/<name>.
+func mountRoot(dir string) bool {
 	name, ok := strings.CutPrefix(dir, vault.KbDir+"/")
 	return ok && name != "" && !strings.Contains(name, "/")
 }
 
-// duplicateExempt reports whether a page's basename repeats by design: a wiki root page,
-// which every mount brings another of, or a page named after the folder it sits in.
+// duplicateExempt reports whether a basename repeats by design. A mount brings a wiki
+// root page and a folder index page of its own, and neither is the project's doing. The
+// project's own pages keep every name, so the layout's rule that a folder index takes its
+// folder's name still shows up as a duplicate when a page breaks it.
 func duplicateExempt(rel string) bool {
 	stem := strings.ToLower(strings.TrimSuffix(path.Base(rel), path.Ext(rel)))
-	if stem == "_index" || folderIndexes[rel] {
+	if stem == "_index" {
 		return true
 	}
-	if dir := path.Dir(rel); strings.EqualFold(path.Base(dir), stem) {
+	if !strings.HasPrefix(rel, vault.KbDir+"/") {
+		return false
+	}
+	dir := path.Dir(rel)
+	if strings.EqualFold(path.Base(dir), stem) {
 		return true
 	}
-	return rootPages[stem] && wikiRoot(path.Dir(rel))
+	return rootPages[stem] && mountRoot(dir)
 }
 
 // taskErrors checks a task page: the rules the core enforces, a plan where the status
@@ -288,6 +290,19 @@ func readMounts(root string, given map[string]string) ([]string, map[string]stri
 	var names []string
 	var errs []PathFinding
 	rel := func(name string) string { return vault.KbDir + "/" + name }
+	// keep takes a mount whose target is a directory named wiki, and names the mistake
+	// otherwise. shown is the target as the user wrote it.
+	keep := func(name, dir, shown string) {
+		switch info, err := os.Stat(dir); {
+		case err != nil || !info.IsDir():
+			errs = append(errs, PathFinding{Path: rel(name), Message: "the mount is not a directory: " + shown})
+		case filepath.Base(dir) != vault.WikiDir:
+			errs = append(errs, PathFinding{Path: rel(name), Message: "target is not a wiki directory: " + shown})
+		default:
+			names = append(names, name)
+			paths[name] = dir
+		}
+	}
 	if given != nil {
 		var wanted []string
 		for name := range given {
@@ -295,12 +310,7 @@ func readMounts(root string, given map[string]string) ([]string, map[string]stri
 		}
 		sort.Strings(wanted)
 		for _, name := range wanted {
-			if info, err := os.Stat(given[name]); err != nil || !info.IsDir() {
-				errs = append(errs, PathFinding{Path: rel(name), Message: "the mount is not a directory: " + given[name]})
-				continue
-			}
-			names = append(names, name)
-			paths[name] = given[name]
+			keep(name, given[name], given[name])
 		}
 		return names, paths, errs
 	}
@@ -324,12 +334,7 @@ func readMounts(root string, given map[string]string) ([]string, map[string]stri
 			errs = append(errs, PathFinding{Path: rel(name), Message: "the mount points at nothing: " + target})
 			continue
 		}
-		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-			errs = append(errs, PathFinding{Path: rel(name), Message: "the mount points at a file, not a wiki: " + target})
-			continue
-		}
-		names = append(names, name)
-		paths[name] = dir
+		keep(name, dir, target)
 	}
 	return names, paths, errs
 }
@@ -377,7 +382,7 @@ func Run(root string, opts Options) (*Report, error) {
 	if asOf.IsZero() {
 		asOf = time.Now().UTC()
 	}
-	files, err := walk(root)
+	files, err := walk(root, vault.KbDir, vault.ReposDir)
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +596,13 @@ func Run(root string, opts Options) (*Report, error) {
 	return report, nil
 }
 
-func walk(root string) ([]string, error) {
+// walk lists the files under root. skipTop names the folders at root it leaves out: the
+// vault's own walk leaves out kb/ and repos/, which hold other vaults.
+func walk(root string, skipTop ...string) ([]string, error) {
+	reserved := map[string]bool{}
+	for _, name := range skipTop {
+		reserved[name] = true
+	}
 	var files []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -606,6 +617,9 @@ func walk(root string) ([]string, error) {
 		name := d.Name()
 		if d.IsDir() {
 			if strings.HasPrefix(name, ".") || name == "node_modules" {
+				return fs.SkipDir
+			}
+			if reserved[name] && filepath.Dir(p) == root {
 				return fs.SkipDir
 			}
 			return nil
@@ -812,8 +826,8 @@ func parseLinks(pg *page) []link {
 	return links
 }
 
-// index holds one tier of targets: the vault's own files, or the files its mounts bring.
-type index struct {
+// tier holds one set of link targets: the vault's own files, or the files its mounts bring.
+type tier struct {
 	targets    []target
 	byFull     map[string][]target
 	byNoSuffix map[string][]target
@@ -824,16 +838,16 @@ type index struct {
 // resolver resolves a link against the vault's own files first, and the mounts second: a
 // page of the project's own wins over a page of the same name in a knowledge base.
 type resolver struct {
-	own    *index
-	mounts *index
+	own    *tier
+	mounts *tier
 }
 
 func newResolver(own, mounts []target) *resolver {
-	return &resolver{own: newIndex(own), mounts: newIndex(mounts)}
+	return &resolver{own: newTier(own), mounts: newTier(mounts)}
 }
 
-func newIndex(targets []target) *index {
-	r := &index{targets: targets, byFull: map[string][]target{}, byNoSuffix: map[string][]target{}, byBasename: map[string][]target{}, byAlias: map[string][]target{}}
+func newTier(targets []target) *tier {
+	r := &tier{targets: targets, byFull: map[string][]target{}, byNoSuffix: map[string][]target{}, byBasename: map[string][]target{}, byAlias: map[string][]target{}}
 	for _, t := range targets {
 		full := strings.ToLower(t.path)
 		r.byFull[full] = append(r.byFull[full], t)
@@ -867,7 +881,7 @@ func dedupe(cands []target) []target {
 	return out
 }
 
-func (r *index) exact(query string) []target {
+func (r *tier) exact(query string) []target {
 	n := strings.TrimLeft(path.Clean(strings.ReplaceAll(query, "\\", "/")), "/")
 	if n == "" || n == "." {
 		return nil
@@ -906,7 +920,7 @@ func (r *resolver) resolve(l link) []target {
 
 // find returns the targets a link names: an exact path, then a bare name against
 // basenames and aliases, then a path the target's own ends with.
-func (r *index) find(queries []string, raw string) []target {
+func (r *tier) find(queries []string, raw string) []target {
 	for _, q := range queries {
 		if found := r.exact(q); len(found) > 0 {
 			return found

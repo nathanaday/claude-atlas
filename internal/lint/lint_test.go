@@ -348,7 +348,7 @@ func TestLinksResolveThroughMounts(t *testing.T) {
 		"wiki/index.md":                    mkpage("Index", "# Index\n\n- [[Backpropagation]]\n"),
 		"wiki/hot.md":                      mkpage("Hot", "# Hot\n"),
 		"wiki/concepts/Backpropagation.md": "---\ntitle: Backpropagation\ntype: concept\nstatus: developing\ncreated: 2026-01-01\nupdated: 2026-01-01\naliases:\n  - backprop\ntags:\n  - x\n---\n\n# Backpropagation\n\n## Causes\n\ntext\n",
-		"wiki/concepts/Shared.md":          mkpage("Shared", "# Shared\n\nthe knowledge base's page\n"),
+		"wiki/concepts/Shared.md":          mkpage("Shared", "# Shared\n\nthe knowledge base's page\n\n## Only In The Mount\n\ntext\n"),
 		"wiki/concepts/Twice.md":           mkpage("Twice", "# Twice\n\ntext\n"),
 	})
 	other := fixture(t, map[string]string{
@@ -359,17 +359,23 @@ func TestLinksResolveThroughMounts(t *testing.T) {
 		"wiki/concepts/Own.md":    mkpage("Own", "# Own\n\ntext\n"),
 		"wiki/concepts/Shared.md": mkpage("Shared", "# Shared\n\nthe project's page\n"),
 		"wiki/concepts/Notes.md": mkpage("Notes", "# Notes\n\n[[Backpropagation]] [[backprop]] [[Backpropogation]] [[Shared]] [[Twice]]\n"+
-			"[[Backpropagation#Causes]] [[Nowhere]] [[kb/ai-ml/concepts/Shared]]\n"),
+			"[[Backpropagation#Causes]] [[Nowhere]] [[kb/ai-ml/concepts/Shared]] [[Shared#Only In The Mount]]\n"),
 	})
 
 	check := func(what string, r *Report) {
 		t.Helper()
 		var dead []string
 		for _, f := range r.DeadLinks {
-			dead = append(dead, f.Source+"→"+f.Target+":"+f.Reason+":"+f.Suggestion)
+			dead = append(dead, f.Source+"→"+f.Target+":"+f.Reason+":"+f.Suggestion+":"+f.ResolvedPath)
 		}
-		if strings.Join(dead, "|") != "wiki/concepts/Notes.md→Backpropogation:target-not-found:Backpropagation" {
-			t.Fatalf("%s: dead links %v", what, dead)
+		// Shared is a name both tiers hold: the project's own page wins, so the heading
+		// only the mount's copy carries is missing.
+		wantDead := []string{
+			"wiki/concepts/Notes.md→Backpropogation:target-not-found:Backpropagation:",
+			"wiki/concepts/Notes.md→Shared#Only In The Mount:heading-not-found::wiki/concepts/Shared.md",
+		}
+		if strings.Join(dead, "|") != strings.Join(wantDead, "|") {
+			t.Fatalf("%s: dead links\n got %v\nwant %v", what, dead, wantDead)
 		}
 		if len(r.AmbiguousTargets) != 1 || r.AmbiguousTargets[0].Target != "Twice" ||
 			strings.Join(r.AmbiguousTargets[0].Candidates, ",") != "kb/ai-ml/concepts/Twice.md,kb/other/concepts/Twice.md" {
@@ -393,8 +399,13 @@ func TestLinksResolveThroughMounts(t *testing.T) {
 		if strings.Join(wanted, ",") != "Nowhere" {
 			t.Fatalf("%s: wanted %v", what, wanted)
 		}
-		if r.Summary.PagesScanned != 4 || r.Summary.LinksScanned != 10 {
+		if r.Summary.PagesScanned != 4 || r.Summary.LinksScanned != 11 {
 			t.Fatalf("%s: a mount's pages and links are not the project's: %+v", what, r.Summary)
+		}
+		// The own page Shared answers both the project's index and Notes, so nothing
+		// sends it to the mount's copy.
+		if len(r.Orphans) != 1 || r.Orphans[0].Path != "wiki/concepts/Notes.md" {
+			t.Fatalf("%s: orphans %+v", what, r.Orphans)
 		}
 		if len(r.MountErrors) != 0 {
 			t.Fatalf("%s: mount errors %+v", what, r.MountErrors)
@@ -486,9 +497,88 @@ func TestLinksResolveThroughMounts(t *testing.T) {
 	if !strings.Contains(r.Markdown(), "## Mounts (1)") {
 		t.Fatalf("markdown:\n%s", r.Markdown())
 	}
-	// The mounts that do resolve still do: only the typo is dead.
-	if len(r.DeadLinks) != 1 || r.DeadLinks[0].Target != "Backpropogation" {
+	// The mounts that do resolve still do: the dead links are the same two.
+	if len(r.DeadLinks) != 2 || r.DeadLinks[0].Target != "Backpropogation" {
 		t.Fatalf("dead links beside the broken mount: %+v", r.DeadLinks)
+	}
+}
+
+// A mount brings a wiki root page and a folder index page of its own; the project's own
+// layout answers for every name it repeats.
+func TestDuplicateBasenamesAcrossAMount(t *testing.T) {
+	kb := fixture(t, map[string]string{
+		"wiki/index.md":          mkpage("Index", "# Index\n"),
+		"wiki/log.md":            mkpage("Log", "# Log\n"),
+		"wiki/tasks/tasks.md":    mkpage("Tasks", "# Tasks\n"),
+		"wiki/concepts/Alpha.md": mkpage("Alpha", "# Alpha\n\ntext\n"),
+	})
+	root := fixture(t, map[string]string{
+		"wiki/index.md":          mkpage("Index", "# Index\n\n- [[Alpha]]\n"),
+		"wiki/log.md":            mkpage("Log", "# Log\n"),
+		"wiki/concepts/index.md": mkpage("Index", "# Index\n\ntext\n"),
+		"wiki/tasks/tasks.md":    mkpage("Tasks", "# Tasks\n"),
+		"wiki/concepts/Alpha.md": mkpage("Alpha", "# Alpha\n\ntext\n"),
+	})
+	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC), Mounts: map[string]string{"x": filepath.Join(kb, "wiki")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dups []string
+	for _, d := range r.DuplicateBasenames {
+		dups = append(dups, d.Basename+":"+strings.Join(d.Paths, ","))
+	}
+	// Alpha collides across the mount; the project's two index pages collide with each
+	// other; the mount's index, log, and folder index answer for nobody.
+	want := []string{
+		"Alpha:kb/x/concepts/Alpha.md,wiki/concepts/Alpha.md",
+		"index:wiki/concepts/index.md,wiki/index.md",
+	}
+	if strings.Join(dups, "|") != strings.Join(want, "|") {
+		t.Fatalf("duplicates\n got %v\nwant %v", dups, want)
+	}
+}
+
+// kb/ and repos/ hold other repositories and other vaults, so the project's own walk
+// leaves them alone: a file there is neither a page nor a target a link reaches.
+func TestReservedFoldersAreNotTheProjectsFiles(t *testing.T) {
+	root := fixture(t, map[string]string{
+		"wiki/index.md":     mkpage("Index", "# Index\n\n- [[notes]]\n- [[README]]\n"),
+		"kb/notes.md":       mkpage("Notes", "# Notes\n\nnot a mount and not a page\n"),
+		"repos/x/README.md": "# README\n\na deliverable, not a wiki page\n",
+	})
+	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Summary.PagesScanned != 1 {
+		t.Fatalf("pages %+v", r.Summary)
+	}
+	var dead []string
+	for _, f := range r.DeadLinks {
+		dead = append(dead, f.Target)
+	}
+	if strings.Join(dead, ",") != "notes,README" {
+		t.Fatalf("a reserved folder holds no targets: %v", dead)
+	}
+	// A folder under kb/ that is not a mount is still worth naming.
+	if len(r.MountErrors) != 1 || r.MountErrors[0].Path != "kb/notes.md" || !strings.Contains(r.MountErrors[0].Message, "not a mount") {
+		t.Fatalf("mount errors %+v", r.MountErrors)
+	}
+}
+
+// A mount points at a knowledge base's wiki, not at its root.
+func TestMountMustPointAtAWiki(t *testing.T) {
+	kb := fixture(t, map[string]string{"wiki/concepts/Alpha.md": mkpage("Alpha", "# Alpha\n\ntext\n")})
+	root := fixture(t, map[string]string{"wiki/index.md": mkpage("Index", "# Index\n\n- [[Alpha]]\n")})
+	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC), Mounts: map[string]string{"x": kb}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.MountErrors) != 1 || r.MountErrors[0].Path != "kb/x" || !strings.Contains(r.MountErrors[0].Message, "not a wiki directory") {
+		t.Fatalf("mount errors %+v", r.MountErrors)
+	}
+	if len(r.DeadLinks) != 1 || r.DeadLinks[0].Target != "Alpha" {
+		t.Fatalf("a refused mount resolves nothing: %+v", r.DeadLinks)
 	}
 }
 
