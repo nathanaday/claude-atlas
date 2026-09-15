@@ -171,3 +171,29 @@ func TestStubKind(t *testing.T) {
 		t.Fatal("a stub never writes a task page")
 	}
 }
+
+func TestStubIntoCreatesInTheKnowledgeBase(t *testing.T) {
+	p, kb := newVault(t), newKnowledge(t)
+	writeFile(t, p, "wiki/concepts/Training.md", string(mkpage("Training", "# Training\n\nSee [[Vanishing Gradient]].\n")))
+
+	res, err := StubInto(p, kb, []StubTitle{{Title: "Vanishing Gradient"}}, "", "cs566", now)
+	if err != nil || len(res.Stubs) != 1 || res.Stubs[0].Path != "wiki/concepts/Vanishing Gradient.md" || res.Commit == "" {
+		t.Fatalf("stub into the knowledge base: %+v %v", res, err)
+	}
+	if page := read(t, kb, "wiki/concepts/Vanishing Gradient.md"); !strings.Contains(page, "status: seed") || !strings.Contains(page, "# Vanishing Gradient") {
+		t.Fatalf("stub page:\n%s", page)
+	}
+	ops, err := History(kb, 1, false)
+	if err != nil || ops[0].Kind != "stub" || ops[0].Summary != "stub Vanishing Gradient (via cs566)" {
+		t.Fatalf("the knowledge base's operation: %+v %v", ops[0], err)
+	}
+	if _, err := os.Stat(p.Path("wiki/concepts/Vanishing Gradient.md")); err == nil {
+		t.Fatal("the stub lands in the knowledge base, not the project")
+	}
+	if ops, err := History(p, 1, false); err != nil || ops[0].Kind != "setup" {
+		t.Fatalf("the project gets no operation: %+v %v", ops, err)
+	}
+	if _, err := StubInto(p, kb, []StubTitle{{Title: "Nowhere"}}, "", "cs566", now); err == nil || !strings.Contains(err.Error(), "nothing in the wiki links to") {
+		t.Fatalf("a title nothing links to: %v", err)
+	}
+}

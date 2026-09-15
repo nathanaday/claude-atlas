@@ -13,6 +13,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/ledger"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -26,9 +27,15 @@ type client struct {
 	sess *mcp.ClientSession
 }
 
-func connect(t *testing.T, projectDir string) *client {
+// connectIn starts a server whose atlas home is h and whose session started in projectDir.
+func connectIn(t *testing.T, h home.Home, projectDir string) *client {
 	t.Helper()
-	s := New(Options{Version: "test", ProjectDir: projectDir, Env: func(string) string { return "" }, Now: func() time.Time { return now }})
+	s := New(Options{Version: "test", ProjectDir: projectDir, Env: func(k string) string {
+		if k == home.EnvHome {
+			return h.Root
+		}
+		return ""
+	}, Now: func() time.Time { return now }})
 	st, ct := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := s.MCP().Connect(ctx, st, nil); err != nil {
@@ -41,6 +48,75 @@ func connect(t *testing.T, projectDir string) *client {
 	t.Cleanup(func() { sess.Close() })
 	return &client{t: t, sess: sess}
 }
+
+// connect starts a server with no atlas: a home directory that holds no config.
+func connect(t *testing.T, projectDir string) *client {
+	t.Helper()
+	return connectIn(t, home.Home{Root: filepath.Join(t.TempDir(), "home")}, projectDir)
+}
+
+// mounted builds an atlas whose vaults directory holds a project p and a knowledge base
+// kb, with kb mounted on p for writing.
+func mounted(t *testing.T) (home.Home, *home.Config, *vault.Vault, *vault.Vault) {
+	t.Helper()
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := h.Default(filepath.Join(root, "Vaults"))
+	if err := os.MkdirAll(h.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := vaults.PathFor(cfg.VaultsDir, vault.Project, "p")
+	kbPath := vaults.PathFor(cfg.VaultsDir, vault.Knowledge, "kb")
+	if _, err := vault.Init(projectPath, vault.Options{Kind: vault.Project, Name: "p"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Init(kbPath, vault.Options{Kind: vault.Knowledge, Name: "kb"}, now); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pe, ke := ix.ByPath(projectPath), ix.ByPath(kbPath)
+	if pe == nil || ke == nil {
+		t.Fatalf("the scan found %d entries, not both vaults", len(ix.Entries))
+	}
+	if _, err := vaults.Mount(*pe, *ke, vault.AccessWrite, "", now); err != nil {
+		t.Fatal(err)
+	}
+	p, err := vault.Open(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, err := vault.Open(kbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, cfg, p, kb
+}
+
+// rescan reads the vaults afresh and returns the entries for the project and the
+// knowledge base an identity change just touched.
+func rescan(t *testing.T, cfg *home.Config, p, kb *vault.Vault) (project, knowledge registry.Entry) {
+	t.Helper()
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pe, ke := ix.ByPath(p.Root), ix.ByPath(kb.Root)
+	if pe == nil || ke == nil {
+		t.Fatal("the scan lost a vault")
+	}
+	return *pe, *ke
+}
+
+const kbPage = "---\ntype: concept\ntitle: Backprop\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Backprop\n\ntext\n"
 
 // call invokes a tool and decodes its structured result into out. It returns the error text for tool errors.
 func (c *client) call(name string, args map[string]any, out any) string {
@@ -106,7 +182,7 @@ func TestToolsListAndStatus(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, ",") != "apply,capture,history,inbox,lint,mode,plan,plant,repos,route,status,stub,tasks,undo" {
+	if strings.Join(names, ",") != "apply,capture,history,inbox,lint,mode,mounts,plan,plant,repos,route,status,stub,tasks,undo" {
 		t.Fatalf("tools %v", names)
 	}
 	var st Status
@@ -346,23 +422,7 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s := New(Options{Version: "test", ProjectDir: v.Path("repos/code"), Env: func(k string) string {
-		if k == home.EnvHome {
-			return h.Root
-		}
-		return ""
-	}, Now: func() time.Time { return now }})
-	st, ct := mcp.NewInMemoryTransports()
-	ctx := context.Background()
-	if _, err := s.MCP().Connect(ctx, st, nil); err != nil {
-		t.Fatal(err)
-	}
-	sess, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sess.Close()
-	c := &client{t: t, sess: sess}
+	c := connectIn(t, h, v.Path("repos/code"))
 	var status Status
 	if msg := c.call("status", nil, &status); msg != "" {
 		t.Fatal(msg)
@@ -433,7 +493,8 @@ func TestKnowledgeBaseTools(t *testing.T) {
 	page := "---\ntype: concept\ntitle: A\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# A\n\ntext\n"
 	write := []map[string]any{{"path": "wiki/concepts/A.md", "mode": "create", "content": page}}
 	for _, kind := range []string{"ingest", "save"} {
-		if msg := c.call("plan", map[string]any{"kind": kind, "summary": "x", "writes": write}, nil); !strings.Contains(msg, "through a project") {
+		msg := c.call("plan", map[string]any{"kind": kind, "summary": "x", "writes": write}, nil)
+		if !strings.Contains(msg, "knowledge enters through a project") || !strings.Contains(msg, "nothing mounts it yet") {
 			t.Errorf("%s in a knowledge base: %q", kind, msg)
 		}
 	}
@@ -449,4 +510,159 @@ func TestKnowledgeBaseTools(t *testing.T) {
 	if msg := c.call("mode", nil, &mo); msg != "" || strings.Join(mo.Types, ",") != "source,entity,concept" {
 		t.Fatalf("mode: %s %+v", msg, mo)
 	}
+}
+
+func TestKnowledgeBaseThroughAProjectSession(t *testing.T) {
+	h, _, p, kb := mounted(t)
+	c := connectIn(t, h, p.Root)
+
+	var list MountsOut
+	if msg := c.call("mounts", nil, &list); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(list.Mounts) != 1 {
+		t.Fatalf("mounts %+v", list)
+	}
+	m := list.Mounts[0]
+	if m.Name != "kb" || m.ID != kb.Config.ID || m.Access != "write" || m.Effective != "write" || m.Path != kb.Path("wiki") || m.Link != "kb/kb" || m.Error != "" {
+		t.Fatalf("mount %+v", m)
+	}
+	if m.Pages == nil || *m.Pages == 0 {
+		t.Fatalf("mount pages %+v", m.Pages)
+	}
+
+	os.WriteFile(p.Path("inbox/paper.md"), []byte("# A paper\n\nThe claim.\n"), 0o644)
+	var captured struct {
+		Sources []struct {
+			SourceID string `json:"source_id"`
+		} `json:"sources"`
+		Commit string `json:"commit"`
+	}
+	if msg := c.call("capture", map[string]any{"vault": kb.Root, "paths": []string{"paper.md"}}, &captured); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(captured.Sources) != 1 || captured.Commit == "" {
+		t.Fatalf("capture %+v", captured)
+	}
+	led, err := ledger.Load(kb.Path(vault.LedgerPath), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := led.Sources[captured.Sources[0].SourceID]
+	if !ok || rec.Via == nil || rec.Via.Name != p.Name() || rec.Via.ID != p.Config.ID {
+		t.Fatalf("the knowledge base's ledger names the project: %+v", rec)
+	}
+	if _, err := os.Stat(p.Path("inbox/paper.md")); err != nil {
+		t.Fatal("the project's inbox file stays until its ingest operation removes it")
+	}
+
+	var po PlanOut
+	writes := []map[string]any{{"path": "wiki/concepts/Backprop.md", "mode": "create", "content": kbPage}}
+	if msg := c.call("plan", map[string]any{"vault": kb.Root, "kind": "save", "summary": "save Backprop", "writes": writes}, &po); msg != "" {
+		t.Fatal(msg)
+	}
+	var res txn.Result
+	if msg := c.call("apply", map[string]any{"plan_id": po.PlanID}, &res); msg != "" || res.Commit == "" {
+		t.Fatalf("apply: %s %+v", msg, res)
+	}
+	if _, err := os.Stat(kb.Path("wiki/concepts/Backprop.md")); err != nil {
+		t.Fatal("the page belongs to the knowledge base")
+	}
+
+	var st Status
+	if msg := c.call("status", map[string]any{"vault": kb.Root}, &st); msg != "" {
+		t.Fatal(msg)
+	}
+	if st.Kind != "knowledge" || st.Access != "open" || len(st.MountedBy) != 1 || st.MountedBy[0].Name != "p" || st.MountedBy[0].Access != "write" {
+		t.Fatalf("knowledge base status %+v %+v", st, st.MountedBy)
+	}
+	st = Status{}
+	if msg := c.call("status", nil, &st); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(st.Mounts) != 1 || st.Mounts[0].Name != "kb" || st.Mounts[0].Effective != "write" || st.Mounts[0].Pages != nil {
+		t.Fatalf("project status %+v", st.Mounts)
+	}
+}
+
+func TestReadMountRefusesWrites(t *testing.T) {
+	h, cfg, p, kb := mounted(t)
+	guarded := vault.AccessGuarded
+	_, ke := rescan(t, cfg, p, kb)
+	if err := vaults.EditIdentity(ke, vaults.Edit{Access: &guarded}, now); err != nil {
+		t.Fatal(err)
+	}
+	pe, ke := rescan(t, cfg, p, kb)
+	if err := vaults.Grant(ke, pe, vault.AccessRead, now); err != nil {
+		t.Fatal(err)
+	}
+	c := connectIn(t, h, p.Root)
+
+	writes := []map[string]any{{"path": "wiki/concepts/Backprop.md", "mode": "create", "content": kbPage}}
+	if msg := c.call("plan", map[string]any{"vault": kb.Root, "kind": "save", "summary": "save Backprop", "writes": writes}, nil); !strings.Contains(msg, "read-only") {
+		t.Errorf("plan through a read mount: %q", msg)
+	}
+	os.WriteFile(p.Path("inbox/paper.md"), []byte("# A paper\n\nThe claim.\n"), 0o644)
+	if msg := c.call("capture", map[string]any{"vault": kb.Root, "paths": []string{"paper.md"}}, nil); !strings.Contains(msg, "read-only") {
+		t.Errorf("capture through a read mount: %q", msg)
+	}
+	if msg := c.call("stub", map[string]any{"titles": []map[string]any{{"title": "Backprop", "target": "kb"}}}, nil); !strings.Contains(msg, "read-only") {
+		t.Errorf("stub through a read mount: %q", msg)
+	}
+	if msg := c.call("mode", map[string]any{"vault": kb.Root, "set": "lyt"}, nil); !strings.Contains(msg, "read-only") {
+		t.Errorf("mode set through a read mount: %q", msg)
+	}
+	if _, err := os.Stat(kb.Path("wiki/concepts/Backprop.md")); err == nil {
+		t.Fatal("a read mount writes nothing")
+	}
+}
+
+func TestKnowledgeBaseSessionRefusesIngestAndNamesMounts(t *testing.T) {
+	h, _, _, kb := mounted(t)
+	c := connectIn(t, h, kb.Root)
+
+	writes := []map[string]any{{"path": "wiki/concepts/Backprop.md", "mode": "create", "content": kbPage}}
+	if msg := c.call("plan", map[string]any{"kind": "save", "summary": "save Backprop", "writes": writes}, nil); !strings.Contains(msg, "mounted by: p") {
+		t.Errorf("save in a knowledge base session: %q", msg)
+	}
+	var po PlanOut
+	if msg := c.call("plan", map[string]any{"kind": "repair", "summary": "add Backprop", "writes": writes}, &po); msg != "" {
+		t.Fatalf("repair in a knowledge base session: %q", msg)
+	}
+	var res txn.Result
+	if msg := c.call("apply", map[string]any{"plan_id": po.PlanID}, &res); msg != "" || res.Commit == "" {
+		t.Fatalf("apply: %s %+v", msg, res)
+	}
+	if msg := c.call("mounts", nil, nil); !strings.Contains(msg, "mounted by") {
+		t.Errorf("mounts in a knowledge base: %q", msg)
+	}
+}
+
+func TestStubIntoAMount(t *testing.T) {
+	h, _, p, kb := mounted(t)
+	os.MkdirAll(p.Path("wiki/concepts"), 0o755)
+	os.WriteFile(p.Path("wiki/concepts/Training.md"), []byte("---\ntitle: Training\ntype: concept\nstatus: developing\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Training\n\nSee [[Backprop]].\n"), 0o644)
+	c := connectIn(t, h, p.Root)
+
+	if msg := c.call("stub", map[string]any{"titles": []map[string]any{{"title": "Backprop", "target": "none"}}}, nil); !strings.Contains(msg, "no mount named") {
+		t.Errorf("unknown mount: %q", msg)
+	}
+	var out StubOut
+	if msg := c.call("stub", map[string]any{"titles": []map[string]any{{"title": "Backprop", "target": "kb"}}}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(out.Stubs) != 1 || out.Stubs[0].Path != "kb/kb/concepts/Backprop.md" || out.OperationID == "" {
+		t.Fatalf("stub into a mount %+v", out)
+	}
+	if len(out.Operations) != 1 || out.Operations[0].Vault != kb.Root || out.Operations[0].Commit == "" {
+		t.Fatalf("operations %+v", out.Operations)
+	}
+	if _, err := os.Stat(kb.Path("wiki/concepts/Backprop.md")); err != nil {
+		t.Fatal("the stub belongs to the knowledge base")
+	}
+	if _, err := os.Stat(p.Path(out.Stubs[0].Path)); err != nil {
+		t.Fatalf("the project reads the stub through its mount: %v", err)
+	}
+	// Task 7 teaches lint to resolve a link through a mount; until then the project's
+	// lint still wants Backprop.
 }

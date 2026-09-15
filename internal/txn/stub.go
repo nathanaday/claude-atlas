@@ -11,10 +11,12 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-// StubTitle names a page to stub and, optionally, its type.
+// StubTitle names a page to stub and, optionally, its type and the knowledge base it
+// lands in.
 type StubTitle struct {
-	Title string `json:"title" jsonschema:"the page's title as the link writes it"`
-	Type  string `json:"type,omitempty" jsonschema:"concept, entity, question, or session; note or moc in lyt mode"`
+	Title  string `json:"title" jsonschema:"the page's title as the link writes it"`
+	Type   string `json:"type,omitempty" jsonschema:"concept, entity, question, or session; note or moc in lyt mode"`
+	Target string `json:"target,omitempty" jsonschema:"a mount name; the stub lands in that knowledge base"`
 }
 
 // Stubbed says where a stub went.
@@ -55,24 +57,38 @@ func StubPages(v *vault.Vault, titles []StubTitle, defaultType string, now time.
 	return out, nil
 }
 
-// StubRequest builds the request StubPages applies. A title must name a wanted page or an
-// empty page a link points to; the type defaults to defaultType, then to the mode's.
-func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now time.Time) (Request, []Stubbed, error) {
+// candidate is a title a vault can stub. empty is the path of the empty page a link
+// points to, and "" for a page nobody has written.
+type candidate struct {
+	title string
+	empty string
+}
+
+// stubSet is what one lint report offers to stub: the candidates by lowercased title, in
+// the report's order, and the empty pages whose file name cannot come from a title.
+type stubSet struct {
+	report     *lint.Report
+	candidates map[string]candidate
+	unnameable map[string]string
+	order      []string
+}
+
+// stubCandidates reads a vault's lint report. withEmpty adds the empty pages a link
+// points to; a stub that lands in another vault leaves them out, because moving a file
+// between two vaults is not one operation.
+func stubCandidates(v *vault.Vault, withEmpty bool, now time.Time) (*stubSet, error) {
 	report, err := lint.Run(v.Root, lint.Options{AsOf: now})
 	if err != nil {
-		return Request{}, nil, err
+		return nil, err
 	}
-	type candidate struct {
-		title string
-		empty string // the empty page's path; "" for a wanted page
-	}
-	candidates := map[string]candidate{}
-	unnameable := map[string]string{} // lowercase title -> the empty file's path, when its file name cannot come from a title
-	var order []string
+	set := &stubSet{report: report, candidates: map[string]candidate{}, unnameable: map[string]string{}}
 	for _, w := range report.WantedPages {
 		key := strings.ToLower(w.Title)
-		candidates[key] = candidate{title: w.Title}
-		order = append(order, key)
+		set.candidates[key] = candidate{title: w.Title}
+		set.order = append(set.order, key)
+	}
+	if !withEmpty {
+		return set, nil
 	}
 	for _, s := range report.Stubs {
 		if !s.Empty {
@@ -80,19 +96,48 @@ func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now tim
 		}
 		title := vault.PageTitle(s.Path)
 		if vault.SanitizeTitle(title) != title {
-			unnameable[strings.ToLower(title)] = s.Path
+			set.unnameable[strings.ToLower(title)] = s.Path
 			continue
 		}
 		key := strings.ToLower(title)
-		if _, dup := candidates[key]; !dup {
-			order = append(order, key)
+		if _, dup := set.candidates[key]; !dup {
+			set.order = append(set.order, key)
 		}
-		candidates[key] = candidate{title: title, empty: s.Path}
+		set.candidates[key] = candidate{title: title, empty: s.Path}
+	}
+	return set, nil
+}
+
+// all lists every candidate as a title, in the report's order.
+func (set *stubSet) all() []StubTitle {
+	var titles []StubTitle
+	for _, key := range set.order {
+		titles = append(titles, StubTitle{Title: set.candidates[key].title})
+	}
+	return titles
+}
+
+// find matches a title without regard to case. It says why a title cannot be stubbed.
+func (set *stubSet) find(v *vault.Vault, title string) (candidate, error) {
+	key := strings.ToLower(strings.TrimSpace(title))
+	if c, ok := set.candidates[key]; ok {
+		return c, nil
+	}
+	if p, unnamed := set.unnameable[key]; unnamed {
+		return candidate{}, fmt.Errorf("%s cannot be a page's file name; rename the link so its text is a name a file system accepts, then stub it", p)
+	}
+	return candidate{}, notWanted(v, set.report, strings.TrimSpace(title))
+}
+
+// StubRequest builds the request StubPages applies. A title must name a wanted page or an
+// empty page a link points to; the type defaults to defaultType, then to the mode's.
+func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now time.Time) (Request, []Stubbed, error) {
+	set, err := stubCandidates(v, true, now)
+	if err != nil {
+		return Request{}, nil, err
 	}
 	if len(titles) == 0 {
-		for _, key := range order {
-			titles = append(titles, StubTitle{Title: candidates[key].title})
-		}
+		titles = set.all()
 	}
 	if defaultType == "" {
 		defaultType = defaultStubType(v.Config.Mode)
@@ -102,12 +147,9 @@ func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now tim
 	seen := map[string]bool{}
 	for _, t := range titles {
 		key := strings.ToLower(strings.TrimSpace(t.Title))
-		c, ok := candidates[key]
-		if !ok {
-			if p, unnamed := unnameable[key]; unnamed {
-				return Request{}, nil, fmt.Errorf("%s cannot be a page's file name; rename the link so its text is a name a file system accepts, then stub it", p)
-			}
-			return Request{}, nil, notWanted(v, report, strings.TrimSpace(t.Title))
+		c, err := set.find(v, t.Title)
+		if err != nil {
+			return Request{}, nil, err
 		}
 		if seen[key] {
 			continue
@@ -142,6 +184,73 @@ func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now tim
 		req.Summary = stubSummary(stubbed)
 	}
 	return req, stubbed, nil
+}
+
+// StubInto creates, in kb, seed pages for titles the project's wiki links to but nobody
+// has written, so the links resolve through the project's mount of kb. via names the
+// project in the operation's summary. One operation, in kb.
+func StubInto(project, kb *vault.Vault, titles []StubTitle, defaultType string, via string, now time.Time) (StubResult, error) {
+	if kb.Config.Kind != vault.Knowledge {
+		return StubResult{}, fmt.Errorf("%s is not a knowledge base", kb.Name())
+	}
+	if len(titles) == 0 {
+		return StubResult{}, fmt.Errorf("name the titles to stub in %s", kb.Name())
+	}
+	set, err := stubCandidates(project, false, now)
+	if err != nil {
+		return StubResult{}, err
+	}
+	if defaultType == "" {
+		defaultType = defaultStubType(kb.Config.Mode)
+	}
+	req := Request{Kind: Stub}
+	var stubbed []Stubbed
+	seen := map[string]bool{}
+	for _, t := range titles {
+		key := strings.ToLower(strings.TrimSpace(t.Title))
+		c, err := set.find(project, t.Title)
+		if err != nil {
+			return StubResult{}, err
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		pageType := t.Type
+		if pageType == "" {
+			pageType = defaultType
+		}
+		if pageType == "source" {
+			return StubResult{}, fmt.Errorf("a source page comes from ingest, with a captured file and a ledger record; stub %q as another type", c.title)
+		}
+		route, err := kb.RouteFor(pageType, c.title, now)
+		if err != nil {
+			return StubResult{}, err
+		}
+		if route.Exists {
+			return StubResult{}, fmt.Errorf("%s already exists in %s; link to it instead", route.Path, kb.Name())
+		}
+		req.Writes = append(req.Writes, Write{Path: route.Path, Mode: Create, Content: []byte(vault.Skeleton(pageType, c.title, now))})
+		stubbed = append(stubbed, Stubbed{Title: c.title, Type: pageType, Path: route.Path})
+	}
+	out := StubResult{Stubs: []Stubbed{}}
+	if len(req.Writes) == 0 {
+		return out, nil
+	}
+	req.Summary = stubSummary(stubbed)
+	if via != "" {
+		req.Summary += " (via " + via + ")"
+	}
+	plan, err := Prepare(kb, req, now)
+	if err != nil {
+		return StubResult{}, err
+	}
+	res, err := Apply(kb, plan, now)
+	if err != nil {
+		return StubResult{}, err
+	}
+	out.Stubs, out.OperationID, out.Commit = stubbed, res.OperationID, res.Commit
+	return out, nil
 }
 
 func defaultStubType(mode vault.Mode) string {
