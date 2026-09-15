@@ -95,7 +95,7 @@ type session struct {
 	project *registry.Entry // the session's project, from the working directory or CLAUDE_ATLAS_VAULT
 	mount   *registry.Mount // the project's mount of target, when target is a knowledge base
 	// entry is the target's own registry entry, and ix the scan both come from. Both are
-	// nil with no atlas or a failed scan, which no read-only tool depends on.
+	// nil with no atlas or a failed scan. No read-only tool depends on them.
 	entry *registry.Entry
 	ix    *registry.Index
 }
@@ -117,7 +117,7 @@ func (s *Server) open(explicit string) (*session, error) {
 		return sess, nil
 	}
 	sess.ix = ix
-	sess.entry = readable(ix.ByPath(target.Root))
+	sess.entry = dropUnreadable(ix.ByPath(target.Root))
 	if target.Config.Kind == vault.Project {
 		sess.project = sess.entry
 		return sess, nil
@@ -142,17 +142,17 @@ func (s *Server) sessionProject(ix *registry.Index) *registry.Entry {
 		if v.Config.Kind != vault.Project {
 			return nil
 		}
-		return readable(ix.ByPath(v.Root))
+		return dropUnreadable(ix.ByPath(v.Root))
 	}
 	match, _, err := discover.Vault(s.home(), s.opts.ProjectDir)
 	if err != nil || match == nil {
 		return nil
 	}
-	return readable(ix.ByPath(match.Project.Path))
+	return dropUnreadable(ix.ByPath(match.Project.Path))
 }
 
-// readable drops an entry the scan found but could not read.
-func readable(e *registry.Entry) *registry.Entry {
+// dropUnreadable returns nil for an entry the scan found but could not read.
+func dropUnreadable(e *registry.Entry) *registry.Entry {
 	if e == nil || e.Error != "" {
 		return nil
 	}
@@ -176,6 +176,8 @@ func (sess *session) writable(kind txn.Kind) error {
 	switch {
 	case sess.mount == nil:
 		return fmt.Errorf("%s does not mount %s; run `claude-atlas mount %s %s`", sess.project.Name, kb, sess.project.Name, kb)
+	case sess.mount.Error != "":
+		return fmt.Errorf("mount %s: %s", sess.mount.Name, sess.mount.Error)
 	case sess.mount.Effective != vault.AccessWrite:
 		return fmt.Errorf("%s mounts %s read-only", sess.project.Name, kb)
 	}
@@ -590,11 +592,18 @@ type StubOp struct {
 // StubOut lists the stubs and the operations that wrote them. A stub that landed in a
 // mounted knowledge base carries its path through the mount (kb/<name>/concepts/X.md)
 // and was committed in that knowledge base, which operations names with its root. The
-// top-level operation_id and commit name the project's own operation when there was one,
-// and the first mounted one otherwise.
+// top-level operation_id and commit name the operation in the session's own vault, and
+// stay empty when nothing committed there; operations carries the rest.
 type StubOut struct {
 	txn.StubResult
 	Operations []StubOp `json:"operations,omitempty"`
+}
+
+// stubGroup is the titles one mounted knowledge base takes.
+type stubGroup struct {
+	mount  *registry.Mount
+	kb     *vault.Vault
+	titles []txn.StubTitle
 }
 
 func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs) (*mcp.CallToolResult, StubOut, error) {
@@ -603,71 +612,104 @@ func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs)
 		return nil, StubOut{}, err
 	}
 	now := s.opts.Now()
-	own, byTarget, order := groupStubs(a.Titles)
-	if len(order) > 0 && sess.target.Config.Kind != vault.Project {
-		return nil, StubOut{}, fmt.Errorf("only a project's stub names a mount; %s is a knowledge base", sess.target.Name())
+	// Every mount a title names is resolved and checked before the first write, so no
+	// operation lands in one vault while another is still refused.
+	own, groups, err := sess.groupStubs(a.Titles)
+	if err != nil {
+		return nil, StubOut{}, err
 	}
 	out := StubOut{StubResult: txn.StubResult{Stubs: []txn.Stubbed{}}}
 	if len(a.Titles) == 0 || len(own) > 0 {
 		if err := sess.writable(txn.Stub); err != nil {
 			return nil, StubOut{}, err
 		}
-		res, err := txn.StubPages(sess.target, own, a.Type, now)
+		res, err := sess.stubHere(own, a.Type, now)
 		if err != nil {
 			return nil, StubOut{}, err
 		}
 		out.Stubs = append(out.Stubs, res.Stubs...)
 		out.add(sess.target.Root, res)
+		out.OperationID, out.Commit = res.OperationID, res.Commit
 	}
-	for _, name := range order {
-		m, err := sess.mountNamed(name)
+	for _, g := range groups {
+		res, err := txn.StubInto(sess.target, g.kb, g.titles, a.Type, sess.project.Name, now)
 		if err != nil {
-			return nil, StubOut{}, err
-		}
-		kb, err := vault.Open(filepath.Dir(m.Path))
-		if err != nil {
-			return nil, StubOut{}, err
-		}
-		res, err := txn.StubInto(sess.target, kb, byTarget[name], a.Type, sess.project.Name, now)
-		if err != nil {
-			return nil, StubOut{}, err
+			return nil, out, out.receipt(err)
 		}
 		for _, stubbed := range res.Stubs {
-			stubbed.Path = mountPath(m.Name, stubbed.Path)
+			stubbed.Path = mountPath(g.mount.Name, stubbed.Path)
 			out.Stubs = append(out.Stubs, stubbed)
 		}
-		out.add(kb.Root, res)
+		out.add(g.kb.Root, res)
 	}
 	return nil, out, nil
 }
 
-// add records one operation. The first one also fills the top-level operation_id.
+// stubHere stubs into the session's own vault. A project session that reaches a mounted
+// knowledge base records the project it came through, as capture does.
+func (sess *session) stubHere(titles []txn.StubTitle, defaultType string, now time.Time) (txn.StubResult, error) {
+	if sess.target.Config.Kind == vault.Knowledge && sess.project != nil {
+		project, err := vault.Open(sess.project.Path)
+		if err != nil {
+			return txn.StubResult{}, err
+		}
+		return txn.StubInto(project, sess.target, titles, defaultType, sess.project.Name, now)
+	}
+	return txn.StubPages(sess.target, titles, defaultType, now)
+}
+
+// add records one operation.
 func (out *StubOut) add(root string, res txn.StubResult) {
 	if res.OperationID == "" {
 		return
 	}
 	out.Operations = append(out.Operations, StubOp{Vault: root, OperationID: res.OperationID, Commit: res.Commit})
-	if out.OperationID == "" {
-		out.OperationID, out.Commit = res.OperationID, res.Commit
-	}
 }
 
-// groupStubs splits titles into the project's own and those a mount name targets, keeping
-// the order the mount names first appear in.
-func groupStubs(titles []txn.StubTitle) (own []txn.StubTitle, byTarget map[string][]txn.StubTitle, order []string) {
-	byTarget = map[string][]txn.StubTitle{}
+// receipt names the operations that already committed, so a failure halfway through says
+// what the model can still undo.
+func (out *StubOut) receipt(err error) error {
+	if len(out.Operations) == 0 {
+		return err
+	}
+	var parts []string
+	for _, op := range out.Operations {
+		parts = append(parts, fmt.Sprintf("operation %s in %s (commit %s)", op.OperationID, op.Vault, op.Commit))
+	}
+	return fmt.Errorf("%w; already committed: %s", err, strings.Join(parts, "; "))
+}
+
+// groupStubs splits titles into the session vault's own and those a mount takes, resolving
+// each mount name to the mount it belongs to. Two spellings of one mount name make one
+// group, so one knowledge base gets one operation.
+func (sess *session) groupStubs(titles []txn.StubTitle) (own []txn.StubTitle, groups []*stubGroup, err error) {
+	byMount := map[string]*stubGroup{}
 	for _, t := range titles {
 		name := strings.TrimSpace(t.Target)
 		if name == "" {
 			own = append(own, t)
 			continue
 		}
-		if _, seen := byTarget[name]; !seen {
-			order = append(order, name)
+		if sess.target.Config.Kind != vault.Project {
+			return nil, nil, fmt.Errorf("only a project's stub names a mount; %s is a knowledge base", sess.target.Name())
 		}
-		byTarget[name] = append(byTarget[name], t)
+		m, err := sess.mountNamed(name)
+		if err != nil {
+			return nil, nil, err
+		}
+		g := byMount[strings.ToLower(m.Name)]
+		if g == nil {
+			kb, err := vault.Open(filepath.Dir(m.Path))
+			if err != nil {
+				return nil, nil, err
+			}
+			g = &stubGroup{mount: m, kb: kb}
+			byMount[strings.ToLower(m.Name)] = g
+			groups = append(groups, g)
+		}
+		g.titles = append(g.titles, t)
 	}
-	return own, byTarget, order
+	return own, groups, nil
 }
 
 // mountPath is where the project reads a knowledge base page: through the mount's link.
@@ -870,11 +912,15 @@ type UndoArgs struct {
 }
 
 func (s *Server) undo(ctx context.Context, req *mcp.CallToolRequest, a UndoArgs) (*mcp.CallToolResult, txn.Result, error) {
-	v, err := s.resolve(a.Vault)
+	sess, err := s.open(a.Vault)
 	if err != nil {
 		return nil, txn.Result{}, err
 	}
-	res, err := txn.UndoOperation(v, a.OperationID, s.opts.Now())
+	// A revert is a commit, so it needs the same access as the operation it undoes.
+	if err := sess.writable(txn.Undo); err != nil {
+		return nil, txn.Result{}, err
+	}
+	res, err := txn.UndoOperation(sess.target, a.OperationID, s.opts.Now())
 	if err != nil {
 		return nil, txn.Result{}, err
 	}
@@ -1006,7 +1052,7 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "repos", Annotations: ro(),
 		Description: "List the repositories mounted on the vault's project: path, remote, branch, uncommitted changes, and how changes land there (pr: branch and pull request; commit: on the current branch). Read it before changing files in a repository."}, s.repos)
 	mcp.AddTool(server, &mcp.Tool{Name: "mounts", Annotations: ro(),
-		Description: "List the knowledge bases the project mounts: id, name, the knowledge base's real wiki path, the mount folder, the requested and effective access, what the knowledge base is for, and its page count. Grep the real path; a page under a write mount can be planned like the project's own. Read-only."}, s.mounts)
+		Description: "List the knowledge bases the project mounts: id, name, the knowledge base's real wiki path, the mount folder, the requested and effective access, what the knowledge base is for, and its page count. Grep the real path; plan a page under a write mount like the project's own. Read-only."}, s.mounts)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",
 		Description: "Read the vault's filing mode (generic or lyt) and the page types it files. Pass set to prepare a plan that changes it; apply that plan to make the change."}, s.mode)
 	return server
@@ -1017,11 +1063,9 @@ func Run(ctx context.Context, opts Options) error {
 	return New(opts).MCP().Run(ctx, &mcp.StdioTransport{})
 }
 
-// ToolNames lists the tools, for docs and tests.
+// ToolNames lists every tool MCP registers, sorted, for docs and tests.
 func ToolNames() []string {
-	names := []string{"status", "inbox", "capture", "route", "plan", "apply", "undo", "history", "lint", "mode", "mounts"}
+	names := []string{"apply", "capture", "history", "inbox", "lint", "mode", "mounts", "plan", "plant", "repos", "route", "status", "stub", "tasks", "undo"}
 	sort.Strings(names)
 	return names
 }
-
-var _ = strings.TrimSpace

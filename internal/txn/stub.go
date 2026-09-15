@@ -142,14 +142,30 @@ func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now tim
 	if defaultType == "" {
 		defaultType = defaultStubType(v.Config.Mode)
 	}
-	req := Request{Kind: Stub}
+	writes, stubbed, err := set.writes(v, v, titles, defaultType, now)
+	if err != nil {
+		return Request{}, nil, err
+	}
+	req := Request{Kind: Stub, Writes: writes}
+	if len(stubbed) > 0 {
+		req.Summary = stubSummary(stubbed)
+	}
+	return req, stubbed, nil
+}
+
+// writes turns titles into one operation's writes: a seed page for each, routed in dest.
+// dest is the source vault itself for a stub that stays home, and then an empty page a
+// link points to is replaced where it lies or moved to its routed path. A stub that lands
+// in another vault leaves such a page alone, because the set holds none.
+func (set *stubSet) writes(source, dest *vault.Vault, titles []StubTitle, defaultType string, now time.Time) ([]Write, []Stubbed, error) {
+	var writes []Write
 	var stubbed []Stubbed
 	seen := map[string]bool{}
 	for _, t := range titles {
 		key := strings.ToLower(strings.TrimSpace(t.Title))
-		c, err := set.find(v, t.Title)
+		c, err := set.find(source, t.Title)
 		if err != nil {
-			return Request{}, nil, err
+			return nil, nil, err
 		}
 		if seen[key] {
 			continue
@@ -160,30 +176,29 @@ func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now tim
 			pageType = defaultType
 		}
 		if pageType == "source" {
-			return Request{}, nil, fmt.Errorf("a source page comes from ingest, with a captured file and a ledger record; stub %q as another type", c.title)
+			return nil, nil, fmt.Errorf("a source page comes from ingest, with a captured file and a ledger record; stub %q as another type", c.title)
 		}
-		route, err := v.RouteFor(pageType, c.title, now)
+		route, err := dest.RouteFor(pageType, c.title, now)
 		if err != nil {
-			return Request{}, nil, err
+			return nil, nil, err
 		}
 		content := []byte(vault.Skeleton(pageType, c.title, now))
 		switch {
 		case c.empty == route.Path:
-			req.Writes = append(req.Writes, Write{Path: route.Path, Mode: Replace, Content: content})
+			writes = append(writes, Write{Path: route.Path, Mode: Replace, Content: content})
+		case route.Exists && dest != source:
+			return nil, nil, fmt.Errorf("%s already exists in %s; link to it instead", route.Path, dest.Name())
 		case route.Exists:
-			return Request{}, nil, fmt.Errorf("%s already exists; link to it instead", route.Path)
+			return nil, nil, fmt.Errorf("%s already exists; link to it instead", route.Path)
 		default:
 			if c.empty != "" {
-				req.Writes = append(req.Writes, Write{Path: c.empty, Mode: Delete})
+				writes = append(writes, Write{Path: c.empty, Mode: Delete})
 			}
-			req.Writes = append(req.Writes, Write{Path: route.Path, Mode: Create, Content: content})
+			writes = append(writes, Write{Path: route.Path, Mode: Create, Content: content})
 		}
 		stubbed = append(stubbed, Stubbed{Title: c.title, Type: pageType, Path: route.Path})
 	}
-	if len(stubbed) > 0 {
-		req.Summary = stubSummary(stubbed)
-	}
-	return req, stubbed, nil
+	return writes, stubbed, nil
 }
 
 // StubInto creates, in kb, seed pages for titles the project's wiki links to but nobody
@@ -203,41 +218,15 @@ func StubInto(project, kb *vault.Vault, titles []StubTitle, defaultType string, 
 	if defaultType == "" {
 		defaultType = defaultStubType(kb.Config.Mode)
 	}
-	req := Request{Kind: Stub}
-	var stubbed []Stubbed
-	seen := map[string]bool{}
-	for _, t := range titles {
-		key := strings.ToLower(strings.TrimSpace(t.Title))
-		c, err := set.find(project, t.Title)
-		if err != nil {
-			return StubResult{}, err
-		}
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		pageType := t.Type
-		if pageType == "" {
-			pageType = defaultType
-		}
-		if pageType == "source" {
-			return StubResult{}, fmt.Errorf("a source page comes from ingest, with a captured file and a ledger record; stub %q as another type", c.title)
-		}
-		route, err := kb.RouteFor(pageType, c.title, now)
-		if err != nil {
-			return StubResult{}, err
-		}
-		if route.Exists {
-			return StubResult{}, fmt.Errorf("%s already exists in %s; link to it instead", route.Path, kb.Name())
-		}
-		req.Writes = append(req.Writes, Write{Path: route.Path, Mode: Create, Content: []byte(vault.Skeleton(pageType, c.title, now))})
-		stubbed = append(stubbed, Stubbed{Title: c.title, Type: pageType, Path: route.Path})
+	writes, stubbed, err := set.writes(project, kb, titles, defaultType, now)
+	if err != nil {
+		return StubResult{}, err
 	}
 	out := StubResult{Stubs: []Stubbed{}}
-	if len(req.Writes) == 0 {
+	if len(writes) == 0 {
 		return out, nil
 	}
-	req.Summary = stubSummary(stubbed)
+	req := Request{Kind: Stub, Writes: writes, Summary: stubSummary(stubbed)}
 	if via != "" {
 		req.Summary += " (via " + via + ")"
 	}

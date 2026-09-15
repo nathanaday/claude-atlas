@@ -118,6 +118,16 @@ func rescan(t *testing.T, cfg *home.Config, p, kb *vault.Vault) (project, knowle
 
 const kbPage = "---\ntype: concept\ntitle: Backprop\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Backprop\n\ntext\n"
 
+// linkPage writes a concept page whose body carries the links a stub needs to want.
+func linkPage(t *testing.T, v *vault.Vault, title, body string) {
+	t.Helper()
+	front := "---\ntitle: " + title + "\ntype: concept\nstatus: developing\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# " + title + "\n\n"
+	os.MkdirAll(v.Path("wiki/concepts"), 0o755)
+	if err := os.WriteFile(v.Path("wiki/concepts/"+title+".md"), []byte(front+body+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // call invokes a tool and decodes its structured result into out. It returns the error text for tool errors.
 func (c *client) call(name string, args map[string]any, out any) string {
 	c.t.Helper()
@@ -184,6 +194,9 @@ func TestToolsListAndStatus(t *testing.T) {
 	}
 	if strings.Join(names, ",") != "apply,capture,history,inbox,lint,mode,mounts,plan,plant,repos,route,status,stub,tasks,undo" {
 		t.Fatalf("tools %v", names)
+	}
+	if strings.Join(ToolNames(), ",") != strings.Join(names, ",") {
+		t.Fatalf("ToolNames %v, registered %v", ToolNames(), names)
 	}
 	var st Status
 	if msg := c.call("status", nil, &st); msg != "" {
@@ -596,6 +609,7 @@ func TestReadMountRefusesWrites(t *testing.T) {
 	if err := vaults.Grant(ke, pe, vault.AccessRead, now); err != nil {
 		t.Fatal(err)
 	}
+	linkPage(t, p, "Training", "See [[Backprop]] and [[Attention]].")
 	c := connectIn(t, h, p.Root)
 
 	writes := []map[string]any{{"path": "wiki/concepts/Backprop.md", "mode": "create", "content": kbPage}}
@@ -612,8 +626,52 @@ func TestReadMountRefusesWrites(t *testing.T) {
 	if msg := c.call("mode", map[string]any{"vault": kb.Root, "set": "lyt"}, nil); !strings.Contains(msg, "read-only") {
 		t.Errorf("mode set through a read mount: %q", msg)
 	}
+	ops, err := txn.History(kb, 1, false)
+	if err != nil || len(ops) == 0 {
+		t.Fatal(err)
+	}
+	if msg := c.call("undo", map[string]any{"vault": kb.Root, "operation_id": ops[0].ID}, nil); !strings.Contains(msg, "read-only") {
+		t.Errorf("undo through a read mount: %q", msg)
+	}
+	// A refused mount leaves the project's own titles unwritten: every mount is checked
+	// before the first operation.
+	mixed := []map[string]any{{"title": "Attention"}, {"title": "Backprop", "target": "kb"}}
+	if msg := c.call("stub", map[string]any{"titles": mixed}, nil); !strings.Contains(msg, "read-only") {
+		t.Errorf("a mixed stub through a read mount: %q", msg)
+	}
+	if _, err := os.Stat(p.Path("wiki/concepts/Attention.md")); err == nil {
+		t.Fatal("a refused mount leaves the project's own stub unwritten")
+	}
 	if _, err := os.Stat(kb.Path("wiki/concepts/Backprop.md")); err == nil {
 		t.Fatal("a read mount writes nothing")
+	}
+}
+
+func TestPlanRefusesAProjectThatDoesNotMount(t *testing.T) {
+	h, cfg, _, kb := mounted(t)
+	other := vaults.PathFor(cfg.VaultsDir, vault.Project, "q")
+	if _, err := vault.Init(other, vault.Options{Kind: vault.Project, Name: "q"}, now); err != nil {
+		t.Fatal(err)
+	}
+	c := connectIn(t, h, other)
+	writes := []map[string]any{{"path": "wiki/concepts/Backprop.md", "mode": "create", "content": kbPage}}
+	if msg := c.call("plan", map[string]any{"vault": kb.Root, "kind": "save", "summary": "save Backprop", "writes": writes}, nil); !strings.Contains(msg, "q does not mount kb") {
+		t.Errorf("a project with no mount: %q", msg)
+	}
+	if _, err := os.Stat(kb.Path("wiki/concepts/Backprop.md")); err == nil {
+		t.Fatal("nothing is written")
+	}
+}
+
+func TestMountsNeedsAVaultTheAtlasKnows(t *testing.T) {
+	h, _, _, _ := mounted(t)
+	outside := newVault(t) // a project the vaults directory does not hold
+	c := connectIn(t, h, outside.Root)
+	if msg := c.call("mounts", nil, nil); !strings.Contains(msg, "the atlas does not know") {
+		t.Errorf("mounts: %q", msg)
+	}
+	if msg := c.call("stub", map[string]any{"titles": []map[string]any{{"title": "Backprop", "target": "kb"}}}, nil); !strings.Contains(msg, "the atlas does not know") {
+		t.Errorf("stub with a target: %q", msg)
 	}
 }
 
@@ -640,29 +698,71 @@ func TestKnowledgeBaseSessionRefusesIngestAndNamesMounts(t *testing.T) {
 
 func TestStubIntoAMount(t *testing.T) {
 	h, _, p, kb := mounted(t)
-	os.MkdirAll(p.Path("wiki/concepts"), 0o755)
-	os.WriteFile(p.Path("wiki/concepts/Training.md"), []byte("---\ntitle: Training\ntype: concept\nstatus: developing\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Training\n\nSee [[Backprop]].\n"), 0o644)
+	linkPage(t, p, "Training", "See [[Backprop]] and [[Attention]].")
 	c := connectIn(t, h, p.Root)
 
 	if msg := c.call("stub", map[string]any{"titles": []map[string]any{{"title": "Backprop", "target": "none"}}}, nil); !strings.Contains(msg, "no mount named") {
 		t.Errorf("unknown mount: %q", msg)
 	}
 	var out StubOut
-	if msg := c.call("stub", map[string]any{"titles": []map[string]any{{"title": "Backprop", "target": "kb"}}}, &out); msg != "" {
+	// Two spellings of one mount name make one operation.
+	titles := []map[string]any{{"title": "Backprop", "target": "kb"}, {"title": "Attention", "target": "KB"}}
+	if msg := c.call("stub", map[string]any{"titles": titles}, &out); msg != "" {
 		t.Fatal(msg)
 	}
-	if len(out.Stubs) != 1 || out.Stubs[0].Path != "kb/kb/concepts/Backprop.md" || out.OperationID == "" {
-		t.Fatalf("stub into a mount %+v", out)
+	if len(out.Stubs) != 2 || out.Stubs[0].Path != "kb/kb/concepts/Backprop.md" || out.Stubs[1].Path != "kb/kb/concepts/Attention.md" {
+		t.Fatalf("stub into a mount %+v", out.Stubs)
+	}
+	if out.OperationID != "" || out.Commit != "" {
+		t.Fatalf("nothing committed in the project, so no top-level operation: %+v", out.StubResult)
 	}
 	if len(out.Operations) != 1 || out.Operations[0].Vault != kb.Root || out.Operations[0].Commit == "" {
 		t.Fatalf("operations %+v", out.Operations)
 	}
-	if _, err := os.Stat(kb.Path("wiki/concepts/Backprop.md")); err != nil {
-		t.Fatal("the stub belongs to the knowledge base")
+	for _, title := range []string{"Backprop", "Attention"} {
+		if _, err := os.Stat(kb.Path("wiki/concepts/" + title + ".md")); err != nil {
+			t.Fatalf("%s belongs to the knowledge base: %v", title, err)
+		}
 	}
 	if _, err := os.Stat(p.Path(out.Stubs[0].Path)); err != nil {
 		t.Fatalf("the project reads the stub through its mount: %v", err)
 	}
 	// Task 7 teaches lint to resolve a link through a mount; until then the project's
 	// lint still wants Backprop.
+}
+
+func TestStubNamesWhatCommittedWhenALaterOperationFails(t *testing.T) {
+	h, _, p, kb := mounted(t)
+	linkPage(t, p, "Training", "See [[Attention]].")
+	c := connectIn(t, h, p.Root)
+
+	titles := []map[string]any{{"title": "Attention"}, {"title": "Nowhere", "target": "kb"}}
+	msg := c.call("stub", map[string]any{"titles": titles}, nil)
+	if !strings.Contains(msg, "nothing in the wiki links to") || !strings.Contains(msg, "already committed") || !strings.Contains(msg, p.Root) {
+		t.Fatalf("the refusal names the operation that landed: %q", msg)
+	}
+	if _, err := os.Stat(p.Path("wiki/concepts/Attention.md")); err != nil {
+		t.Fatal("the project's own stub committed before the knowledge base refused")
+	}
+	if _, err := os.Stat(kb.Path("wiki/concepts/Nowhere.md")); err == nil {
+		t.Fatal("the knowledge base got nothing")
+	}
+}
+
+func TestStubDirectlyIntoAKnowledgeBaseRecordsTheProject(t *testing.T) {
+	h, _, p, kb := mounted(t)
+	linkPage(t, p, "Training", "See [[Backprop]].")
+	c := connectIn(t, h, p.Root)
+
+	var out StubOut
+	if msg := c.call("stub", map[string]any{"vault": kb.Root, "titles": []map[string]any{{"title": "Backprop"}}}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(out.Stubs) != 1 || out.Stubs[0].Path != "wiki/concepts/Backprop.md" || out.OperationID == "" {
+		t.Fatalf("stub in the knowledge base %+v", out)
+	}
+	ops, err := txn.History(kb, 1, false)
+	if err != nil || len(ops) == 0 || ops[0].Summary != "stub Backprop (via p)" {
+		t.Fatalf("the knowledge base's log names the project: %+v %v", ops, err)
+	}
 }
