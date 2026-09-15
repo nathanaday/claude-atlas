@@ -310,21 +310,40 @@ func Resolve(explicit, envValue, start string) (*Vault, error) {
 //go:embed all:templates
 var templates embed.FS
 
-// TemplateFiles lists the vault-relative paths the template provides.
-func TemplateFiles() []string {
+// TemplateFiles lists the vault-relative paths the template provides for a kind: the
+// files every vault has, then the kind's own. A kind's file wins over a common one.
+func TemplateFiles(kind Kind) []string {
+	seen := map[string]bool{}
 	var out []string
-	fs.WalkDir(templates, "templates", func(path string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			out = append(out, strings.TrimPrefix(path, "templates/"))
-		}
-		return nil
-	})
+	for _, dir := range templateDirs(kind) {
+		fs.WalkDir(templates, dir, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				rel := strings.TrimPrefix(path, dir+"/")
+				if !seen[rel] {
+					seen[rel] = true
+					out = append(out, rel)
+				}
+			}
+			return nil
+		})
+	}
 	sort.Strings(out)
 	return out
 }
 
-func renderTemplate(rel string, now time.Time) ([]byte, error) {
-	data, err := templates.ReadFile("templates/" + rel)
+// templateDirs are the embedded folders a kind draws on, the kind's own first.
+func templateDirs(kind Kind) []string {
+	return []string{"templates/" + string(kind), "templates/common"}
+}
+
+func renderTemplate(kind Kind, rel string, now time.Time) ([]byte, error) {
+	var data []byte
+	var err error
+	for _, dir := range templateDirs(kind) {
+		if data, err = templates.ReadFile(dir + "/" + rel); err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -459,8 +478,8 @@ func writeMissing(root string, cfg Config, now time.Time, overwrite bool) ([]str
 		written = append(written, rel)
 		return nil
 	}
-	for _, rel := range TemplateFiles() {
-		data, err := renderTemplate(rel, now)
+	for _, rel := range TemplateFiles(cfg.Kind) {
+		data, err := renderTemplate(cfg.Kind, rel, now)
 		if err != nil {
 			return nil, err
 		}
@@ -490,8 +509,10 @@ func writeMissing(root string, cfg Config, now time.Time, overwrite bool) ([]str
 	if err := put(LedgerPath, ledger.Empty(now).Encode()); err != nil {
 		return nil, err
 	}
-	if err := put(TaskLedgerPath, []byte(EmptyTaskLedger)); err != nil {
-		return nil, err
+	if cfg.Kind == Project {
+		if err := put(TaskLedgerPath, []byte(EmptyTaskLedger)); err != nil {
+			return nil, err
+		}
 	}
 	sort.Strings(written)
 	return written, nil

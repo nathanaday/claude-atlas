@@ -281,17 +281,19 @@ func TestNewVaultHasNoFindings(t *testing.T) {
 		t.Skip("git is not installed")
 	}
 	asOf := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
-	for _, mode := range vault.Modes {
-		root := filepath.Join(t.TempDir(), string(mode))
-		if _, err := vault.Init(root, vault.Options{Kind: vault.Project, Mode: mode}, asOf); err != nil {
-			t.Fatal(err)
-		}
-		r, err := Run(root, Options{AsOf: asOf})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if r.Summary.IssuesFound != 0 || r.Summary.WantedPages != 0 || r.Summary.Stubs != 0 {
-			t.Errorf("%s vault:\n%s", mode, r.Markdown())
+	for _, kind := range vault.Kinds {
+		for _, mode := range vault.Modes {
+			root := filepath.Join(t.TempDir(), string(kind)+"-"+string(mode))
+			if _, err := vault.Init(root, vault.Options{Kind: kind, Mode: mode}, asOf); err != nil {
+				t.Fatal(err)
+			}
+			r, err := Run(root, Options{AsOf: asOf})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Summary.IssuesFound != 0 || r.Summary.WantedPages != 0 || r.Summary.Stubs != 0 {
+				t.Errorf("%s vault in %s mode:\n%s", kind, mode, r.Markdown())
+			}
 		}
 	}
 }

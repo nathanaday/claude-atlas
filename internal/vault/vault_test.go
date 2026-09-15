@@ -314,6 +314,54 @@ func TestFrontmatter(t *testing.T) {
 	}
 }
 
+func TestInitLayoutByKind(t *testing.T) {
+	needGit(t)
+	kb := filepath.Join(t.TempDir(), "kb")
+	if _, err := Init(kb, Options{Kind: Knowledge}, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{InboxDir, InboxTasksDir, IdeasDir, TasksDir, TaskLedgerPath} {
+		if _, err := os.Stat(filepath.Join(kb, filepath.FromSlash(rel))); err == nil {
+			t.Errorf("a knowledge base has %s", rel)
+		}
+	}
+	for _, rel := range []string{Marker, ".gitignore", AppFile, AppearanceFile, LogPage, HotPage, IndexPage, OverviewPage, LedgerPath} {
+		if _, err := os.Stat(filepath.Join(kb, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("a knowledge base lacks %s", rel)
+		}
+	}
+	index, _ := os.ReadFile(filepath.Join(kb, "wiki", "index.md"))
+	if strings.Contains(string(index), "Questions") || !strings.Contains(string(index), "## Concepts") {
+		t.Fatalf("knowledge base index:\n%s", index)
+	}
+	hot, _ := os.ReadFile(filepath.Join(kb, "wiki", "hot.md"))
+	if strings.Contains(string(hot), "inbox/") {
+		t.Fatalf("a knowledge base's hot cache must not point at an inbox:\n%s", hot)
+	}
+	for _, f := range TemplateFiles(Knowledge) {
+		if strings.HasPrefix(f, "inbox/") || strings.HasPrefix(f, "ideas/") || strings.HasPrefix(f, "wiki/tasks/") {
+			t.Errorf("knowledge template lists %s", f)
+		}
+	}
+	p := filepath.Join(t.TempDir(), "p")
+	if _, err := Init(p, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"inbox/.gitkeep", "inbox/tasks/.gitkeep", "ideas/.gitkeep", TasksIndex, TaskLedgerPath, LedgerPath, ".obsidian/snippets/claude-atlas.css"} {
+		if _, err := os.Stat(filepath.Join(p, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("a project lacks %s", rel)
+		}
+	}
+	ignore, _ := os.ReadFile(filepath.Join(p, ".gitignore"))
+	if !strings.Contains(string(ignore), "/kb/") {
+		t.Fatalf("a project ignores its mounts:\n%s", ignore)
+	}
+	kbIgnore, _ := os.ReadFile(filepath.Join(kb, ".gitignore"))
+	if strings.Contains(string(kbIgnore), "/kb/") {
+		t.Fatalf("a knowledge base has no mounts to ignore:\n%s", kbIgnore)
+	}
+}
+
 func TestNewNotesGoUnderTheWikiUnlessTheUserChose(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "v")
