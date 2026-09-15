@@ -13,6 +13,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
@@ -91,7 +92,7 @@ func TestToolsListAndStatus(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, ",") != "apply,capture,history,inbox,lint,mode,plan,plant,repos,route,status,tasks,undo" {
+	if strings.Join(names, ",") != "apply,capture,history,inbox,lint,mode,plan,plant,repos,route,status,stub,tasks,undo" {
 		t.Fatalf("tools %v", names)
 	}
 	var st Status
@@ -349,5 +350,35 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	c.call("repos", nil, &repos)
 	if len(repos.Repos) != 1 || repos.Repos[0].Path != repo || !strings.Contains(repos.Repos[0].Policy, "current branch") {
 		t.Fatalf("repos %+v", repos)
+	}
+}
+
+func TestStubTool(t *testing.T) {
+	v := newVault(t)
+	os.MkdirAll(v.Path("wiki/concepts"), 0o755)
+	os.WriteFile(v.Path("wiki/concepts/Training.md"), []byte("---\ntitle: Training\ntype: concept\nstatus: developing\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Training\n\nSee [[vanishing gradient problem]].\n"), 0o644)
+	c := connect(t, v.Path("wiki"))
+	var report struct {
+		Summary struct {
+			Wanted int `json:"wanted_pages"`
+		} `json:"summary"`
+	}
+	c.call("lint", nil, &report)
+	if report.Summary.Wanted != 1 {
+		t.Fatalf("lint %+v", report)
+	}
+	if msg := c.call("stub", map[string]any{"titles": []map[string]any{{"title": "Nowhere"}}}, nil); !strings.Contains(msg, "nothing in the wiki links to") {
+		t.Fatalf("refusal %q", msg)
+	}
+	var out txn.StubResult
+	if msg := c.call("stub", map[string]any{"type": "question"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(out.Stubs) != 1 || out.Stubs[0].Path != "wiki/questions/vanishing gradient problem.md" || out.OperationID == "" {
+		t.Fatalf("stub %+v", out)
+	}
+	out = txn.StubResult{}
+	if msg := c.call("stub", nil, &out); msg != "" || len(out.Stubs) != 0 || out.OperationID != "" {
+		t.Fatalf("nothing left: %q %+v", msg, out)
 	}
 }

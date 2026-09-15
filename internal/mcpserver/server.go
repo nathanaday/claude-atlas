@@ -302,6 +302,24 @@ func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArg
 	return nil, PlantOut{Planted: planted, OperationID: res.OperationID, Commit: res.Commit}, nil
 }
 
+type StubArgs struct {
+	VaultArg
+	Titles []txn.StubTitle `json:"titles,omitempty" jsonschema:"the pages to stub; omit to stub every wanted page and every empty page a link points to"`
+	Type   string          `json:"type,omitempty" jsonschema:"the type for titles that name none; default concept, or note in lyt mode"`
+}
+
+func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs) (*mcp.CallToolResult, txn.StubResult, error) {
+	v, err := s.resolve(a.Vault)
+	if err != nil {
+		return nil, txn.StubResult{}, err
+	}
+	res, err := txn.StubPages(v, a.Titles, a.Type, s.opts.Now())
+	if err != nil {
+		return nil, txn.StubResult{}, err
+	}
+	return nil, res, nil
+}
+
 type TasksArgs struct {
 	VaultArg
 	Status string `json:"status,omitempty" jsonschema:"only tasks with this status"`
@@ -611,6 +629,8 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "Run the deterministic wiki health check: dead and ambiguous links, duplicate basenames, orphans, pages missing from every index, missing frontmatter, empty sections, stale index entries, and ledger problems. Read-only."}, s.lint)
 	mcp.AddTool(server, &mcp.Tool{Name: "plant",
 		Description: "Plant a task: create a task page with status planted from a title and the idea's text, as one commit. Give from to remove the inbox/tasks/ note it came from. No plan preview is needed; undo covers it."}, s.plant)
+	mcp.AddTool(server, &mcp.Tool{Name: "stub",
+		Description: "Create seed pages for the pages the wiki links to but nobody has written (lint's wanted pages), and give frontmatter to the empty pages a link points to, as one commit. Omit titles to stub all of them with the mode's default type; pass titles with a type when a name is a person, product, project, or organization (entity). No plan preview is needed; undo covers it."}, s.stub)
 	mcp.AddTool(server, &mcp.Tool{Name: "tasks", Annotations: ro(),
 		Description: "List the vault's tasks from the task ledger: open ones by status, priority, and age, with each task's page, workdir, last touch, and history; counts; and the notes waiting in inbox/tasks/. Pass all to include finished tasks."}, s.tasks)
 	mcp.AddTool(server, &mcp.Tool{Name: "repos", Annotations: ro(),
