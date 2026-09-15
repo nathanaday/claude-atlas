@@ -485,6 +485,27 @@ func TestRoutableTypesByKind(t *testing.T) {
 	}
 }
 
+func TestFindPageByStemAndAlias(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "wiki/concepts"), 0o755)
+	page := "---\ntitle: Backpropagation\ntype: concept\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\naliases:\n  - backprop\n  - \"Back Propagation\"\n---\n\n# Backpropagation\n"
+	if err := os.WriteFile(filepath.Join(root, "wiki/concepts/Backpropagation.md"), []byte(page), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := FindPage(root, "backpropagation")
+	if err != nil || m == nil || m.Path != "wiki/concepts/Backpropagation.md" || m.ByAlias != "" {
+		t.Fatalf("stem match: %+v %v", m, err)
+	}
+	m, err = FindPage(root, "Back propagation")
+	if err != nil || m == nil || m.Path != "wiki/concepts/Backpropagation.md" || m.ByAlias != "Back Propagation" {
+		t.Fatalf("alias match: %+v %v", m, err)
+	}
+	m, err = FindPage(root, "nope")
+	if err != nil || m != nil {
+		t.Fatalf("no match: %+v %v", m, err)
+	}
+}
+
 func TestFrontmatter(t *testing.T) {
 	fields, body, err := Frontmatter("---\ntitle: A\ntags:\n  - x\n---\n\nBody\n")
 	if err != nil || fields["title"] != "A" || body != "\nBody\n" || len(StringList(fields, "tags")) != 1 {

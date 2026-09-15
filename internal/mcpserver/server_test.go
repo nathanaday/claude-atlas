@@ -647,6 +647,63 @@ func TestReadMountRefusesWrites(t *testing.T) {
 	}
 }
 
+func TestRouteAcrossMounts(t *testing.T) {
+	h, cfg, p, kb := mounted(t)
+	page := "---\ntitle: Backpropagation\ntype: concept\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\naliases:\n  - backprop\n---\n\n# Backpropagation\n"
+	os.MkdirAll(kb.Path("wiki/concepts"), 0o755)
+	if err := os.WriteFile(kb.Path("wiki/concepts/Backpropagation.md"), []byte(page), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := connectIn(t, h, p.Root)
+
+	var out RouteOut
+	if msg := c.call("route", map[string]any{"type": "concept", "title": "backprop"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(out.Mounts) != 1 || out.Mounts[0].Match == nil || out.Mounts[0].Match.Path != "wiki/concepts/Backpropagation.md" {
+		t.Fatalf("mount match %+v", out.Mounts)
+	}
+	if !strings.HasSuffix(out.Mounts[0].Path, "wiki/concepts/backprop.md") {
+		t.Fatalf("mount path %+v", out.Mounts[0])
+	}
+
+	out = RouteOut{}
+	if msg := c.call("route", map[string]any{"type": "concept", "title": "Fresh"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Match != nil || out.Mounts[0].Match != nil {
+		t.Fatalf("no match anywhere: target %+v mount %+v", out.Match, out.Mounts[0])
+	}
+	if out.Mounts[0].Path == "" {
+		t.Fatalf("a writable mount routes a concept: %+v", out.Mounts[0])
+	}
+
+	out = RouteOut{}
+	if msg := c.call("route", map[string]any{"type": "question", "title": "Q"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Mounts[0].Path != "" || out.Mounts[0].Error != "" {
+		t.Fatalf("a question is not filed in a knowledge base: %+v", out.Mounts[0])
+	}
+
+	guarded := vault.AccessGuarded
+	_, ke := rescan(t, cfg, p, kb)
+	if err := vaults.EditIdentity(ke, vaults.Edit{Access: &guarded}, now); err != nil {
+		t.Fatal(err)
+	}
+	pe, ke := rescan(t, cfg, p, kb)
+	if err := vaults.Grant(ke, pe, vault.AccessRead, now); err != nil {
+		t.Fatal(err)
+	}
+	out = RouteOut{}
+	if msg := c.call("route", map[string]any{"type": "concept", "title": "backprop"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Mounts[0].Path != "" || out.Mounts[0].Effective != "read" {
+		t.Fatalf("a read mount reports no path: %+v", out.Mounts[0])
+	}
+}
+
 func TestPlanRefusesAProjectThatDoesNotMount(t *testing.T) {
 	h, cfg, _, kb := mounted(t)
 	other := vaults.PathFor(cfg.VaultsDir, vault.Project, "q")

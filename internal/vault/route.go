@@ -2,6 +2,7 @@ package vault
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -169,4 +170,70 @@ func headingsFor(pageType string) []string {
 // PageTitle derives a page's title from its path: the file stem.
 func PageTitle(rel string) string {
 	return strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))
+}
+
+// Match is an existing page that a title names: by its file stem or by an alias in its
+// frontmatter, compared without regard to case.
+type Match struct {
+	Path    string `json:"path"`
+	ByAlias string `json:"by_alias,omitempty"`
+}
+
+// FindPage looks for a page named title under wiki/: the file stem first, then the
+// aliases in every page's frontmatter. It returns nil when none matches.
+func FindPage(root, title string) (*Match, error) {
+	wikiRoot := filepath.Join(root, WikiDir)
+	if _, err := os.Stat(wikiRoot); err != nil {
+		return nil, nil
+	}
+	var stemMatch, aliasMatch *Match
+	err := filepath.WalkDir(wikiRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != wikiRoot && strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(d.Name()) != ".md" {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		stem := strings.TrimSuffix(d.Name(), ".md")
+		if strings.EqualFold(stem, title) {
+			stemMatch = &Match{Path: rel}
+			return fs.SkipAll
+		}
+		if aliasMatch != nil {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fields, _, err := Frontmatter(string(data))
+		if err != nil || fields == nil {
+			return nil
+		}
+		for _, alias := range StringList(fields, "aliases") {
+			if strings.EqualFold(alias, title) {
+				aliasMatch = &Match{Path: rel, ByAlias: alias}
+				break
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if stemMatch != nil {
+		return stemMatch, nil
+	}
+	return aliasMatch, nil
 }

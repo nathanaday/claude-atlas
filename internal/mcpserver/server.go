@@ -512,14 +512,38 @@ type RouteArgs struct {
 	Title string `json:"title" jsonschema:"the page title; it becomes the file name"`
 }
 
-func (s *Server) route(ctx context.Context, req *mcp.CallToolRequest, a RouteArgs) (*mcp.CallToolResult, vault.Route, error) {
-	v, err := s.resolve(a.Vault)
+// routeNext tells the model what a match means: a reason to link, not to duplicate.
+const routeNext = "A match anywhere means link to it instead of creating a page."
+
+// RouteOut is where a page belongs and whether one by that title or alias already
+// exists, in the target vault and, for a project, in every mount.
+type RouteOut struct {
+	vault.Route
+	Vault  string       `json:"vault"`
+	Match  *vault.Match `json:"match,omitempty"`
+	Mounts []MountRoute `json:"mounts,omitempty"`
+	Next   string       `json:"next"`
+}
+
+// MountRoute is one mount's answer to the same route question.
+type MountRoute struct {
+	Name      string       `json:"name"`
+	Vault     string       `json:"vault,omitempty"`
+	Effective string       `json:"effective,omitempty"`
+	Path      string       `json:"path,omitempty"`
+	Match     *vault.Match `json:"match,omitempty"`
+	Error     string       `json:"error,omitempty"`
+}
+
+func (s *Server) route(ctx context.Context, req *mcp.CallToolRequest, a RouteArgs) (*mcp.CallToolResult, RouteOut, error) {
+	sess, err := s.open(a.Vault)
 	if err != nil {
-		return nil, vault.Route{}, err
+		return nil, RouteOut{}, err
 	}
+	v := sess.target
 	if a.Type == "task" {
 		if err := requireProject(v, "tasks"); err != nil {
-			return nil, vault.Route{}, err
+			return nil, RouteOut{}, err
 		}
 		now := s.opts.Now()
 		plain := vault.TasksDir + "/" + vault.SanitizeTitle(a.Title) + ".md"
@@ -527,13 +551,60 @@ func (s *Server) route(ctx context.Context, req *mcp.CallToolRequest, a RouteArg
 		if _, err := os.Stat(v.Path(plain)); err == nil {
 			r.Exists = true
 		}
-		return nil, r, nil
+		return nil, RouteOut{Route: r, Vault: v.Root, Next: routeNext}, nil
 	}
 	r, err := v.RouteFor(a.Type, a.Title, s.opts.Now())
 	if err != nil {
-		return nil, vault.Route{}, err
+		return nil, RouteOut{}, err
 	}
-	return nil, *r, nil
+	match, err := vault.FindPage(v.Root, a.Title)
+	if err != nil {
+		return nil, RouteOut{}, err
+	}
+	out := RouteOut{Route: *r, Vault: v.Root, Match: match, Next: routeNext}
+	if sess.project != nil && sess.mount == nil && v.Config.Kind == vault.Project {
+		now := s.opts.Now()
+		for _, m := range sess.project.Mounts {
+			out.Mounts = append(out.Mounts, mountRoute(m, a.Type, a.Title, now))
+		}
+	}
+	return nil, out, nil
+}
+
+// mountRoute answers the route question against one mount: an unresolved mount carries
+// its error; a resolved one reports whether the title or an alias already exists there,
+// and where a new page would go when the mount is writable and the type is filed there.
+func mountRoute(m registry.Mount, pageType, title string, now time.Time) MountRoute {
+	mr := MountRoute{Name: m.Name, Effective: m.Effective}
+	if m.Error != "" {
+		mr.Error = m.Error
+		return mr
+	}
+	kb, err := vault.Open(filepath.Dir(m.Path))
+	if err != nil {
+		mr.Error = err.Error()
+		return mr
+	}
+	mr.Vault = kb.Root
+	match, err := vault.FindPage(kb.Root, title)
+	if err != nil {
+		mr.Error = err.Error()
+		return mr
+	}
+	mr.Match = match
+	if m.Effective != vault.AccessWrite {
+		return mr
+	}
+	for _, t := range vault.RoutableTypes(vault.Knowledge, kb.Config.Mode) {
+		if t != pageType {
+			continue
+		}
+		if r, err := kb.RouteFor(pageType, title, now); err == nil {
+			mr.Path = r.Path
+		}
+		break
+	}
+	return mr
 }
 
 type PlantArgs struct {
@@ -1030,7 +1101,7 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "capture",
 		Description: "Copy files from the project's inbox into the immutable raw store and record them in the source ledger, as one commit. Set vault to a mounted knowledge base to capture into it; the record then names the project the source came through. Returns each file's source id and stored path. Read the stored file afterwards with Read."}, s.capture)
 	mcp.AddTool(server, &mcp.Tool{Name: "route", Annotations: ro(),
-		Description: "Say where a new page of a type belongs under the vault's mode, whether a page with that title already exists, and give a skeleton with the vault's frontmatter conventions."}, s.route)
+		Description: "Say where a new page of a type belongs under the vault's mode, whether a page with that title or alias already exists in the vault or, for a project, in any of its mounts, and give a skeleton with the vault's frontmatter conventions."}, s.route)
 	mcp.AddTool(server, &mcp.Tool{Name: "plan", Annotations: ro(),
 		Description: "Validate a set of file changes against the vault and hold them as a plan. Returns a plan_id, a preview of creates, replaces, and deletes, and warnings such as links that do not resolve. Nothing is written. Show the preview to the user before apply."}, s.plan)
 	mcp.AddTool(server, &mcp.Tool{Name: "apply",
