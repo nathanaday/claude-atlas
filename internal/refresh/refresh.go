@@ -174,9 +174,9 @@ func baseState(generatedAt string) *tree.State {
 	return &tree.State{Schema: tree.StateSchema, GeneratedAt: generatedAt, OpenThreads: []string{}}
 }
 
-// Derive observes one project's vault: a claude-atlas vault, or a claude-obsidian vault
-// that has not been adopted yet, which reads the same way but is marked legacy.
-func Derive(project *tree.Project, today time.Time, generatedAt string) *tree.State {
+// treeDerive observes one project's vault: a claude-atlas vault, or a claude-obsidian
+// vault that has not been adopted yet, which reads the same way but is marked legacy.
+func treeDerive(project *tree.Project, today time.Time, generatedAt string) *tree.State {
 	return derive(project, today, generatedAt, nil, home.DefaultNewDays)
 }
 
@@ -439,8 +439,8 @@ func unfinishedTotal(u tree.Unfinished) string {
 	return intOr(u.Total(), "—")
 }
 
-// Signals crosses authored intent with derived state; these lines are the point of the page.
-func Signals(node *tree.Project, state *tree.State, today time.Time) []string {
+// treeSignals crosses authored intent with derived state; these lines are the point of the page.
+func treeSignals(node *tree.Project, state *tree.State, today time.Time) []string {
 	var notes []string
 	if !state.VaultOK {
 		notes = append(notes, "vault unreachable: "+state.VaultError)
@@ -595,7 +595,7 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 		fmt.Fprintf(&b, "> [!failure] tree/%s.md\n> Not a project: %s.\n\n", problem.Rel, problem.Reason)
 	}
 	for _, r := range rows {
-		for _, note := range Signals(r.Project, r.State, today) {
+		for _, note := range treeSignals(r.Project, r.State, today) {
 			flagged++
 			fmt.Fprintf(&b, "> [!%s] %s\n> %s\n\n", calloutFor(note), r.Project.Rel, capitalize(note))
 		}

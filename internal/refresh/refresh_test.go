@@ -10,6 +10,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -72,7 +73,7 @@ func TestCreatedDateComesFromTheIndexPage(t *testing.T) {
 
 func TestDeriveMarksAFreshVaultNew(t *testing.T) {
 	vault := fakeVault(t, "", "", map[string]string{"index.md": "---\ncreated: " + time.Now().Format("2006-01-02") + "\n---\n"})
-	state := Derive(leaf(vault), time.Now(), "t")
+	state := treeDerive(leaf(vault), time.Now(), "t")
 	if state.Heat != "new" || state.Created != time.Now().Format("2006-01-02") {
 		t.Fatalf("got heat %q created %q", state.Heat, state.Created)
 	}
@@ -104,28 +105,28 @@ func TestPlainTextStripsWikilinks(t *testing.T) {
 }
 
 func TestDeriveMarksMissingVault(t *testing.T) {
-	state := Derive(leaf(filepath.Join(t.TempDir(), "nope")), today, "t")
+	state := treeDerive(leaf(filepath.Join(t.TempDir(), "nope")), today, "t")
 	if state.VaultOK || state.VaultError != "not found" || state.Heat != "" {
 		t.Fatalf("got %+v", state)
 	}
 	plain := t.TempDir()
-	if state := Derive(leaf(plain), today, "t"); state.VaultError != "not a claude-atlas vault" {
+	if state := treeDerive(leaf(plain), today, "t"); state.VaultError != "not a claude-atlas vault" {
 		t.Fatalf("got %+v", state)
 	}
 	legacy := t.TempDir()
 	os.MkdirAll(filepath.Join(legacy, "wiki"), 0o755)
 	os.WriteFile(filepath.Join(legacy, ".claude-obsidian.json"), []byte("{}"), 0o644)
-	state = Derive(leaf(legacy), today, "t")
+	state = treeDerive(leaf(legacy), today, "t")
 	if !state.VaultOK || !state.Legacy {
 		t.Fatalf("legacy vault should read: %+v", state)
 	}
-	if notes := strings.Join(Signals(leaf(legacy), state, today), "\n"); !strings.Contains(notes, "claude-obsidian vault; adopt it") {
+	if notes := strings.Join(treeSignals(leaf(legacy), state, today), "\n"); !strings.Contains(notes, "claude-obsidian vault; adopt it") {
 		t.Fatalf("signals %q", notes)
 	}
 	v1 := t.TempDir()
 	os.MkdirAll(filepath.Join(v1, "wiki"), 0o755)
 	os.WriteFile(filepath.Join(v1, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
-	state = Derive(leaf(v1), today, "t")
+	state = treeDerive(leaf(v1), today, "t")
 	if state.VaultOK || state.VaultError != "v1 vault; run claude-atlas adopt" {
 		t.Fatalf("v1 vault %+v", state)
 	}
@@ -133,7 +134,7 @@ func TestDeriveMarksMissingVault(t *testing.T) {
 
 func TestDeriveTakesLaterOfLogAndMtime(t *testing.T) {
 	vault := fakeVault(t, "## 2026-08-01 — old\n", "", nil)
-	state := Derive(leaf(vault), time.Now(), "t")
+	state := treeDerive(leaf(vault), time.Now(), "t")
 	if state.LastOperation != "2026-08-01" || state.LastTouched != time.Now().Format("2006-01-02") {
 		t.Fatalf("got %+v", state)
 	}
@@ -150,13 +151,13 @@ func p(v int) *int { return &v }
 func TestSignals(t *testing.T) {
 	node := leaf("/v")
 	node.Priority, node.ReviewAfter = "high", "2026-01-01"
-	notes := strings.Join(Signals(node, &tree.State{VaultOK: true, Heat: "cold", DaysIdle: p(45)}, today), "\n")
+	notes := strings.Join(treeSignals(node, &tree.State{VaultOK: true, Heat: "cold", DaysIdle: p(45)}, today), "\n")
 	if !strings.Contains(notes, "priority high") || !strings.Contains(notes, "45 days") || !strings.Contains(notes, "review date 2026-01-01") {
 		t.Fatalf("got %q", notes)
 	}
 	blocked := leaf("/v")
 	blocked.State, blocked.BlockedOn = "blocked", "hardware"
-	if got := Signals(blocked, &tree.State{VaultOK: true, Heat: "hot"}, today); len(got) != 1 || got[0] != "blocked on: hardware" {
+	if got := treeSignals(blocked, &tree.State{VaultOK: true, Heat: "hot"}, today); len(got) != 1 || got[0] != "blocked on: hardware" {
 		t.Fatalf("got %v", got)
 	}
 }
@@ -248,14 +249,14 @@ func TestLinksCountAsActivityAndMissingOnesSignal(t *testing.T) {
 	node.Materials = []string{docs}
 	node.Repos = []string{filepath.Join(t.TempDir(), "gone")}
 	tree.ResolveLinks(node, nil)
-	state := Derive(node, time.Now(), "t")
+	state := treeDerive(node, time.Now(), "t")
 	if len(state.Links) != 2 || !state.Links[1].OK || state.Links[0].OK {
 		t.Fatalf("links %+v", state.Links)
 	}
 	if state.LastTouched != time.Now().Format("2006-01-02") {
 		t.Fatalf("material activity should count: last touched %s", state.LastTouched)
 	}
-	notes := strings.Join(Signals(node, state, time.Now()), "\n")
+	notes := strings.Join(treeSignals(node, state, time.Now()), "\n")
 	if !strings.Contains(notes, "repo ") || !strings.Contains(notes, "not found") {
 		t.Fatalf("signals %q", notes)
 	}
@@ -265,11 +266,11 @@ func TestLinksCountAsActivityAndMissingOnesSignal(t *testing.T) {
 	}
 	// With a page, the link renders as a wikilink and the name shows in the signal.
 	node.Linked[0].Name = "gone"
-	state = Derive(node, time.Now(), "t")
+	state = treeDerive(node, time.Now(), "t")
 	if state.Links[0].Name != "gone" {
 		t.Fatalf("name should carry: %+v", state.Links)
 	}
-	notes = strings.Join(Signals(node, state, time.Now()), "\n")
+	notes = strings.Join(treeSignals(node, state, time.Now()), "\n")
 	page = Render(&Result{Rows: []Row{{node, state}}}, "2026-09-12T18:00:00Z", time.Now())
 	if !strings.Contains(notes, "repo gone (") || !strings.Contains(page, "| Repo | [[repos/gone\\|gone]] · not found |") {
 		t.Fatalf("notes %q page:\n%s", notes, page)
@@ -279,7 +280,7 @@ func TestLinksCountAsActivityAndMissingOnesSignal(t *testing.T) {
 func TestWarningsAndLinkSignalsRender(t *testing.T) {
 	node := leaf("/v")
 	node.Warnings = []string{"related: [[nope]] names no project"}
-	notes := Signals(node, &tree.State{VaultOK: true, Heat: "hot"}, today)
+	notes := treeSignals(node, &tree.State{VaultOK: true, Heat: "hot"}, today)
 	if len(notes) != 1 || notes[0] != node.Warnings[0] {
 		t.Fatalf("notes %v", notes)
 	}
@@ -348,7 +349,7 @@ func TestTasksOnTheOverview(t *testing.T) {
 			{ID: "task-20260901-cccc", Title: "Someday", Status: "planted", Priority: "low", Path: "/Users/me/v/wiki/tasks/Someday.md", Due: "2026-12-01"},
 		},
 	}}
-	notes := strings.Join(Signals(node, state, today), "\n")
+	notes := strings.Join(treeSignals(node, state, today), "\n")
 	if !strings.Contains(notes, "1 blocked task: Wait for parts") || !strings.Contains(notes, "1 stale task, active but untouched for 14 days: Fix [the] dialog") {
 		t.Fatalf("signals %q", notes)
 	}
@@ -366,5 +367,69 @@ func TestTasksOnTheOverview(t *testing.T) {
 	}
 	if taskCell(&tree.State{}) != "—" || taskCell(&tree.State{Tasks: &tree.TaskSummary{Counts: tasks.Counts{Notes: 1}}}) != "0 · 1 note" {
 		t.Fatal("task cell")
+	}
+}
+
+func TestRegistryDerivesEveryEntry(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults"), Heat: &home.HeatConfig{NewDays: 7}}
+	kb := filepath.Join(cfg.VaultsDir, "knowledge", "ai-ml")
+	p := filepath.Join(cfg.VaultsDir, "projects", "cs566")
+	for path, opts := range map[string]vault.Options{kb: {Kind: vault.Knowledge, Name: "ai-ml"}, p: {Kind: vault.Project, Name: "cs566"}} {
+		if _, err := vault.Init(path, opts, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.MkdirAll(filepath.Join(cfg.VaultsDir, "old", "wiki"), 0o755)
+	os.WriteFile(filepath.Join(cfg.VaultsDir, "old", vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1"}`), 0o644)
+	stateDir := filepath.Join(root, "state")
+	entries, ix, err := Registry(cfg, stateDir, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 || len(ix.Problems) != 1 {
+		t.Fatalf("entries %d problems %+v", len(entries), ix.Problems)
+	}
+	for _, e := range entries {
+		switch e.Name {
+		case "ai-ml", "cs566":
+			if e.State == nil || !e.State.VaultOK || e.State.Heat != "new" || e.State.Pages == nil || *e.State.Pages < 4 {
+				t.Errorf("%s state %+v", e.Name, e.State)
+			}
+			if e.Kind == vault.Project && e.State.Tasks == nil {
+				t.Errorf("project has a task summary: %+v", e.State)
+			}
+			if e.Kind == vault.Knowledge && e.State.Tasks != nil {
+				t.Errorf("knowledge base has no tasks: %+v", e.State)
+			}
+		default:
+			if e.State == nil || e.State.VaultOK || !strings.Contains(e.State.VaultError, "v1") {
+				t.Errorf("v1 entry %+v", e)
+			}
+		}
+	}
+	read, _, err := registry.Read(stateDir)
+	if err != nil || len(read) != 3 {
+		t.Fatalf("registry file %v %d", err, len(read))
+	}
+}
+
+func TestSignalsOverAnEntry(t *testing.T) {
+	e := registry.Entry{Name: "p", Kind: vault.Project, Path: "/v/p",
+		Mounts: []registry.Mount{{Name: "gone", Error: "no knowledge base with id x"}},
+		Repos:  []registry.Repo{{Name: "lost", Error: "no folder; link it with claude-atlas link"}},
+		State:  &registry.State{VaultOK: true, PendingRecovery: true, Tasks: &registry.TaskSummary{Open: []registry.TaskLine{{Title: "A", Status: "blocked"}, {Title: "B", Status: "active", Stale: true}}}},
+	}
+	got := strings.Join(Signals(e, time.Now()), "\n")
+	for _, want := range []string{"interrupted", "gone", "lost", "1 blocked task: A", "1 stale task"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if got := Signals(registry.Entry{Name: "k", Error: "v1 vault"}, time.Now()); len(got) != 1 || !strings.Contains(got[0], "v1 vault") {
+		t.Fatalf("error entry %v", got)
 	}
 }
