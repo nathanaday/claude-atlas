@@ -149,7 +149,7 @@ func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now tim
 // empty pages a link points to, and with no titles it stubs every candidate; a stub that
 // crosses vaults names its titles.
 func stubRequest(source, dest *vault.Vault, titles []StubTitle, defaultType string, now time.Time) (Request, []Stubbed, error) {
-	home := source == dest
+	home := source.Root == dest.Root
 	set, err := stubCandidates(source, home, now)
 	if err != nil {
 		return Request{}, nil, err
@@ -207,7 +207,7 @@ func (set *stubSet) writes(source, dest *vault.Vault, titles []StubTitle, defaul
 		switch {
 		case c.empty == route.Path:
 			writes = append(writes, Write{Path: route.Path, Mode: Replace, Content: content})
-		case route.Exists && dest != source:
+		case route.Exists && dest.Root != source.Root:
 			return nil, nil, fmt.Errorf("%s already exists in %s; link to it instead", route.Path, dest.Name())
 		case route.Exists:
 			return nil, nil, fmt.Errorf("%s already exists; link to it instead", route.Path)
