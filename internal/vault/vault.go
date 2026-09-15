@@ -855,9 +855,9 @@ func adoptConfig(root string, existing Config, hasMarker bool, opts Options, now
 
 // Adopt turns an existing directory, an Obsidian vault, a claude-obsidian vault, or a v1
 // vault into a claude-atlas vault of a kind. It adds only what is missing and commits a
-// baseline that includes every file already there. It never replaces or removes a file,
-// except that a v1 identity file is rewritten and files an older version put at other
-// paths are moved.
+// baseline that includes every file already there. It rewrites a v1 identity file, moves
+// files an older version put at other paths, and, when adopting as a knowledge base,
+// removes the project-only paths; otherwise it never replaces or removes a file.
 func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	if err := requireGit(); err != nil {
 		return nil, err
