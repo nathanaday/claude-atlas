@@ -73,6 +73,39 @@ func TestDropPagesRemovesPagesThatDoNotExist(t *testing.T) {
 	}
 }
 
+func TestApplySetsViaAndUpdateWithoutViaKeepsIt(t *testing.T) {
+	l := Empty(now)
+	origin := &Origin{Kind: "file", Locator: ".raw/captured/bb.pdf"}
+	id := ID("file", origin.Locator, "bb")
+	via := &Via{ID: "p1", Name: "cs566"}
+	if err := l.Apply([]Update{{ID: id, Origin: origin, ContentSHA256: "bb", Via: via}}, now); err != nil {
+		t.Fatal(err)
+	}
+	rec := l.Sources[id]
+	if rec.Via == nil || *rec.Via != *via {
+		t.Fatalf("via %+v", rec.Via)
+	}
+	out := l.Encode()
+	if !strings.Contains(string(out), `"via": {`) {
+		t.Fatalf("encode:\n%s", out)
+	}
+	again, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := again.Sources[id]
+	if got.Via == nil || *got.Via != *via {
+		t.Fatalf("round trip via %+v", got.Via)
+	}
+	if err := l.Apply([]Update{{ID: id, Notes: "seen"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	rec = l.Sources[id]
+	if rec.Via == nil || *rec.Via != *via {
+		t.Fatalf("update without via must keep the old via, got %+v", rec.Via)
+	}
+}
+
 func TestParseKeepsLegacyFields(t *testing.T) {
 	raw := `{"schema":"claude-obsidian.source-ledger.v1","generated_at":"2026-01-01T00:00:00Z","sources":{"src-abc":{"title":"T","origin":{"kind":"url","locator":"https://x"},"authority":"official","review_status":"active","pages":[],"independence_key":"x","refresh_due":"2027-01-01"}}}`
 	l, err := Parse([]byte(raw))

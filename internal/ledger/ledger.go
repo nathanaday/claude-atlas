@@ -26,6 +26,12 @@ type Origin struct {
 	Locator string `json:"locator"` // vault-relative path for file; the URL for url
 }
 
+// Via names the project a source came through into a knowledge base. Provenance, not a link.
+type Via struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // Source is one ledger record.
 type Source struct {
 	Title         string   `json:"title"`
@@ -38,6 +44,7 @@ type Source struct {
 	IngestedAt    string   `json:"ingested_at,omitempty"`
 	Pages         []string `json:"pages"`
 	Notes         string   `json:"notes,omitempty"`
+	Via           *Via     `json:"via,omitempty"`
 	// Extra keeps fields we do not model, so an adopted ledger loses nothing.
 	Extra map[string]json.RawMessage `json:"-"`
 }
@@ -85,7 +92,7 @@ func Parse(data []byte) (*Ledger, error) {
 		var all map[string]json.RawMessage
 		json.Unmarshal(rec, &all)
 		known := map[string]bool{"title": true, "origin": true, "content_sha256": true, "content_kind": true, "authority": true,
-			"review_status": true, "captured_at": true, "ingested_at": true, "pages": true, "notes": true}
+			"review_status": true, "captured_at": true, "ingested_at": true, "pages": true, "notes": true, "via": true}
 		for k, v := range all {
 			if !known[k] {
 				if s.Extra == nil {
@@ -140,6 +147,9 @@ func (l *Ledger) Encode() []byte {
 		if s.Notes != "" {
 			r["notes"] = s.Notes
 		}
+		if s.Via != nil {
+			r["via"] = s.Via
+		}
 		for k, v := range s.Extra {
 			r[k] = v
 		}
@@ -161,6 +171,7 @@ type Update struct {
 	Ingested      bool     `json:"ingested,omitempty"`
 	Pages         []string `json:"pages,omitempty"`
 	Notes         string   `json:"notes,omitempty"`
+	Via           *Via     `json:"via,omitempty"`
 }
 
 // Apply merges updates into the ledger. It validates each update and returns the first error.
@@ -204,6 +215,9 @@ func (l *Ledger) Apply(updates []Update, now time.Time) error {
 		sort.Strings(rec.Pages)
 		if u.Notes != "" {
 			rec.Notes = u.Notes
+		}
+		if u.Via != nil {
+			rec.Via = u.Via
 		}
 		if rec.Title == "" {
 			rec.Title = rec.Origin.Locator

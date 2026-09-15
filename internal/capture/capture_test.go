@@ -27,6 +27,19 @@ func newVault(t *testing.T) *vault.Vault {
 	return v
 }
 
+func newKnowledgeVault(t *testing.T) *vault.Vault {
+	t.Helper()
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := filepath.Join(t.TempDir(), "kb")
+	if _, err := vault.Init(root, vault.Options{Kind: vault.Knowledge, Mode: vault.Generic}, now); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := vault.Open(root)
+	return v
+}
+
 func TestListAndCapture(t *testing.T) {
 	v := newVault(t)
 	os.WriteFile(v.Path("inbox/paper.PDF"), []byte("%PDF fake"), 0o644)
@@ -79,6 +92,65 @@ func TestListAndCapture(t *testing.T) {
 	}
 	if _, err := Capture(v, []string{t.TempDir()}, now); err == nil {
 		t.Fatal("absolute paths outside the vault must fail")
+	}
+}
+
+func TestCaptureFromAProjectIntoAKnowledgeBase(t *testing.T) {
+	project := newVault(t)
+	kb := newKnowledgeVault(t)
+	os.WriteFile(project.Path("inbox/paper.md"), []byte("# paper"), 0o644)
+	via := ledger.Via{ID: project.Config.ID, Name: "cs566"}
+
+	before, err := project.Repo().Log(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := CaptureFrom(kb, project, []string{"paper.md"}, via, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Sources) != 1 || res.Commit == "" {
+		t.Fatalf("result %+v", res)
+	}
+	got := res.Sources[0]
+	if got.Path != "inbox/paper.md" || !strings.HasPrefix(got.StoredPath, ".raw/captured/") || !strings.HasSuffix(got.StoredPath, ".md") {
+		t.Fatalf("captured %+v", got)
+	}
+	if data, err := os.ReadFile(kb.Path(got.StoredPath)); err != nil || string(data) != "# paper" {
+		t.Fatalf("bytes %s %v", data, err)
+	}
+
+	l, err := ledger.Load(kb.Path(vault.LedgerPath), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := l.Sources[got.SourceID]
+	if !ok || rec.Via == nil || rec.Via.Name != "cs566" {
+		t.Fatalf("ledger record %+v %v", rec, ok)
+	}
+
+	if _, err := os.Stat(project.Path("inbox/paper.md")); err != nil {
+		t.Fatal("the source's inbox must be untouched")
+	}
+	after, err := project.Repo().Log(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) || before[0].SHA != after[0].SHA {
+		t.Fatal("capturing from a project's inbox must not commit to the project")
+	}
+
+	again, err := CaptureFrom(kb, project, []string{"paper.md"}, via, now)
+	if err != nil || len(again.Sources) != 1 || !again.Sources[0].AlreadyCaptured {
+		t.Fatalf("second capture %+v %v", again, err)
+	}
+
+	if _, err := CaptureFrom(project, project, []string{"paper.md"}, via, now); err == nil || !strings.Contains(err.Error(), "capture") {
+		t.Fatalf("target must be a knowledge base: %v", err)
+	}
+	if _, err := CaptureFrom(kb, kb, []string{"paper.md"}, via, now); err == nil || !strings.Contains(err.Error(), "project") {
+		t.Fatalf("source must be a project: %v", err)
 	}
 }
 

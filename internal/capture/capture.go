@@ -6,6 +6,7 @@ package capture
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -188,10 +189,33 @@ func resolveInbox(v *vault.Vault, arg string) (string, error) {
 // Capture copies the named inbox files into .raw/captured/ and records them in the ledger,
 // as one commit. A file already captured is reported, not copied again.
 func Capture(v *vault.Vault, paths []string, now time.Time) (*Result, error) {
+	read := func(rel string) ([]byte, error) { return os.ReadFile(v.Path(rel)) }
+	resolve := func(arg string) (string, error) { return resolveInbox(v, arg) }
+	return captureInto(v, read, resolve, nil, paths, now)
+}
+
+// CaptureFrom copies files from source's inbox into target's raw store and records them
+// in target's ledger with via, as one commit in target. source's inbox is untouched.
+func CaptureFrom(target, source *vault.Vault, paths []string, via ledger.Via, now time.Time) (*Result, error) {
+	if target.Config.Kind != vault.Knowledge {
+		return nil, errors.New("capture into a project from its own inbox with capture")
+	}
+	if source.Config.Kind != vault.Project {
+		return nil, errors.New("sources enter through a project's inbox")
+	}
+	read := func(rel string) ([]byte, error) { return os.ReadFile(source.Path(rel)) }
+	resolve := func(arg string) (string, error) { return resolveInbox(source, arg) }
+	return captureInto(target, read, resolve, &via, paths, now)
+}
+
+// captureInto resolves paths through resolve, reads their bytes through read, and copies
+// them into target's .raw/captured/, recording each in target's ledger as one commit. A
+// file already captured is reported, not copied again.
+func captureInto(target *vault.Vault, read func(rel string) ([]byte, error), resolve func(arg string) (string, error), via *ledger.Via, paths []string, now time.Time) (*Result, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("name at least one file in %s/", vault.InboxDir)
 	}
-	led, err := ledger.Load(v.Path(vault.LedgerPath), now)
+	led, err := ledger.Load(target.Path(vault.LedgerPath), now)
 	if err != nil {
 		return nil, err
 	}
@@ -200,39 +224,42 @@ func Capture(v *vault.Vault, paths []string, now time.Time) (*Result, error) {
 	seen := map[string]bool{}
 	var names []string
 	for _, arg := range paths {
-		rel, err := resolveInbox(v, arg)
+		rel, err := resolve(arg)
 		if err != nil {
 			return nil, err
 		}
-		sum, size, err := hashFile(v.Path(rel))
+		data, err := read(rel)
 		if err != nil {
 			return nil, err
 		}
+		sum := sha256.Sum256(data)
+		hexSum := hex.EncodeToString(sum[:])
+		size := int64(len(data))
 		if size > MaxFileBytes {
 			return nil, fmt.Errorf("%s is %d bytes; capture accepts up to %d", rel, size, MaxFileBytes)
 		}
-		c := Captured{Path: rel, SHA256: sum, Kind: KindOf(rel), Size: size}
-		if id, rec := led.FindBySHA(sum); id != "" {
+		c := Captured{Path: rel, SHA256: hexSum, Kind: KindOf(rel), Size: size}
+		if id, rec := led.FindBySHA(hexSum); id != "" {
 			c.AlreadyCaptured, c.SourceID, c.StoredPath = true, id, rec.Origin.Locator
 			res.Sources = append(res.Sources, c)
 			continue
 		}
-		c.StoredPath = storedPath(sum, rel)
-		c.SourceID = ledger.ID("file", c.StoredPath, sum)
+		c.StoredPath = storedPath(hexSum, rel)
+		c.SourceID = ledger.ID("file", c.StoredPath, hexSum)
 		if size > WarnFileBytes {
 			c.Warning = fmt.Sprintf("%s is large; the vault's git history grows by its size", rel)
 		}
-		if !seen[sum] {
-			seen[sum] = true
-			data, err := os.ReadFile(v.Path(rel))
-			if err != nil {
-				return nil, err
-			}
+		if !seen[hexSum] {
+			seen[hexSum] = true
 			req.Writes = append(req.Writes, txn.Write{Path: c.StoredPath, Mode: txn.Create, Content: data})
-			req.Sources = append(req.Sources, ledger.Update{
+			update := ledger.Update{
 				ID: c.SourceID, Title: vault.PageTitle(rel), Origin: &ledger.Origin{Kind: "file", Locator: c.StoredPath},
-				ContentSHA256: sum, ContentKind: c.Kind,
-			})
+				ContentSHA256: hexSum, ContentKind: c.Kind,
+			}
+			if via != nil {
+				update.Via = via
+			}
+			req.Sources = append(req.Sources, update)
 			names = append(names, path.Base(rel))
 		}
 		res.Sources = append(res.Sources, c)
@@ -241,11 +268,11 @@ func Capture(v *vault.Vault, paths []string, now time.Time) (*Result, error) {
 		return res, nil
 	}
 	req.Summary = "capture " + strings.Join(names, ", ")
-	plan, err := txn.Prepare(v, req, now)
+	plan, err := txn.Prepare(target, req, now)
 	if err != nil {
 		return nil, err
 	}
-	applied, err := txn.Apply(v, plan, now)
+	applied, err := txn.Apply(target, plan, now)
 	if err != nil {
 		return nil, err
 	}
