@@ -82,6 +82,8 @@ func TestGuard(t *testing.T) {
 		v.Path("inbox/paper.md"):                false,
 		v.Path("notes.md"):                      false,
 		filepath.Join(t.TempDir(), "wiki/x.md"): false,
+		v.Path("kb/ai-ml/concepts/A.md"):        true,
+		v.Path("repos/code/main.go"):            false,
 	}
 	for path, deny := range cases {
 		var out bytes.Buffer
@@ -96,6 +98,11 @@ func TestGuard(t *testing.T) {
 	Guard(strings.NewReader(`{"tool_name":"Edit","cwd":"`+v.Root+`","tool_input":{"file_path":"wiki/hot.md"}}`), &out)
 	if !strings.Contains(out.String(), "deny") {
 		t.Fatal("relative paths resolve against cwd")
+	}
+	var kbOut bytes.Buffer
+	Guard(strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"`+v.Path("kb/ai-ml/concepts/A.md")+`"}}`), &kbOut)
+	if !strings.Contains(kbOut.String(), "mounted knowledge base") {
+		t.Errorf("kb reason missing: %q", kbOut.String())
 	}
 }
 

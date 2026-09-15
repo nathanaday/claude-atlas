@@ -96,6 +96,8 @@ func TestPrepareValidates(t *testing.T) {
 		{"dotdot", Request{Kind: Save, Summary: "x", Writes: []Write{{Path: "wiki/../x.md", Mode: Create, Content: mkpage("A", "")}}}, "clean vault-relative"},
 		{"unknown source", Request{Kind: Ingest, Summary: "x", Sources: []ledger.Update{{ID: "src-nope", Ingested: true}}}, "capture it first"},
 		{"uncaptured inbox", Request{Kind: Ingest, Summary: "x", Writes: []Write{{Path: "inbox/.gitkeep", Mode: Delete}}}, "has not been captured"},
+		{"kb", Request{Kind: Save, Summary: "x", Writes: []Write{{Path: "kb/ai-ml/concepts/A.md", Mode: Create, Content: mkpage("A", "")}}}, "mounted knowledge base"},
+		{"repos", Request{Kind: Repair, Summary: "x", Writes: []Write{{Path: "repos/code/README.md", Mode: Create, Content: []byte("x")}}}, "not the vault's files"},
 	}
 	for _, c := range cases {
 		_, err := Prepare(v, c.req, now)

@@ -248,6 +248,8 @@ func Guard(r io.Reader, w io.Writer) error {
 		reason = "captured sources are immutable; use the capture tool for new ones"
 	case rel == vault.Marker:
 		reason = "the vault's identity file changes only through a config plan (see the wiki-mode skill)"
+	case strings.HasPrefix(rel, vault.KbDir+"/"):
+		reason = "pages of a mounted knowledge base change only through the atlas MCP tools, in the knowledge base's own operation"
 	case strings.HasPrefix(rel, ".git/"), strings.HasPrefix(rel, vault.MetaDir+"/"):
 		reason = "this is the vault's internal state"
 	}

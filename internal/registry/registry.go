@@ -20,12 +20,6 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-// reposDir is where a project's repositories sit by default, relative to its root.
-const reposDir = "repos"
-
-// kbDir is where a project's mounted knowledge bases sit, relative to its root.
-const kbDir = "kb"
-
 // The reasons a vault the atlas knows cannot be read. An Entry with an Error carries one,
 // so a command decides on the code and not on the sentence.
 const (
@@ -542,10 +536,10 @@ func (e Entry) Rel() string {
 func (e Entry) Wiki() string { return filepath.Join(e.Path, vault.WikiDir) }
 
 // RepoDir is where a repository of that name sits by default.
-func (e Entry) RepoDir(name string) string { return filepath.Join(e.Path, reposDir, name) }
+func (e Entry) RepoDir(name string) string { return filepath.Join(e.Path, vault.ReposDir, name) }
 
 // KbDir is where a project holds a knowledge base it mounts under that name.
-func (e Entry) KbDir(name string) string { return filepath.Join(e.Path, kbDir, name) }
+func (e Entry) KbDir(name string) string { return filepath.Join(e.Path, vault.KbDir, name) }
 
 // StateSchema is the schema the registry state file declares.
 const StateSchema = "claude-atlas.registry.v1"

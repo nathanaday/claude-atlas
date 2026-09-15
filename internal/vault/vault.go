@@ -34,6 +34,8 @@ const (
 
 	MetaDir      = ".vault-meta"
 	InboxDir     = "inbox"
+	KbDir        = "kb"    // a project's mounted knowledge bases, as symlinks git ignores
+	ReposDir     = "repos" // a project's repositories; each keeps its own history
 	RawDir       = ".raw"
 	CapturedDir  = ".raw/captured"
 	WikiDir      = "wiki"

@@ -190,6 +190,12 @@ func allowed(vk vault.Kind, kind Kind, p string, mode WriteMode) error {
 			}
 		}
 	}
+	if under(vault.KbDir) {
+		return fmt.Errorf("%s/ holds mounted knowledge bases; change their pages in the knowledge base's own operation: %s", vault.KbDir, p)
+	}
+	if under(vault.ReposDir) {
+		return fmt.Errorf("%s/ holds repositories; they are not the vault's files: %s", vault.ReposDir, p)
+	}
 	switch {
 	case p == ".git" || strings.HasPrefix(p, ".git/"),
 		p == vault.MetaDir || strings.HasPrefix(p, vault.MetaDir+"/"):
