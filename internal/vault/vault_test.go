@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -257,5 +258,51 @@ func TestFrontmatter(t *testing.T) {
 	}
 	if _, _, err := Frontmatter("---\n: : :\n  bad: [\n---\n"); err == nil {
 		t.Fatal("invalid yaml should error")
+	}
+}
+
+func TestNewNotesGoUnderTheWikiUnlessTheUserChose(t *testing.T) {
+	needGit(t)
+	root := filepath.Join(t.TempDir(), "v")
+	if _, err := Init(root, Generic, now); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, filepath.FromSlash(AppFile))
+	settings := func() map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s map[string]any
+		if err := json.Unmarshal(data, &s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if s := settings(); s["newFileLocation"] != "folder" || s["newFileFolderPath"] != "wiki" {
+		t.Fatalf("template settings %v", s)
+	}
+	repo := gitx.Repo{Dir: root}
+	commit := func(what string) {
+		repo.AddAll()
+		repo.Commit(CommitMessage("manual", what, NewOperationID("manual", now)))
+	}
+	os.WriteFile(file, []byte(`{"newLinkFormat": "absolute"}`), 0o644)
+	commit("older settings")
+	res, err := Upgrade(root, now)
+	if err != nil || len(res.Added) != 1 || res.Added[0] != AppFile {
+		t.Fatalf("upgrade %+v %v", res, err)
+	}
+	if s := settings(); s["newLinkFormat"] != "absolute" || s["newFileLocation"] != "folder" || s["newFileFolderPath"] != "wiki" {
+		t.Fatalf("upgrade keeps settings and adds the folder: %v", s)
+	}
+	os.WriteFile(file, []byte(`{"newFileLocation": "current"}`), 0o644)
+	commit("the user's choice")
+	if res, err := Adopt(root, "", now); err != nil || len(res.Added) != 0 {
+		t.Fatalf("adopt keeps a location the user chose: %+v %v", res, err)
+	}
+	if s := settings(); s["newFileLocation"] != "current" || s["newFileFolderPath"] != nil {
+		t.Fatalf("settings %v", s)
 	}
 }

@@ -330,8 +330,8 @@ func writeMissing(root string, mode Mode, now time.Time, overwrite bool) ([]stri
 			}
 			continue
 		}
-		if rel == AppearanceFile && !overwrite {
-			changed, err := mergeAppearance(root, data)
+		if merge, ok := settingsMerges[rel]; ok && !overwrite {
+			changed, err := mergeSettings(root, rel, data, merge)
 			if err != nil {
 				return nil, err
 			}
@@ -501,17 +501,26 @@ func Ignore(root, pattern string, now time.Time) (bool, error) {
 // AppearanceFile is Obsidian's appearance settings, where CSS snippets are enabled.
 const AppearanceFile = ".obsidian/appearance.json"
 
+// AppFile is Obsidian's app settings, where the folder for new notes is set.
+const AppFile = ".obsidian/app.json"
+
 // SnippetName is the vault's own CSS snippet, .obsidian/snippets/claude-atlas.css.
 const SnippetName = "claude-atlas"
 
-// mergeAppearance enables the vault's snippet in an existing appearance file, keeping
-// every other setting, and writes the template when there is none. It reports whether
-// the file changed.
-func mergeAppearance(root string, template []byte) (bool, error) {
-	path := filepath.Join(root, filepath.FromSlash(AppearanceFile))
+// settingsMerges are the Obsidian settings files an existing vault keeps, with the change
+// each one needs.
+var settingsMerges = map[string]func(settings map[string]any) bool{
+	AppearanceFile: enableSnippet,
+	AppFile:        newNotesInWiki,
+}
+
+// mergeSettings applies merge to an existing Obsidian settings file, keeping every other
+// setting, and writes the template when there is none. It reports whether the file changed.
+func mergeSettings(root, rel string, template []byte, merge func(map[string]any) bool) (bool, error) {
+	path := filepath.Join(root, filepath.FromSlash(rel))
 	existing, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return true, writeFile(root, AppearanceFile, template)
+		return true, writeFile(root, rel, template)
 	}
 	if err != nil {
 		return false, err
@@ -520,21 +529,40 @@ func mergeAppearance(root string, template []byte) (bool, error) {
 	if err := json.Unmarshal(existing, &settings); err != nil || settings == nil {
 		settings = map[string]any{}
 	}
+	if !merge(settings) {
+		return false, nil
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+// enableSnippet turns on the vault's CSS snippet.
+func enableSnippet(settings map[string]any) bool {
 	var enabled []any
 	if list, ok := settings["enabledCssSnippets"].([]any); ok {
 		enabled = list
 	}
 	for _, item := range enabled {
 		if item == SnippetName {
-			return false, nil
+			return false
 		}
 	}
 	settings["enabledCssSnippets"] = append(enabled, SnippetName)
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return false, err
+	return true
+}
+
+// newNotesInWiki puts the notes Obsidian creates, from a click on a link to a missing page
+// or from a new note, under wiki/, unless the user chose a location.
+func newNotesInWiki(settings map[string]any) bool {
+	if _, chosen := settings["newFileLocation"]; chosen {
+		return false
 	}
-	return true, os.WriteFile(path, append(data, '\n'), 0o644)
+	settings["newFileLocation"] = "folder"
+	settings["newFileFolderPath"] = WikiDir
+	return true
 }
 
 // mergeGitignore appends the lines of the template ignore file that are missing.
