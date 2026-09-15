@@ -142,7 +142,7 @@ func TestNewProjectNewKnowledgeAndAdoptAs(t *testing.T) {
 
 func TestListShowEditRemove(t *testing.T) {
 	h, vaults := setup(t)
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "project   new   welcome") {
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "project   new     welcome") {
 		t.Fatalf("list exit %d:\n%s", code, h.out.String())
 	}
 	if code := h.run("show", "welcome"); code != 0 {
@@ -265,7 +265,7 @@ func TestRefreshAndDoctorReportProblems(t *testing.T) {
 	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "✗") || !strings.Contains(h.out.String(), "legacy") {
 		t.Fatalf("refresh exit %d:\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "?         v1    legacy") {
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "?         v1      legacy") {
 		t.Fatalf("list exit %d:\n%s", code, h.out.String())
 	}
 	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "v1      legacy") {
@@ -281,6 +281,58 @@ func TestRefreshAndDoctorReportProblems(t *testing.T) {
 	}
 	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "ghost") || !strings.Contains(h.out.String(), "no knowledge base with id") {
 		t.Fatalf("an unresolved mount: exit %d\n%s", code, h.out.String())
+	}
+}
+
+// A registered vault whose folder is gone is still something the atlas knows: refresh,
+// list, and doctor all name it, and remove forgets it.
+func TestDoctorAndRemoveSeeAMissingRegisteredVault(t *testing.T) {
+	h, _ := setup(t)
+	outside := filepath.Join(t.TempDir(), "scratch")
+	if code := h.run("new-project", outside); code != 0 {
+		t.Fatalf("new-project exit %d %s", code, h.err.String())
+	}
+	if err := os.RemoveAll(outside); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "✗") || !strings.Contains(h.out.String(), "scratch") {
+		t.Fatalf("refresh exit %d:\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "?         missing scratch") {
+		t.Fatalf("list exit %d:\n%s", code, h.out.String())
+	}
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "missing scratch") {
+		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
+	}
+	if code := h.run("remove", outside); code != 0 || !strings.Contains(h.out.String(), "removed") {
+		t.Fatalf("remove exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if cfg := h.config(t); len(cfg.Vaults) != 0 {
+		t.Fatalf("remove should forget a vault whose folder is gone: %+v", cfg.Vaults)
+	}
+	if code := h.run("list"); code != 0 || strings.Contains(h.out.String(), "scratch") {
+		t.Fatalf("list still shows it:\n%s", h.out.String())
+	}
+	if code := h.run("doctor"); code != 0 {
+		t.Fatalf("doctor after the removal: exit %d\n%s", code, h.out.String())
+	}
+}
+
+// A registered folder that exists but is not a vault has no entry to hang on, so doctor
+// and info report the scan's own problem instead of passing over it.
+func TestDoctorAndInfoReportAProblemWithNoEntry(t *testing.T) {
+	h, _ := setup(t)
+	outside := filepath.Join(t.TempDir(), "scratch")
+	if code := h.run("new-project", outside); code != 0 {
+		t.Fatalf("new-project exit %d %s", code, h.err.String())
+	}
+	os.Remove(filepath.Join(outside, vault.Marker))
+	os.RemoveAll(filepath.Join(outside, "wiki"))
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "scratch") {
+		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
+	}
+	if code := h.run("info"); code != 0 || !strings.Contains(h.out.String(), "scratch") {
+		t.Fatalf("info exit %d:\n%s", code, h.out.String())
 	}
 }
 

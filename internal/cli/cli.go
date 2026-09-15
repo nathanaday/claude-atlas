@@ -274,9 +274,32 @@ func (e *env) entry(cfg *home.Config, arg string) (registry.Entry, error) {
 	return findEntry(ix, arg)
 }
 
+// anyEntry resolves one vault, including one the atlas could not read. Only remove acts
+// on those; every other command wants entry.
+func (e *env) anyEntry(cfg *home.Config, arg string) (registry.Entry, error) {
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		return registry.Entry{}, err
+	}
+	return findAnyEntry(ix, arg)
+}
+
 // findEntry is entry over an index the caller already has. A vault the scan could not
 // read carries its own reason, which says more than "no vault named".
 func findEntry(ix *registry.Index, arg string) (registry.Entry, error) {
+	en, err := findAnyEntry(ix, arg)
+	if err != nil {
+		return registry.Entry{}, err
+	}
+	if en.Error != "" {
+		return registry.Entry{}, fmt.Errorf("%s: %s", home.Display(en.Path), en.Error)
+	}
+	return en, nil
+}
+
+// findAnyEntry resolves a vault by name, id, or path, and a vault the atlas could not read
+// by its path or its folder's name.
+func findAnyEntry(ix *registry.Index, arg string) (registry.Entry, error) {
 	found, err := ix.Find(arg)
 	if err == nil {
 		return *found, nil
@@ -285,9 +308,25 @@ func findEntry(ix *registry.Index, arg string) (registry.Entry, error) {
 		return registry.Entry{}, err
 	}
 	if bad := badEntry(ix, arg); bad != nil {
-		return registry.Entry{}, fmt.Errorf("%s: %s", home.Display(bad.Path), bad.Error)
+		return *bad, nil
 	}
 	return registry.Entry{}, fmt.Errorf("no vault named %q; see `claude-atlas list`", arg)
+}
+
+// uncoveredProblems lists the scan's problems that no entry carries, so a command names
+// each one once.
+func uncoveredProblems(ix *registry.Index) []registry.Problem {
+	covered := map[string]bool{}
+	for _, en := range ix.Entries {
+		covered[en.Path] = true
+	}
+	var out []registry.Problem
+	for _, p := range ix.Problems {
+		if !covered[p.Path] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // badEntry finds a vault the scan could not read, by its path or its folder's name. Such
@@ -1133,7 +1172,7 @@ func (e *env) list(args []string) (int, error) {
 		return 0, nil
 	}
 	for _, en := range entries {
-		e.console.Say("  %-9s %-5s %-24s %s", listKind(en), listHeat(en), entryName(en), home.Display(en.Path))
+		e.console.Say("  %-9s %-7s %-24s %s", listKind(en), listHeat(en), entryName(en), home.Display(en.Path))
 	}
 	for _, en := range entries {
 		if en.Error != "" {
@@ -1151,13 +1190,22 @@ func listKind(en registry.Entry) string {
 	return string(en.Kind)
 }
 
+// unreadable is the one word for a vault the atlas knows but could not read.
+func unreadable(en registry.Entry) string {
+	switch en.Reason {
+	case registry.ReasonV1:
+		return "v1"
+	case registry.ReasonMissing:
+		return "missing"
+	default:
+		return "bad"
+	}
+}
+
 // listHeat is the heat column: what the last refresh found, or why there is nothing.
 func listHeat(en registry.Entry) string {
 	if en.Error != "" {
-		if strings.Contains(en.Error, "v1") {
-			return "v1"
-		}
-		return "bad"
+		return unreadable(en)
 	}
 	if en.State == nil {
 		return "?"
@@ -1354,11 +1402,21 @@ func (e *env) remove(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	entry, err := e.entry(cfg, args[0])
+	entry, err := e.anyEntry(cfg, args[0])
 	if err != nil {
 		return 1, err
 	}
-	ok, err := e.console.Confirm(fmt.Sprintf("Forget %s? The vault at %s stays on disk.", entry.Name, home.Display(entry.Path)), false)
+	// Ask nothing when the answer cannot be acted on.
+	if err := vaults.CheckForget(cfg, entry.Path); err != nil {
+		return 1, err
+	}
+	name, where := entryName(entry), home.Display(entry.Path)
+	gone := entry.Reason == registry.ReasonMissing
+	question := fmt.Sprintf("Forget %s? The vault at %s stays on disk.", name, where)
+	if gone {
+		question = fmt.Sprintf("Forget %s? Its folder %s is already gone.", name, where)
+	}
+	ok, err := e.console.Confirm(question, false)
 	if err != nil {
 		return 1, err
 	}
@@ -1372,7 +1430,7 @@ func (e *env) remove(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "removed", fmt.Sprintf("%s; the vault is still at %s", entry.Name, home.Display(entry.Path)))
+	e.console.Step(console.OK, "removed", fmt.Sprintf("%s; %s", name, ternary(gone, "its folder was already gone", "the vault is still at "+where)))
 	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
@@ -1638,9 +1696,7 @@ func (e *env) refresh(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	scanned := map[string]bool{}
 	for _, en := range entries {
-		scanned[en.Path] = true
 		switch {
 		case en.Error != "":
 			e.console.Step(console.Fail, entryName(en), en.Error)
@@ -1660,10 +1716,8 @@ func (e *env) refresh(args []string) (int, error) {
 			e.console.Step(console.OK, en.Name, fmt.Sprintf("%s, idle %sd", heat, days))
 		}
 	}
-	for _, problem := range ix.Problems {
-		if !scanned[problem.Path] {
-			e.console.Step(console.Fail, home.Display(problem.Path), problem.Reason)
-		}
+	for _, problem := range uncoveredProblems(ix) {
+		e.console.Step(console.Fail, home.Display(problem.Path), problem.Reason)
 	}
 	e.console.Say("  wrote %s", home.Display(registry.File(e.home.StateDir())))
 	return 0, nil
@@ -2300,6 +2354,9 @@ func (e *env) info(args []string) (int, error) {
 	for _, en := range ix.Entries {
 		row("  "+entryName(en), home.Display(en.Path))
 	}
+	for _, p := range uncoveredProblems(ix) {
+		row("  "+filepath.Base(p.Path), home.Display(p.Path)+": "+p.Reason)
+	}
 	return 0, nil
 }
 
@@ -2364,6 +2421,10 @@ func (e *env) doctor(args []string) (int, error) {
 			}
 		}
 	}
+	for _, p := range uncoveredProblems(ix) {
+		ok = false
+		c.Step(console.Fail, filepath.Base(p.Path), home.Display(p.Path)+": "+p.Reason)
+	}
 	if !ok {
 		return 1, nil
 	}
@@ -2373,10 +2434,7 @@ func (e *env) doctor(args []string) (int, error) {
 // vaultStatus is doctor's one word for a vault: what stands between it and working.
 func vaultStatus(en registry.Entry) string {
 	if en.Error != "" {
-		if strings.Contains(en.Error, "v1") {
-			return "v1"
-		}
-		return "bad"
+		return unreadable(en)
 	}
 	v, err := vault.Open(en.Path)
 	if err != nil {

@@ -23,6 +23,18 @@ import (
 // reposDir is where a project's repositories sit by default, relative to its root.
 const reposDir = "repos"
 
+// kbDir is where a project's mounted knowledge bases sit, relative to its root.
+const kbDir = "kb"
+
+// The reasons a vault the atlas knows cannot be read. An Entry with an Error carries one,
+// so a command decides on the code and not on the sentence.
+const (
+	ReasonV1         = "v1"         // a v1 identity file; adopt rewrites it
+	ReasonUnreadable = "unreadable" // the identity file is not JSON
+	ReasonSchema     = "schema"     // an identity file from a later version
+	ReasonMissing    = "missing"    // a registered path whose folder is gone
+)
+
 // maxDepth is the deepest directory level Scan searches below the vaults directory: a
 // vault root at this level is found, one past it is not.
 const maxDepth = 5
@@ -70,10 +82,13 @@ type Entry struct {
 	Repos   []Repo        `json:"repos,omitempty"`
 	// MountedBy lists the projects that mount a knowledge base, with their effective access.
 	MountedBy []Ref `json:"mounted_by,omitempty"`
-	// Error is set for a vault the scan found but could not read: a v1 identity file, or
-	// one that is not JSON. Such an entry has Path and Error and nothing else.
+	// Error is set for a vault the atlas knows but could not read: a v1 identity file, one
+	// that is not JSON, or a registered folder that is gone. Such an entry has Path,
+	// Error, and Reason, and nothing else.
 	Error string `json:"error,omitempty"`
-	State *State `json:"state,omitempty"`
+	// Reason is the code behind Error: ReasonV1, ReasonUnreadable, ReasonSchema, ReasonMissing.
+	Reason string `json:"reason,omitempty"`
+	State  *State `json:"state,omitempty"`
 }
 
 // State is what refresh derived for one vault; the refresh package fills it.
@@ -232,7 +247,7 @@ func Scan(cfg *home.Config) (*Index, error) {
 		found[abs] = true
 		info, err := os.Stat(abs)
 		if err != nil || !info.IsDir() {
-			ix.Problems = append(ix.Problems, Problem{Path: abs, Reason: "not found"})
+			fail(ix, abs, "not found; run claude-atlas remove PATH to forget it", ReasonMissing)
 			continue
 		}
 		scanRoot(ix, abs)
@@ -262,24 +277,24 @@ func scanRoot(ix *Index, root string) {
 			ix.Problems = append(ix.Problems, Problem{Path: root, Reason: "not found"})
 			return
 		}
-		fail(ix, root, "identity file is not JSON; run claude-atlas adopt")
+		fail(ix, root, "identity file is not JSON; run claude-atlas adopt", ReasonUnreadable)
 		return
 	}
 	switch cfg.Schema {
 	case vault.Schema:
 		ix.Entries = append(ix.Entries, buildEntry(root, cfg))
 	case vault.SchemaV1:
-		fail(ix, root, fmt.Sprintf("v1 vault; run claude-atlas adopt %s --as knowledge|project", root))
+		fail(ix, root, fmt.Sprintf("v1 vault; run claude-atlas adopt %s --as knowledge|project", root), ReasonV1)
 	default:
-		fail(ix, root, fmt.Sprintf("unsupported schema %q", cfg.Schema))
+		fail(ix, root, fmt.Sprintf("unsupported schema %q", cfg.Schema), ReasonSchema)
 	}
 }
 
-// fail records a vault the scan found but could not read: the same reason in both a
-// Problem and an Entry{Path, Error}.
-func fail(ix *Index, root, reason string) {
+// fail records a vault the atlas knows but could not read: the same reason in both a
+// Problem and an Entry{Path, Error, Reason}.
+func fail(ix *Index, root, reason, code string) {
 	ix.Problems = append(ix.Problems, Problem{Path: root, Reason: reason})
-	ix.Entries = append(ix.Entries, Entry{Path: root, Error: reason})
+	ix.Entries = append(ix.Entries, Entry{Path: root, Error: reason, Reason: code})
 }
 
 // buildEntry turns a valid identity file into an Entry, unresolved: a project's mounts
@@ -339,7 +354,7 @@ func resolve(ix *Index, cfg *home.Config) {
 				continue
 			}
 			m.Path = kb.Wiki()
-			m.Effective = effective(m.Access, kbAccess(kb, e.ID))
+			m.Effective = Effective(m.Access, GrantedAccess(*kb, e.ID))
 			kb.MountedBy = append(kb.MountedBy, Ref{ID: e.ID, Name: e.Name, Access: m.Effective})
 		}
 		for j := range e.Repos {
@@ -358,9 +373,9 @@ func resolve(ix *Index, cfg *home.Config) {
 	}
 }
 
-// kbAccess is what a knowledge base grants a project: open grants write to everyone;
+// GrantedAccess is what a knowledge base grants a project: open grants write to everyone;
 // guarded grants what the project's own grant says, or read when there is none.
-func kbAccess(kb *Entry, projectID string) string {
+func GrantedAccess(kb Entry, projectID string) string {
 	switch kb.Access {
 	case vault.AccessOpen:
 		return vault.AccessWrite
@@ -376,8 +391,8 @@ func kbAccess(kb *Entry, projectID string) string {
 	}
 }
 
-// effective is the lesser of what a project asked for and what it was granted.
-func effective(request, grant string) string {
+// Effective is the lesser of what a project asked for and what it was granted.
+func Effective(request, grant string) string {
 	if request == vault.AccessRead || grant == vault.AccessRead {
 		return vault.AccessRead
 	}
@@ -508,8 +523,12 @@ func (ix *Index) Knowledge() []Entry {
 }
 
 // Rel is the entry's place in the view: projects/<first tag>/<name> or projects/<name>
-// for a project, knowledge/<name> for a knowledge base.
+// for a project, knowledge/<name> for a knowledge base, problems/<folder> for a vault the
+// atlas could not read.
 func (e Entry) Rel() string {
+	if e.Error != "" {
+		return "problems/" + filepath.Base(e.Path)
+	}
 	if e.Kind == vault.Knowledge {
 		return "knowledge/" + e.Name
 	}
@@ -524,6 +543,9 @@ func (e Entry) Wiki() string { return filepath.Join(e.Path, vault.WikiDir) }
 
 // RepoDir is where a repository of that name sits by default.
 func (e Entry) RepoDir(name string) string { return filepath.Join(e.Path, reposDir, name) }
+
+// KbDir is where a project holds a knowledge base it mounts under that name.
+func (e Entry) KbDir(name string) string { return filepath.Join(e.Path, kbDir, name) }
 
 // StateSchema is the schema the registry state file declares.
 const StateSchema = "claude-atlas.registry.v1"
@@ -582,6 +604,9 @@ func Read(stateDir string) ([]Entry, string, error) {
 	var doc registryFile
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, "", fmt.Errorf("%s: %w", File(stateDir), err)
+	}
+	if doc.Schema != StateSchema {
+		return nil, "", fmt.Errorf("%s: unsupported schema %q; run claude-atlas refresh", File(stateDir), doc.Schema)
 	}
 	return doc.Entries, doc.GeneratedAt, nil
 }

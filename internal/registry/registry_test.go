@@ -76,6 +76,12 @@ func TestScanFindsEveryVaultAndSortsThem(t *testing.T) {
 	if last[0].Error == "" || last[1].Error == "" || filepath.Base(last[0].Path) != "bad" || filepath.Base(last[1].Path) != "old" {
 		t.Fatalf("error entries %+v", last)
 	}
+	if last[0].Reason != ReasonUnreadable || last[1].Reason != ReasonV1 {
+		t.Fatalf("reasons %q %q", last[0].Reason, last[1].Reason)
+	}
+	if last[1].Rel() != "problems/old" {
+		t.Fatalf("rel of an unreadable vault %q", last[1].Rel())
+	}
 	if _, err := ix.Find("old"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("find old: %v", err)
 	}
@@ -198,6 +204,76 @@ func TestStateFileRoundTrips(t *testing.T) {
 	data, _ := os.ReadFile(File(dir))
 	if !strings.Contains(string(data), `"schema": "claude-atlas.registry.v1"`) {
 		t.Fatalf("file:\n%s", data)
+	}
+	os.WriteFile(File(dir), []byte(`{"schema":"claude-atlas.registry.v9","entries":[]}`), 0o644)
+	if _, _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "claude-atlas.registry.v9") {
+		t.Fatalf("read another schema: %v", err)
+	}
+}
+
+// TestScanMakesAMissingRegisteredVaultAnEntry proves a registered path whose folder is
+// gone is an entry like every other unreadable vault, so list, doctor, and remove see it.
+func TestScanMakesAMissingRegisteredVaultAnEntry(t *testing.T) {
+	cfg, _ := fixture(t)
+	gone := filepath.Join(t.TempDir(), "gone")
+	cfg.Vaults = append(cfg.Vaults, gone)
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ix.ByPath(gone)
+	if e == nil || e.Reason != ReasonMissing || !strings.Contains(e.Error, "not found") || !strings.Contains(e.Error, "remove") {
+		t.Fatalf("missing entry %+v", e)
+	}
+	matched := false
+	for _, p := range ix.Problems {
+		if p.Path == gone && p.Reason == e.Error {
+			matched = true
+		}
+	}
+	if !matched {
+		t.Fatalf("a missing vault keeps its problem, with the same reason: %+v", ix.Problems)
+	}
+	if _, err := ix.Find(gone); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("find a missing vault: %v", err)
+	}
+	if e.Rel() != "problems/gone" {
+		t.Fatalf("rel %q", e.Rel())
+	}
+}
+
+// TestEffectiveAndKbDir covers what phase 3 reuses: the access two vaults agree on, and
+// where a mounted knowledge base's folder sits.
+func TestEffectiveAndKbDir(t *testing.T) {
+	cases := []struct{ request, grant, want string }{
+		{vault.AccessWrite, vault.AccessWrite, vault.AccessWrite},
+		{vault.AccessWrite, vault.AccessRead, vault.AccessRead},
+		{vault.AccessRead, vault.AccessWrite, vault.AccessRead},
+		{vault.AccessRead, vault.AccessRead, vault.AccessRead},
+	}
+	for _, c := range cases {
+		if got := Effective(c.request, c.grant); got != c.want {
+			t.Errorf("Effective(%q, %q) = %q, want %q", c.request, c.grant, got, c.want)
+		}
+	}
+	kb := Entry{Path: filepath.FromSlash("/vaults/knowledge/ai-ml")}
+	if got := GrantedAccess(kb, "p1"); got != vault.AccessRead {
+		t.Errorf("a knowledge base with no access grants read, got %q", got)
+	}
+	open := Entry{Access: vault.AccessOpen}
+	if got := GrantedAccess(open, "p1"); got != vault.AccessWrite {
+		t.Errorf("an open knowledge base grants write, got %q", got)
+	}
+	guarded := Entry{Access: vault.AccessGuarded, Grants: []vault.Grant{{ID: "p1", Access: vault.AccessWrite}}}
+	if got := GrantedAccess(guarded, "p1"); got != vault.AccessWrite {
+		t.Errorf("a guarded knowledge base grants what it granted, got %q", got)
+	}
+	if got := GrantedAccess(guarded, "p2"); got != vault.AccessRead {
+		t.Errorf("a project with no grant gets read, got %q", got)
+	}
+	e := Entry{Path: filepath.FromSlash("/vaults/projects/cs566")}
+	if got, want := e.KbDir("ai-ml"), filepath.Join(e.Path, "kb", "ai-ml"); got != want {
+		t.Errorf("KbDir = %q, want %q", got, want)
 	}
 }
 

@@ -58,15 +58,28 @@ func Register(h home.Home, cfg *home.Config, root string) (bool, error) {
 	return true, nil
 }
 
-// Unregister removes a vault from the config. A vault inside the vaults directory cannot
-// be forgotten: the scan finds it; the error says to move or delete the folder.
-func Unregister(h home.Home, cfg *home.Config, root string) error {
+// CheckForget reports why a vault cannot be forgotten. A vault inside the vaults directory
+// cannot: the scan finds it; the error says to move or delete the folder. The folder
+// itself need not exist; a registered path outlives it.
+func CheckForget(cfg *home.Config, root string) error {
 	abs, err := filepath.Abs(home.Expand(root))
 	if err != nil {
 		return err
 	}
 	if cfg.Inside(abs) {
 		return fmt.Errorf("%s is inside the vaults directory; the scan finds it there, so move or delete the folder to forget it", home.Display(abs))
+	}
+	return nil
+}
+
+// Unregister removes a vault from the config.
+func Unregister(h home.Home, cfg *home.Config, root string) error {
+	abs, err := filepath.Abs(home.Expand(root))
+	if err != nil {
+		return err
+	}
+	if err := CheckForget(cfg, abs); err != nil {
+		return err
 	}
 	if !cfg.RemoveVault(abs) {
 		return fmt.Errorf("%s is not registered", home.Display(abs))
