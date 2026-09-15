@@ -22,7 +22,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-const ReportVersion = 2
+const ReportVersion = 3
 
 // Options tune one run.
 type Options struct {
@@ -121,6 +121,7 @@ type Report struct {
 	ReadErrors         []PathFinding        `json:"read_errors"`
 	LedgerErrors       []PathFinding        `json:"ledger_errors"`
 	TaskErrors         []PathFinding        `json:"task_errors"`
+	KindErrors         []PathFinding        `json:"kind_errors"`
 	WantedPages        []WantedPage         `json:"wanted_pages"`
 	Stubs              []Stub               `json:"stubs"`
 }
@@ -198,6 +199,43 @@ func taskErrors(pg *page, asOf time.Time) []PathFinding {
 	if t.Status == "active" {
 		if updated, err := time.ParseInLocation("2006-01-02", t.Updated, time.Local); err == nil && asOf.Sub(updated).Hours()/24 >= tasks.StaleDays {
 			out = append(out, PathFinding{Path: pg.path, Message: fmt.Sprintf("active but untouched since %s; continue it, block it, or finish it", t.Updated)})
+		}
+	}
+	return out
+}
+
+// knowledgeHasNo says why each project-only folder is out of place in a knowledge base.
+var knowledgeHasNo = map[string]string{
+	vault.InboxDir: "sources enter through a project that mounts it",
+	vault.IdeasDir: "ideas live in a project",
+	vault.TasksDir: "tasks live in a project",
+}
+
+// kindErrors checks the vault against its kind. A knowledge base has no inbox, ideas, or
+// tasks and carries no project fields; a project carries no knowledge base fields. A
+// tree without a current identity file is not checked.
+func kindErrors(root string, present map[string]bool) []PathFinding {
+	cfg, ok := vault.ReadConfig(root)
+	if !ok || cfg.Schema != vault.Schema {
+		return nil
+	}
+	var out []PathFinding
+	switch cfg.Kind {
+	case vault.Knowledge:
+		for _, dir := range []string{vault.InboxDir, vault.IdeasDir, vault.TasksDir} {
+			if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(dir))); err == nil && info.IsDir() {
+				out = append(out, PathFinding{Path: dir, Message: "a knowledge base has no " + dir + "/; " + knowledgeHasNo[dir]})
+			}
+		}
+		if present[vault.TaskLedgerPath] {
+			out = append(out, PathFinding{Path: vault.TaskLedgerPath, Message: "a knowledge base has no task ledger"})
+		}
+		if len(cfg.Tags)+len(cfg.Mounts)+len(cfg.Repos) > 0 {
+			out = append(out, PathFinding{Path: vault.Marker, Message: "a knowledge base carries no tags, mounts, or repos; those are a project's fields"})
+		}
+	case vault.Project:
+		if cfg.Scope != "" || cfg.Access != "" || len(cfg.Grants) > 0 {
+			out = append(out, PathFinding{Path: vault.Marker, Message: "a project carries no scope, access, or grants; those are a knowledge base's fields"})
 		}
 	}
 	return out
@@ -388,6 +426,7 @@ func Run(root string, opts Options) (*Report, error) {
 	}
 
 	report.LedgerErrors = ledgerErrors(root, opts.Overlay, present, asOf)
+	report.KindErrors = kindErrors(root, present)
 	for _, pg := range pages {
 		if tasks.IsPage(pg.path) {
 			report.TaskErrors = append(report.TaskErrors, taskErrors(pg, asOf)...)
@@ -407,6 +446,7 @@ func Run(root string, opts Options) (*Report, error) {
 		"read_errors":         len(report.ReadErrors),
 		"ledger_errors":       len(report.LedgerErrors),
 		"task_errors":         len(report.TaskErrors),
+		"kind_errors":         len(report.KindErrors),
 	}}
 	for _, n := range report.Summary.CategoryCounts {
 		report.Summary.IssuesFound += n
@@ -1019,6 +1059,7 @@ func sortFindings(r *Report) {
 		return a.Line < b.Line
 	})
 	sort.SliceStable(r.ReadErrors, func(i, j int) bool { return pathLess(r.ReadErrors[i].Path, r.ReadErrors[j].Path) })
+	sort.SliceStable(r.KindErrors, func(i, j int) bool { return pathLess(r.KindErrors[i].Path, r.KindErrors[j].Path) })
 	sort.Slice(r.WantedPages, func(i, j int) bool { return pathLess(r.WantedPages[i].Title, r.WantedPages[j].Title) })
 	sort.Slice(r.Stubs, func(i, j int) bool { return pathLess(r.Stubs[i].Path, r.Stubs[j].Path) })
 }
@@ -1064,6 +1105,12 @@ func (r *Report) fillEmpty() {
 	}
 	if r.LedgerErrors == nil {
 		r.LedgerErrors = []PathFinding{}
+	}
+	if r.TaskErrors == nil {
+		r.TaskErrors = []PathFinding{}
+	}
+	if r.KindErrors == nil {
+		r.KindErrors = []PathFinding{}
 	}
 	if r.WantedPages == nil {
 		r.WantedPages = []WantedPage{}
@@ -1132,6 +1179,10 @@ func (r *Report) Markdown() string {
 	section("Ledger", len(r.LedgerErrors))
 	for _, f := range r.LedgerErrors {
 		fmt.Fprintf(&b, "- %s\n", f.Message)
+	}
+	section("Kind", len(r.KindErrors))
+	for _, f := range r.KindErrors {
+		fmt.Fprintf(&b, "- `%s`: %s\n", f.Path, f.Message)
 	}
 	section("Wanted pages", len(r.WantedPages))
 	if len(r.WantedPages) > 0 {

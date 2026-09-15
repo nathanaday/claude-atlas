@@ -298,6 +298,47 @@ func TestNewVaultHasNoFindings(t *testing.T) {
 	}
 }
 
+func TestKindErrors(t *testing.T) {
+	asOf := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	kb := fixture(t, map[string]string{
+		".claude-atlas.json":                 `{"schema":"claude-atlas.vault.v2","id":"1","kind":"knowledge","name":"kb","mode":"generic","created":"2026-09-14","mounts":[{"id":"2","name":"p","access":"write"}]}`,
+		"wiki/index.md":                      mkpage("Index", "# Index\n"),
+		"inbox/paper.md":                     "x",
+		"wiki/tasks/tasks.md":                mkpage("Tasks", "# Tasks\n"),
+		"wiki/meta/ledgers/task-ledger.json": `{"schema":"claude-atlas.task-ledger.v1","tasks":[]}`,
+	})
+	r, err := Run(kb, Options{AsOf: asOf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range r.KindErrors {
+		got = append(got, f.Path)
+	}
+	if strings.Join(got, ",") != ".claude-atlas.json,inbox,wiki/meta/ledgers/task-ledger.json,wiki/tasks" {
+		t.Fatalf("kind errors %v", got)
+	}
+	if r.Summary.CategoryCounts["kind_errors"] != 4 || r.Version != 3 || !strings.Contains(r.Markdown(), "## Kind (4)") {
+		t.Fatalf("summary %+v\n%s", r.Summary, r.Markdown())
+	}
+	project := fixture(t, map[string]string{
+		".claude-atlas.json": `{"schema":"claude-atlas.vault.v2","id":"2","kind":"project","name":"p","mode":"generic","created":"2026-09-14","scope":"x"}`,
+		"wiki/index.md":      mkpage("Index", "# Index\n"),
+	})
+	r, _ = Run(project, Options{AsOf: asOf})
+	if len(r.KindErrors) != 1 || r.KindErrors[0].Path != ".claude-atlas.json" || !strings.Contains(r.KindErrors[0].Message, "scope") {
+		t.Fatalf("project kind errors %+v", r.KindErrors)
+	}
+	plain := fixture(t, map[string]string{
+		"wiki/index.md": mkpage("Index", "# Index\n"),
+		"inbox/x.md":    "x",
+	})
+	r, _ = Run(plain, Options{AsOf: asOf})
+	if len(r.KindErrors) != 0 {
+		t.Fatalf("no identity file, no kind checks: %+v", r.KindErrors)
+	}
+}
+
 func TestFolderIndexPagesCatalogAndAreNotOrphans(t *testing.T) {
 	root := fixture(t, map[string]string{
 		"wiki/index.md":             mkpage("Index", "# Index\n\n- [[Alpha]]\n"),
