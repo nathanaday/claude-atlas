@@ -28,7 +28,6 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
-	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/tui"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -312,6 +311,16 @@ func (e *env) refreshAll(cfg *home.Config) ([]registry.Entry, *registry.Index, e
 	return refresh.Registry(cfg, e.home.StateDir(), time.Now())
 }
 
+// registryEntries reads the registry the last refresh wrote, writing one first when no
+// refresh has run yet.
+func (e *env) registryEntries(cfg *home.Config) ([]registry.Entry, error) {
+	entries, _, err := registry.Read(e.home.StateDir())
+	if errors.Is(err, os.ErrNotExist) {
+		entries, _, err = e.refreshAll(cfg)
+	}
+	return entries, err
+}
+
 // refreshed is what a command says after rewriting the registry.
 func refreshed(entries []registry.Entry) string {
 	return fmt.Sprintf("%d vault%s", len(entries), plural(len(entries)))
@@ -396,7 +405,7 @@ func (e *env) newProject(args []string) (int, error) {
 		if !e.console.Interactive() {
 			return 2, errors.New("usage: claude-atlas new-project NAME|PATH (the interactive screen needs a terminal)")
 		}
-		return e.newProjectInteractive()
+		return e.newVaultInteractive(vault.Project)
 	}
 	var edit vaults.Edit
 	if list := splitTags(*tags); len(list) > 0 {
@@ -415,12 +424,18 @@ func (e *env) newKnowledge(args []string) (int, error) {
 	if err != nil {
 		return 2, nil
 	}
-	if len(positional) != 1 {
+	if len(positional) > 1 {
 		return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH [--name N] [--scope TEXT] [--access open|guarded] [--mode generic|lyt]")
 	}
 	m, err := parseMode(*mode)
 	if err != nil {
 		return 2, err
+	}
+	if len(positional) == 0 {
+		if !e.console.Interactive() {
+			return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH (the interactive screen needs a terminal)")
+		}
+		return e.newVaultInteractive(vault.Knowledge)
 	}
 	set := setFlags(fs)
 	if set["access"] {
@@ -488,13 +503,13 @@ func (e *env) finishVault(cfg *home.Config, path string) (int, error) {
 	return 0, nil
 }
 
-// newProjectInteractive walks the user through name and path, then creates the project.
-func (e *env) newProjectInteractive() (int, error) {
+// newVaultInteractive asks the add screen for a vault of a kind, then creates it.
+func (e *env) newVaultInteractive(kind vault.Kind) (int, error) {
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
-	choice, err := tui.RunAddVault(cfg.VaultsDir, nil)
+	choice, err := tui.RunAddVault(cfg.VaultsDir, kind)
 	if err != nil {
 		return 1, err
 	}
@@ -505,7 +520,11 @@ func (e *env) newProjectInteractive() (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if _, err := vaults.Create(choice.Path, vault.Options{Kind: vault.Project, Mode: mode, Name: choice.Name}, e.console, false); err != nil {
+	opts := vault.Options{Kind: choice.Kind, Mode: mode, Name: choice.Name}
+	if _, err := vaults.Create(choice.Path, opts, e.console, false); err != nil {
+		return 1, err
+	}
+	if err := recordFacts(*choice); err != nil {
 		return 1, err
 	}
 	return e.finishVault(cfg, choice.Path)
@@ -536,22 +555,28 @@ func (e *env) adopt(args []string) (int, error) {
 	path := first(positional)
 	if path == "" {
 		if !e.console.Interactive() {
-			return 2, errors.New("usage: claude-atlas adopt PATH (the questions need a terminal)")
+			return 2, errors.New("usage: claude-atlas adopt PATH (the interactive screen needs a terminal)")
 		}
-		if path = strings.TrimSpace(e.console.Ask("Which folder?", "")); path == "" {
+		choice, cerr := tui.RunAdopt()
+		if cerr != nil {
+			return 1, cerr
+		}
+		if choice == nil {
 			return 1, vaults.ErrCancelled
 		}
+		// A flag the user gave wins over the screen's answer.
 		if k == "" {
-			if k, err = vault.ParseKind(e.console.Ask("A project or a knowledge base?", string(vault.Project))); err != nil {
-				return 2, err
-			}
+			k = choice.Kind
 		}
-		*name = e.console.Ask("Display name", filepath.Base(home.Expand(path)))
 		if m == "" {
-			if m, err = vault.ParseMode(e.console.Ask("Filing mode: generic or lyt", string(vault.Generic))); err != nil {
-				return 2, err
+			if m, err = vault.ParseMode(choice.Mode); err != nil {
+				return 1, err
 			}
 		}
+		if *name == "" {
+			*name = choice.Name
+		}
+		path = choice.Path
 	}
 	return e.adoptPath(path, vault.Options{Kind: k, Mode: m, Name: *name})
 }
@@ -605,170 +630,91 @@ func (e *env) adoptPath(path string, vopts vault.Options) (int, error) {
 	return 0, nil
 }
 
-// --- the TUI bridge -------------------------------------------------------------
-// The view still reads the atlas vault's tree. Task 8 ports it to the registry; until
-// then cfg.TreeRoot() is "" for every new atlas and the screen opens empty.
-
-// treeItems lists the old tree's projects for the view.
-func (e *env) treeItems(cfg *home.Config) ([]tui.Item, error) {
-	projects, err := treeProjects(cfg)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]tui.Item, 0, len(projects))
-	for _, p := range projects {
-		state, _ := tree.ReadState(e.home.StateDir(), p.Rel)
-		items = append(items, tui.Item{Project: p, State: state})
-	}
-	return items, nil
-}
-
-func treeProjects(cfg *home.Config) ([]*tree.Project, error) {
-	if cfg.TreeRoot() == "" {
-		return nil, nil
-	}
-	projects, _, err := tree.Walk(cfg.TreeRoot())
-	return projects, err
-}
-
-// errTreeGone answers a screen that would write a project or a repository page while
-// there is no tree to write it into. Without it those writes would land at a relative
-// path in the working directory.
-var errTreeGone = errors.New("the tree view is being replaced; use the claude-atlas commands until then")
-
-// writableTree refuses every bridge write once the atlas vault, and with it the tree, is
-// gone. Reading stays allowed: it finds nothing and the screen opens empty.
-func writableTree(cfg *home.Config) error {
-	if cfg.TreeRoot() == "" {
-		return errTreeGone
-	}
-	return nil
-}
-
-// createOrAdopt is what the interactive screens call: it makes or adopts the vault and
-// registers it, returning the project's rel.
+// createOrAdopt is what the add screen calls: it makes or adopts the vault, records the
+// fields the template does not carry, and registers it. It returns the vault's path.
 func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, error) {
-	if err := writableTree(cfg); err != nil {
-		return "", err
-	}
 	mode, err := parseMode(choice.Mode)
 	if err != nil {
 		return "", err
 	}
-	opts := vaults.RegisterOptions{Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose}
+	opts := vault.Options{Kind: choice.Kind, Mode: mode, Name: choice.Name}
 	if choice.Adopt {
-		if _, err := vault.Adopt(choice.Path, vault.Options{Mode: mode, Name: choice.Name}, time.Now()); err != nil {
+		if _, err := vault.Adopt(choice.Path, opts, time.Now()); err != nil {
 			return "", err
 		}
-		projects, err := treeProjects(cfg)
-		if err != nil {
-			return "", err
-		}
-		if existing := tree.FindByVault(projects, choice.Path); existing != nil {
-			return existing.Rel, nil
-		}
-	} else if _, err := vaults.Create(choice.Path, vault.Options{Kind: vault.Project, Mode: mode, Name: choice.Name}, e.console, false); err != nil {
+	} else if _, err := vaults.Create(choice.Path, opts, e.console, false); err != nil {
 		return "", err
 	}
-	project, err := vaults.RegisterProject(cfg, choice.Path, opts)
-	if err != nil {
+	if err := recordFacts(choice); err != nil {
 		return "", err
 	}
-	return project.Rel, nil
+	if _, err := vaults.Register(e.home, cfg, choice.Path); err != nil {
+		return "", err
+	}
+	return choice.Path, nil
+}
+
+// recordFacts writes the identity fields the template does not carry: a project's tags,
+// or a knowledge base's scope.
+func recordFacts(choice tui.AddVault) error {
+	edit := vaults.Edit{}
+	switch {
+	case choice.Kind == vault.Knowledge && choice.Scope != "":
+		edit.Scope = &choice.Scope
+	case choice.Kind == vault.Project && len(choice.Tags) > 0:
+		edit.Tags = &choice.Tags
+	}
+	return vaults.EditIdentity(registry.Entry{Path: choice.Path, Kind: choice.Kind}, edit, time.Now())
 }
 
 // hooks wires the interactive screens to the same backend calls the CLI commands use.
 func (e *env) hooks(cfg *home.Config) tui.Hooks {
 	return tui.Hooks{
-		Load:       func() ([]*tree.Project, error) { return treeProjects(cfg) },
-		Categories: func() []string { return tui.Categories(cfg.TreeRoot()) },
-		State: func(rel string) *tree.State {
-			state, err := tree.ReadState(e.home.StateDir(), rel)
-			if err != nil {
-				return nil
-			}
-			return state
-		},
-		Update: func(p *tree.Project, edit vaults.TreeEdit) error {
-			if err := writableTree(cfg); err != nil {
-				return err
-			}
-			return vaults.Update(cfg, p, edit)
-		},
-		Unlink: func(p *tree.Project) error {
-			if err := writableTree(cfg); err != nil {
-				return err
-			}
-			return vaults.Unlink(p)
-		},
+		Load:    func() ([]registry.Entry, error) { return e.registryEntries(cfg) },
 		Create:  func(choice tui.AddVault) (string, error) { return e.createOrAdopt(cfg, choice) },
 		Refresh: func() error { _, _, err := e.refreshAll(cfg); return err },
-		StagePlan: func(p *tree.Project, source string) (*capture.StagePlan, error) {
-			return planStage(p.VaultPath(), p.Name, source)
+		Edit: func(en registry.Entry, edit vaults.Edit) error {
+			return vaults.EditIdentity(en, edit, time.Now())
 		},
-		Stage: func(p *tree.Project, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
-			return stage(p.VaultPath(), plan)
+		Unregister: func(en registry.Entry) error { return vaults.Unregister(e.home, cfg, en.Path) },
+		StagePlan: func(en registry.Entry, source string) (*capture.StagePlan, error) {
+			return planStage(en.Path, en.Name, source)
 		},
-		Links: func() []links.Page {
-			if cfg.AtlasVault == "" {
-				return nil
-			}
-			pages, _, _ := links.Walk(cfg.AtlasVault)
-			return pages
+		Stage: func(en registry.Entry, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
+			return stage(en.Path, plan)
 		},
-		AddLink: func(p *tree.Project, target string, initGit bool) (links.Page, error) {
-			if err := writableTree(cfg); err != nil {
-				return links.Page{}, err
-			}
-			return vaults.AddLink(cfg, p, target, initGit)
-		},
-		NewRepo: func(p *tree.Project, name, at string) (links.Page, error) {
-			if err := writableTree(cfg); err != nil {
-				return links.Page{}, err
-			}
-			return vaults.NewRepo(cfg, p, name, at)
-		},
-		CloneRepo: func(p *tree.Project, url, at string) (links.Page, error) {
-			if err := writableTree(cfg); err != nil {
-				return links.Page{}, err
-			}
-			return vaults.CloneRepoPage(cfg, p, url, at)
-		},
-		SetChanges: func(page links.Page, policy string) (links.Page, error) {
-			if err := writableTree(cfg); err != nil {
-				return links.Page{}, err
-			}
-			return vaults.SetChanges(cfg, page, policy)
-		},
-		RemoveLink: func(p *tree.Project, target string) error {
-			if err := writableTree(cfg); err != nil {
-				return err
-			}
-			return vaults.RemoveLink(cfg, p, target)
-		},
-		Sources: func(p *tree.Project) []string {
-			v, err := vault.Open(p.VaultPath())
+		Sources: func(en registry.Entry) []string {
+			v, err := vault.Open(en.Path)
 			if err != nil {
 				return nil
 			}
 			return capture.Sources(v)
 		},
-		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
-			if err := writableTree(cfg); err != nil {
-				return links.Page{}, err
-			}
-			return vaults.UpdateLink(cfg, page, edit)
+		AddRepo: func(en registry.Entry, target string, initGit bool) (vault.Repo, string, error) {
+			return vaults.AddRepo(e.home, cfg, en, target, initGit, time.Now())
 		},
-		Tasks: func(p *tree.Project) (tasks.Ledger, []string, error) {
-			v, err := vault.Open(p.VaultPath())
+		NewRepo: func(en registry.Entry, name, at string) (vault.Repo, string, error) {
+			return vaults.CreateRepo(e.home, cfg, en, name, at, time.Now())
+		},
+		CloneRepo: func(en registry.Entry, url, at string) (vault.Repo, string, error) {
+			return vaults.CloneRepo(e.home, cfg, en, url, at, time.Now())
+		},
+		RemoveRepo: func(en registry.Entry, name string) error {
+			return vaults.RemoveRepo(e.home, cfg, en, name, time.Now())
+		},
+		EditRepo: func(en registry.Entry, name string, edit vaults.RepoEdit) (vault.Repo, error) {
+			return vaults.EditRepo(e.home, cfg, en, name, edit, time.Now())
+		},
+		Tasks: func(en registry.Entry) (tasks.Ledger, []string, error) {
+			v, err := vault.Open(en.Path)
 			if err != nil {
 				return tasks.Ledger{}, nil, err
 			}
 			led, err := tasks.Current(v, time.Now())
 			return led, tasks.Notes(v), err
 		},
-		Plant: func(p *tree.Project, plant tasks.Plant) (txn.Planted, error) {
-			v, err := vault.Open(p.VaultPath())
+		Plant: func(en registry.Entry, plant tasks.Plant) (txn.Planted, error) {
+			v, err := vault.Open(en.Path)
 			if err != nil {
 				return txn.Planted{}, err
 			}
@@ -777,8 +723,6 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 		VaultsDir: cfg.VaultsDir,
 	}
 }
-
-// --- end of the TUI bridge ------------------------------------------------------
 
 // plantTask plants one task in a vault as a single operation.
 func plantTask(v *vault.Vault, plant tasks.Plant) (txn.Planted, error) {
@@ -854,7 +798,8 @@ func (e *env) view(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	items, err := e.treeItems(cfg)
+	hooks := e.hooks(cfg)
+	entries, err := hooks.Load()
 	if err != nil {
 		return 1, err
 	}
@@ -870,14 +815,14 @@ func (e *env) view(args []string) (int, error) {
 			return claudecode.LaunchCommand(cfg.ClaudeCode, vault, prompt)
 		},
 	}
-	changed, err := tui.RunView(items, opener, e.hooks(cfg))
+	changed, err := tui.RunView(tui.Items(entries), opener, hooks)
 	if err != nil {
 		return 1, err
 	}
 	if !changed {
 		return 0, nil
 	}
-	entries, _, err := e.refreshAll(cfg)
+	entries, _, err = e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
@@ -1179,10 +1124,7 @@ func (e *env) list(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	entries, _, err := registry.Read(e.home.StateDir())
-	if errors.Is(err, os.ErrNotExist) {
-		entries, _, err = e.refreshAll(cfg)
-	}
+	entries, err := e.registryEntries(cfg)
 	if err != nil {
 		return 1, err
 	}

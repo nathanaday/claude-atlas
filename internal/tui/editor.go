@@ -2,8 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -12,49 +10,45 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
-	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/txn"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // Hooks connect the screens to the atlas without the screens touching disk themselves.
 // Every hook is one backend call that a CLI command also exposes.
 type Hooks struct {
-	Load       func() ([]*tree.Project, error)
-	Categories func() []string
-	State      func(rel string) *tree.State
-	Update     func(*tree.Project, vaults.TreeEdit) error
-	Unlink     func(*tree.Project) error
-	// Create makes or adopts a vault and registers it; it returns the project's rel.
+	// Load reads the registry, refreshing it first when no refresh has run yet.
+	Load func() ([]registry.Entry, error)
+	// Create makes or adopts a vault and registers it; it returns the vault's path.
 	Create func(AddVault) (string, error)
-	// Refresh rebuilds derived state for every project.
+	// Refresh reads every vault again and rewrites the registry.
 	Refresh func() error
-	// StagePlan says which files under a source are new to the project's vault; an empty
-	// source means its linked material folders.
-	StagePlan func(*tree.Project, string) (*capture.StagePlan, error)
-	// Stage copies a plan's files into the inbox and links new folders; it returns the
-	// folders it linked.
-	Stage func(*tree.Project, *capture.StagePlan) (*capture.StageResult, []string, error)
-	// Links lists the link pages in the atlas, so a folder another project uses can be
-	// linked by name. AddLink, RemoveLink, and EditLink act on one project's links and
-	// one link page; the view refreshes after each.
-	// Links lists the repository pages; AddLink mounts a repository by page name or
-	// folder, initializing git when asked; NewRepo creates one; RemoveLink and EditLink
-	// act on one link. Sources lists the folders a project's vault has ingested from.
-	Links      func() []links.Page
-	AddLink    func(*tree.Project, string, bool) (links.Page, error)
-	NewRepo    func(*tree.Project, string, string) (links.Page, error)
-	CloneRepo  func(*tree.Project, string, string) (links.Page, error)
-	SetChanges func(links.Page, string) (links.Page, error)
-	RemoveLink func(*tree.Project, string) error
-	EditLink   func(links.Page, vaults.LinkEdit) (links.Page, error)
-	Sources    func(*tree.Project) []string
+	// Edit changes a vault's identity file. Unregister forgets a vault the config names;
+	// the folder stays, and a vault inside the vaults directory cannot be forgotten.
+	Edit       func(registry.Entry, vaults.Edit) error
+	Unregister func(registry.Entry) error
+	// StagePlan says which files under a source are new to a project's vault; an empty
+	// source means the folders it ingested from before. Stage copies a plan's files into
+	// the inbox and reports the folders the vault now remembers. Sources lists them.
+	StagePlan func(registry.Entry, string) (*capture.StagePlan, error)
+	Stage     func(registry.Entry, *capture.StagePlan) (*capture.StageResult, []string, error)
+	Sources   func(registry.Entry) []string
+	// The repository calls: mount a folder, initializing git there when asked; create
+	// one; clone one from a URL; drop one; and edit its remote, its folder, or how
+	// changes land. The first three also report the folder the repository sits in.
+	AddRepo    func(registry.Entry, string, bool) (vault.Repo, string, error)
+	NewRepo    func(registry.Entry, string, string) (vault.Repo, string, error)
+	CloneRepo  func(registry.Entry, string, string) (vault.Repo, string, error)
+	RemoveRepo func(registry.Entry, string) error
+	EditRepo   func(registry.Entry, string, vaults.RepoEdit) (vault.Repo, error)
 	// Tasks reads a project's task ledger and the notes waiting in inbox/tasks/; Plant
 	// plants a task in its vault.
-	Tasks     func(*tree.Project) (tasks.Ledger, []string, error)
-	Plant     func(*tree.Project, tasks.Plant) (txn.Planted, error)
+	Tasks func(registry.Entry) (tasks.Ledger, []string, error)
+	Plant func(registry.Entry, tasks.Plant) (txn.Planted, error)
+	// VaultsDir is where a new vault goes by default.
 	VaultsDir string
 }
 
@@ -63,12 +57,7 @@ type editMode int
 const (
 	editFields editMode = iota
 	editText
-	editPath
-	editCategory
-	editList
-	editListPick
 	confirmRemove
-	confirmMove
 )
 
 // editOutcome says how an editor session ended.
@@ -81,102 +70,53 @@ const (
 	editRemoved
 )
 
+// The fields an editor shows: a project has a name and tags, a knowledge base a name, a
+// scope, and an access level.
 const (
 	fieldName = iota
-	fieldPurpose
-	fieldCategory
-	fieldVault
-	fieldPriority
-	fieldState
-	fieldBlockedOn
-	fieldReviewAfter
-	fieldDone
-	fieldRelated
-	fieldCount
+	fieldTags
+	fieldScope
+	fieldAccess
 )
 
-var fieldNames = [fieldCount]string{"Name", "Purpose", "Category", "Vault", "Priority", "State", "Blocked on", "Review after", "Done when", "Related"}
+var fieldNames = []string{fieldName: "Name", fieldTags: "Tags", fieldScope: "Scope", fieldAccess: "Access"}
 
-// labelWidth fits the longest field name, "Review after".
-const labelWidth = 13
+// labelWidth fits the longest field name.
+const labelWidth = 8
 
-type draft struct {
-	Name, Purpose, Category, Vault, Priority, State string
-	BlockedOn, ReviewAfter, Done                    string
-	Related                                         []string // project rels
-}
-
-func draftOf(p *tree.Project) draft {
-	return draft{
-		Name: p.Name, Purpose: p.Purpose, Category: p.Category(), Vault: p.VaultPath(), Priority: p.Priority, State: p.State,
-		BlockedOn: p.BlockedOn, ReviewAfter: p.ReviewAfter, Done: p.DefinitionOfDone,
-		Related: append([]string{}, p.RelatedTo...),
-	}
-}
-
-func (d draft) equal(o draft) bool {
-	for f := 0; f < fieldCount; f++ {
-		if d.get(f) != o.get(f) {
-			return false
-		}
-	}
-	return true
-}
+type draft struct{ Name, Tags, Scope, Access string }
 
 func (d draft) get(field int) string {
-	if field == fieldRelated {
-		return strings.Join(d.Related, "\x00")
-	}
-	return [fieldCount]string{d.Name, d.Purpose, d.Category, d.Vault, d.Priority, d.State, d.BlockedOn, d.ReviewAfter, d.Done, ""}[field]
+	return [...]string{fieldName: d.Name, fieldTags: d.Tags, fieldScope: d.Scope, fieldAccess: d.Access}[field]
 }
 
 func (d *draft) set(field int, v string) {
 	switch field {
 	case fieldName:
 		d.Name = v
-	case fieldPurpose:
-		d.Purpose = v
-	case fieldCategory:
-		d.Category = v
-	case fieldVault:
-		d.Vault = v
-	case fieldPriority:
-		d.Priority = v
-	case fieldState:
-		d.State = v
-	case fieldBlockedOn:
-		d.BlockedOn = v
-	case fieldReviewAfter:
-		d.ReviewAfter = v
-	case fieldDone:
-		d.Done = v
+	case fieldTags:
+		d.Tags = v
+	case fieldScope:
+		d.Scope = v
+	case fieldAccess:
+		d.Access = v
 	}
 }
 
-// editor edits one project's page: its name, purpose, category, vault, priority, state,
-// and related projects. It also removes the project from the atlas. It is embedded in
-// the view; links have their own screen.
+// editor edits one vault's identity file: its name, and its tags or its scope and
+// access. It also forgets a vault the config names. It is embedded in the view.
 type editor struct {
-	hooks     Hooks
-	current   *tree.Project
-	projects  []*tree.Project
-	original  draft
-	draft     draft
-	field     int
-	text      textinput.Model
-	path      pathField
-	picker    picker
-	pick      picker
-	listPos   int
-	mode      editMode
-	err       string
-	discard   bool
-	pendingMv vaults.TreeEdit
-	// follow marks pendingMv as a vault following a new category; n then saves the rest.
-	follow  bool
-	outcome editOutcome
-	// rel is where the project's page sits after a save; a category change moves it.
-	rel string
+	hooks    Hooks
+	entry    registry.Entry
+	fields   []int
+	at       int
+	original draft
+	draft    draft
+	text     textinput.Model
+	mode     editMode
+	err      string
+	discard  bool
+	outcome  editOutcome
 }
 
 var (
@@ -185,36 +125,36 @@ var (
 	modSt = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5F00"))
 )
 
-func newEditor(hooks Hooks, p *tree.Project) editor {
+func draftOf(e registry.Entry) draft {
+	d := draft{Name: e.Name, Tags: strings.Join(e.Tags, ", "), Scope: e.Scope, Access: e.Access}
+	if e.Kind == vault.Knowledge && d.Access == "" {
+		d.Access = vault.AccessOpen
+	}
+	return d
+}
+
+func newEditor(hooks Hooks, e registry.Entry) editor {
 	text := textinput.New()
 	text.Prompt = ""
 	text.CharLimit = 300
 	text.Width = 60
-	var known []string
-	if hooks.Categories != nil {
-		known = hooks.Categories()
+	fields := []int{fieldName, fieldTags}
+	if e.Kind == vault.Knowledge {
+		fields = []int{fieldName, fieldScope, fieldAccess}
 	}
-	var projects []*tree.Project
-	if hooks.Load != nil {
-		projects, _ = hooks.Load()
-	}
-	// The project as the tree loaded it, so related projects resolve.
-	for _, q := range projects {
-		if q.Rel == p.Rel {
-			p = q
-		}
-	}
-	e := editor{hooks: hooks, current: p, projects: projects, original: draftOf(p), draft: draftOf(p), text: text, picker: newPicker(known), rel: p.Rel}
-	e.path = newPathField("~/Documents/Vaults/project", 60)
-	return e
+	return editor{hooks: hooks, entry: e, fields: fields, original: draftOf(e), draft: draftOf(e), text: text}
 }
 
-func (e editor) dirty() bool { return !e.draft.equal(e.original) }
+// field is the field under the cursor.
+func (e editor) field() int { return e.fields[e.at] }
 
-func (e editor) listLen() int { return len(e.draft.Related) }
-
-func (e *editor) removeAt(pos int) {
-	e.draft.Related = append(append([]string{}, e.draft.Related[:pos]...), e.draft.Related[pos+1:]...)
+func (e editor) dirty() bool {
+	for _, f := range e.fields {
+		if e.draft.get(f) != e.original.get(f) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e editor) update(msg tea.Msg) (editor, tea.Cmd) {
@@ -226,7 +166,7 @@ func (e editor) update(msg tea.Msg) (editor, tea.Cmd) {
 		if isKey {
 			switch key.Type {
 			case tea.KeyEnter:
-				e.draft.set(e.field, strings.TrimSpace(e.text.Value()))
+				e.draft.set(e.field(), strings.TrimSpace(e.text.Value()))
 				e.mode = editFields
 				return e, nil
 			case tea.KeyEsc:
@@ -237,92 +177,11 @@ func (e editor) update(msg tea.Msg) (editor, tea.Cmd) {
 		var cmd tea.Cmd
 		e.text, cmd = e.text.Update(msg)
 		return e, cmd
-	case editPath:
-		if isKey {
-			switch key.Type {
-			case tea.KeyEnter:
-				if v := e.path.value(); v != "" {
-					abs, _ := filepath.Abs(home.Expand(v))
-					e.draft.Vault = abs
-				}
-				e.mode = editFields
-				return e, nil
-			case tea.KeyEsc:
-				e.mode = editFields
-				return e, nil
-			}
-		}
-		var cmd tea.Cmd
-		e.path, cmd = e.path.update(msg)
-		return e, cmd
-	case editCategory:
-		if isKey {
-			switch key.Type {
-			case tea.KeyEnter:
-				e.draft.Category = e.picker.selected().value
-				e.mode = editFields
-				return e, nil
-			case tea.KeyEsc:
-				e.mode = editFields
-				return e, nil
-			}
-		}
-		var cmd tea.Cmd
-		e.picker, cmd = e.picker.update(msg)
-		return e, cmd
-	case editList:
-		if !isKey {
-			return e, nil
-		}
-		n := e.listLen()
-		switch key.Type {
-		case tea.KeyUp:
-			if n > 0 {
-				e.listPos = (e.listPos + n - 1) % n
-			}
-		case tea.KeyDown:
-			if n > 0 {
-				e.listPos = (e.listPos + 1) % n
-			}
-		case tea.KeyEsc, tea.KeyEnter:
-			e.mode = editFields
-		default:
-			switch key.String() {
-			case "a":
-				return e.startAdd()
-			case "d":
-				if n > 0 {
-					e.removeAt(e.listPos)
-					if e.listPos >= n-1 && e.listPos > 0 {
-						e.listPos--
-					}
-				}
-			}
-		}
-		return e, nil
-	case editListPick:
-		if isKey {
-			switch key.Type {
-			case tea.KeyEnter:
-				if opt := e.pick.selected(); opt.value != "" {
-					e.draft.Related = append(e.draft.Related, opt.value)
-					e.listPos = len(e.draft.Related) - 1
-				}
-				e.mode = editList
-				return e, nil
-			case tea.KeyEsc:
-				e.mode = editList
-				return e, nil
-			}
-		}
-		var cmd tea.Cmd
-		e.pick, cmd = e.pick.update(msg)
-		return e, cmd
 	case confirmRemove:
 		if isKey {
 			switch strings.ToLower(key.String()) {
 			case "y":
-				if err := e.hooks.Unlink(e.current); err != nil {
+				if err := e.hooks.Unregister(e.entry); err != nil {
 					e.err = err.Error()
 					e.mode = editFields
 					return e, nil
@@ -333,50 +192,8 @@ func (e editor) update(msg tea.Msg) (editor, tea.Cmd) {
 			}
 		}
 		return e, nil
-	case confirmMove:
-		if isKey {
-			switch strings.ToLower(key.String()) {
-			case "y":
-				e.pendingMv.MoveVault = true
-				return e.apply(e.pendingMv), nil
-			case "n":
-				if e.follow {
-					e.pendingMv.Vault = ""
-					return e.apply(e.pendingMv), nil
-				}
-				e.mode = editFields
-			case "esc":
-				e.mode = editFields
-			}
-		}
-		return e, nil
 	}
 	return e, nil
-}
-
-// startAdd opens the project picker for a relation.
-func (e editor) startAdd() (editor, tea.Cmd) {
-	e.err = ""
-	opts := e.relatedOptions()
-	if len(opts) == 0 {
-		e.err = "every other project is related already"
-		return e, nil
-	}
-	e.pick = newOptionPicker(opts)
-	e.mode = editListPick
-	return e, e.pick.focus()
-}
-
-// relatedOptions lists the projects the draft could relate to.
-func (e editor) relatedOptions() []option {
-	var opts []option
-	for _, q := range e.projects {
-		if q.Rel == e.current.Rel || contains(e.draft.Related, q.Rel) {
-			continue
-		}
-		opts = append(opts, option{label: q.Name + "  " + dim.Render(q.Rel), value: q.Rel, match: q.Name + " " + q.Rel})
-	}
-	return opts
 }
 
 func (e editor) updateFields(msg tea.Msg) (editor, tea.Cmd) {
@@ -387,35 +204,22 @@ func (e editor) updateFields(msg tea.Msg) (editor, tea.Cmd) {
 	e.err = ""
 	switch key.Type {
 	case tea.KeyUp:
-		e.field = (e.field + fieldCount - 1) % fieldCount
+		e.at = (e.at + len(e.fields) - 1) % len(e.fields)
 	case tea.KeyDown:
-		e.field = (e.field + 1) % fieldCount
+		e.at = (e.at + 1) % len(e.fields)
 	case tea.KeyLeft, tea.KeyRight:
-		if e.field == fieldPriority || e.field == fieldState {
-			e.cycle(key.Type == tea.KeyRight)
+		if e.field() == fieldAccess {
+			e.cycleAccess()
 		}
 	case tea.KeyEnter:
-		switch e.field {
-		case fieldCategory:
-			e.picker.reset()
-			e.mode = editCategory
-			return e, e.picker.focus()
-		case fieldPriority, fieldState:
-			e.cycle(true)
-		case fieldRelated:
-			e.listPos = 0
-			e.mode = editList
-		case fieldVault:
-			e.path.names = nil
-			e.path.setValue(home.Display(e.draft.Vault))
-			e.mode = editPath
-			return e, e.path.focus()
-		default:
-			e.text.SetValue(e.draft.get(e.field))
-			e.text.CursorEnd()
-			e.mode = editText
-			return e, e.text.Focus()
+		if e.field() == fieldAccess {
+			e.cycleAccess()
+			return e, nil
 		}
+		e.text.SetValue(e.draft.get(e.field()))
+		e.text.CursorEnd()
+		e.mode = editText
+		return e, e.text.Focus()
 	case tea.KeyEsc:
 		if e.dirty() && !e.discard {
 			e.discard = true
@@ -428,30 +232,22 @@ func (e editor) updateFields(msg tea.Msg) (editor, tea.Cmd) {
 		case "s":
 			return e.save(), nil
 		case "r":
+			if e.hooks.Unregister == nil {
+				e.err = "forgetting vaults is not available here"
+				return e, nil
+			}
 			e.mode = confirmRemove
 		}
 	}
 	return e, nil
 }
 
-func (e *editor) cycle(forward bool) {
-	values := tree.Priorities
-	if e.field == fieldState {
-		values = tree.States
+func (e *editor) cycleAccess() {
+	if e.draft.Access == vault.AccessOpen {
+		e.draft.Access = vault.AccessGuarded
+		return
 	}
-	current := e.draft.get(e.field)
-	idx := 0
-	for i, v := range values {
-		if v == current {
-			idx = i
-		}
-	}
-	if forward {
-		idx = (idx + 1) % len(values)
-	} else {
-		idx = (idx + len(values) - 1) % len(values)
-	}
-	e.draft.set(e.field, values[idx])
+	e.draft.Access = vault.AccessOpen
 }
 
 func (e editor) save() editor {
@@ -463,106 +259,47 @@ func (e editor) save() editor {
 		e.err = "the name cannot be empty"
 		return e
 	}
-	if !vaults.ValidReviewDate(e.draft.ReviewAfter) {
-		e.err = "review after must be a date like 2026-10-01"
-		e.field = fieldReviewAfter
-		return e
+	edit := vaults.Edit{}
+	if e.draft.Name != e.original.Name {
+		edit.Name = strings.TrimSpace(e.draft.Name)
 	}
-	edit := vaults.TreeEdit{Name: e.draft.Name, Priority: e.draft.Priority, State: e.draft.State}
-	if e.draft.Purpose != e.original.Purpose {
-		edit.Purpose = e.draft.Purpose
-		edit.ClearPurpose = e.draft.Purpose == ""
+	if e.draft.Tags != e.original.Tags {
+		tags := splitTags(e.draft.Tags)
+		edit.Tags = &tags
 	}
-	if e.draft.BlockedOn != e.original.BlockedOn {
-		v := e.draft.BlockedOn
-		edit.BlockedOn = &v
+	if e.draft.Scope != e.original.Scope {
+		scope := strings.TrimSpace(e.draft.Scope)
+		edit.Scope = &scope
 	}
-	if e.draft.ReviewAfter != e.original.ReviewAfter {
-		v := e.draft.ReviewAfter
-		edit.ReviewAfter = &v
+	if e.draft.Access != e.original.Access {
+		access := e.draft.Access
+		edit.Access = &access
 	}
-	if e.draft.Done != e.original.Done {
-		v := e.draft.Done
-		edit.DefinitionOfDone = &v
-	}
-	if e.draft.Category != e.original.Category {
-		cat := e.draft.Category
-		edit.Category = &cat
-	}
-	if e.draft.get(fieldRelated) != e.original.get(fieldRelated) {
-		related := append([]string{}, e.draft.Related...)
-		edit.Related = &related
-	}
-	if e.draft.Vault != e.original.Vault {
-		target, _ := filepath.Abs(home.Expand(e.draft.Vault))
-		edit.Vault = target
-		if _, err := os.Stat(target); err != nil {
-			e.pendingMv, e.follow = edit, false
-			e.mode = confirmMove
-			return e
-		}
-	} else if edit.Category != nil {
-		target := vaults.CategoryPath(e.hooks.VaultsDir, e.current, *edit.Category)
-		if target != "" && vaults.CheckMove(e.current.VaultPath(), target) == nil {
-			edit.Vault = target
-			e.pendingMv, e.follow = edit, true
-			e.mode = confirmMove
-			return e
-		}
-	}
-	return e.apply(edit)
-}
-
-func (e editor) apply(edit vaults.TreeEdit) editor {
-	if err := e.hooks.Update(e.current, edit); err != nil {
+	if err := e.hooks.Edit(e.entry, edit); err != nil {
 		e.err = err.Error()
 		e.mode = editFields
 		return e
 	}
-	rel := e.current.ID()
-	if edit.Category != nil {
-		if *edit.Category != "" {
-			rel = *edit.Category + "/" + rel
-		}
-	} else if e.current.Category() != "" {
-		rel = e.current.Category() + "/" + rel
-	}
-	e.rel = rel
 	e.outcome = editSaved
 	return e
 }
 
 func (e editor) view() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n  %s   %s\n\n", title.Render(e.current.Name), dim.Render("tree/"+e.current.Rel+".md"))
-	for f := 0; f < fieldCount; f++ {
+	fmt.Fprintf(&b, "\n  %s   %s\n\n", title.Render(e.entry.Name), dim.Render(e.entry.Rel()))
+	for i, f := range e.fields {
 		marker := "  "
 		name := label.Width(labelWidth).Render(fieldNames[f])
-		if f == e.field {
+		if i == e.at {
 			marker = cursorSt.Render("▸ ")
 			name = activeL.Width(labelWidth).Render(fieldNames[f])
 		}
 		var content string
 		switch {
-		case e.mode == editText && f == e.field:
+		case e.mode == editText && i == e.at:
 			content = e.text.View()
-		case e.mode == editPath && f == e.field:
-			content = e.path.view(listPad)
-		case e.mode == editCategory && f == e.field:
-			content = e.picker.view(listPad)
-		case f == fieldPriority || f == fieldState:
-			content = "◂ " + e.draft.get(f) + " ▸"
-		case f == fieldCategory:
-			content = e.draft.Category
-			if content == "" {
-				content = topLevel
-			}
-		case (e.mode == editList || e.mode == editListPick) && f == e.field:
-			content = e.viewList()
-		case f == fieldRelated:
-			content = e.relatedSummary()
-		case f == fieldVault:
-			content = home.Display(e.draft.Vault)
+		case f == fieldAccess:
+			content = "◂ " + e.draft.Access + " ▸" + dim.Render("  "+accessHint(e.draft.Access))
 		default:
 			content = e.draft.get(f)
 			if content == "" {
@@ -577,33 +314,23 @@ func (e editor) view() string {
 	b.WriteString("\n")
 	switch e.mode {
 	case confirmRemove:
-		fmt.Fprintf(&b, "  %s Remove %s from the atlas? The vault at %s stays on disk.  %s\n",
-			errSt.Render("▲"), e.current.Name, home.Display(e.current.VaultPath()), title.Render("y")+" / "+title.Render("n"))
-	case confirmMove:
-		if e.follow {
-			fmt.Fprintf(&b, "  %s The vault sits in its category's folder. Move it to %s too?  %s\n",
-				errSt.Render("▲"), home.Display(e.pendingMv.Vault), title.Render("y")+" / "+title.Render("n")+dim.Render(" · Esc back"))
-			break
-		}
-		fmt.Fprintf(&b, "  %s %s does not exist. Move the vault directory there?  %s\n",
-			errSt.Render("▲"), home.Display(e.pendingMv.Vault), title.Render("y")+" / "+title.Render("n"))
-	case editList:
-		b.WriteString("  " + dim.Render("↑↓ choose · a add a project · d remove · Esc done") + "\n")
-	case editListPick:
-		b.WriteString("  " + dim.Render("↑↓ choose · type to filter · Enter add · Esc cancel") + "\n")
+		fmt.Fprintf(&b, "  %s Forget %s? The vault at %s stays on disk.  %s\n",
+			errSt.Render("▲"), e.entry.Name, home.Display(e.entry.Path), title.Render("y")+" / "+title.Render("n"))
 	case editText:
 		b.WriteString("  " + dim.Render("Enter keep · Esc cancel") + "\n")
-	case editPath:
-		b.WriteString("  " + dim.Render(pathHint()+" · Enter keep · Esc cancel") + "\n")
-	case editCategory:
-		b.WriteString("  " + dim.Render("↑↓ choose · type to filter or name a new category · Enter keep · Esc cancel") + "\n")
 	default:
-		hints := "↑↓ field · Enter edit · ←→ change"
+		hints := "↑↓ field · Enter edit"
+		if e.entry.Kind == vault.Knowledge {
+			hints += " · ←→ access"
+		}
 		if e.dirty() {
 			hints += " · " + title.Render("s") + " save"
 		}
-		hints += " · r remove · Esc back"
+		hints += " · r forget · Esc back"
 		b.WriteString("  " + dim.Render(hints) + "\n")
+		if e.entry.Kind == vault.Project {
+			b.WriteString("  " + dim.Render("tags are comma-separated; the first one is the folder in the view") + "\n")
+		}
 	}
 	if e.err != "" {
 		b.WriteString("  " + errSt.Render(e.err) + "\n")
@@ -611,86 +338,12 @@ func (e editor) view() string {
 	return b.String()
 }
 
-func (e editor) relatedSummary() string {
-	names := e.relatedNames(e.draft.Related)
-	from := e.relatedFrom()
-	switch {
-	case len(names) == 0 && len(from) == 0:
-		return dim.Render("none")
-	case len(names) == 0:
-		return dim.Render("related from " + strings.Join(from, ", "))
+// accessHint says what an access level means for a knowledge base.
+func accessHint(access string) string {
+	if access == vault.AccessGuarded {
+		return "only the projects it grants may write"
 	}
-	out := strings.Join(names, ", ")
-	if len(from) > 0 {
-		out += dim.Render("  · related from " + strings.Join(from, ", "))
-	}
-	return out
-}
-
-func (e editor) relatedNames(rels []string) []string {
-	var names []string
-	for _, rel := range rels {
-		name := rel
-		for _, q := range e.projects {
-			if q.Rel == rel {
-				name = q.Name
-			}
-		}
-		names = append(names, name)
-	}
-	return names
-}
-
-// relatedFrom names the projects whose own page relates to this one.
-func (e editor) relatedFrom() []string {
-	var names []string
-	for _, q := range tree.RelatedFrom(e.projects, e.current) {
-		names = append(names, q.Name)
-	}
-	return names
-}
-
-// listPad indents what sits under a field: two spaces, the marker, and the label.
-const listPad = "                 "
-
-// viewList renders the list editor for related projects.
-func (e editor) viewList() string {
-	var b strings.Builder
-	n := e.listLen()
-	if n == 0 && e.mode == editList {
-		b.WriteString(dim.Render("none yet; press a to relate a project") + "\n")
-	}
-	for i := 0; i < n; i++ {
-		marker := "  "
-		rel := e.draft.Related[i]
-		text := fmt.Sprintf("%-24s %s", e.relatedNames([]string{rel})[0], dim.Render(rel))
-		if i == e.listPos && e.mode == editList {
-			marker = cursorSt.Render("▸ ")
-			text = cursorSt.Render(text)
-		}
-		b.WriteString(marker + text + "\n")
-	}
-	if e.mode == editList {
-		if from := e.relatedFrom(); len(from) > 0 {
-			b.WriteString("  " + dim.Render("related from "+strings.Join(from, ", ")+"; edit those on their own pages") + "\n")
-		}
-	}
-	if e.mode == editListPick {
-		b.WriteString("  " + e.pick.view("  ") + "\n")
-	}
-	if e.err != "" && e.mode != editList {
-		b.WriteString("  " + errSt.Render(e.err) + "\n")
-	}
-	return "\n" + listPad + strings.ReplaceAll(strings.TrimRight(b.String(), "\n"), "\n", "\n"+listPad)
-}
-
-func contains(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
-		}
-	}
-	return false
+	return "every project that mounts it may write"
 }
 
 func plural(n int) string {

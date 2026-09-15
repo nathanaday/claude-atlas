@@ -8,6 +8,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 )
 
 type ingestStep int
@@ -35,7 +36,7 @@ const trustNote = "The first time in a vault, Claude Code asks whether you trust
 // Claude Code on them. It is embedded in the view.
 type ingestScreen struct {
 	hooks   Hooks
-	item    *Item
+	entry   registry.Entry
 	step    ingestStep
 	source  pathField
 	plan    *capture.StagePlan
@@ -45,14 +46,14 @@ type ingestScreen struct {
 	outcome ingestOutcome
 }
 
-func newIngest(hooks Hooks, item *Item) ingestScreen {
+func newIngest(hooks Hooks, e registry.Entry) ingestScreen {
 	source := newPathField("~/Papers or ~/Papers/paper.pdf; blank: the folders ingested before", 64)
 	if hooks.Sources != nil {
-		for _, m := range hooks.Sources(item.Project) {
+		for _, m := range hooks.Sources(e) {
 			source.names = append(source.names, home.Display(m))
 		}
 	}
-	return ingestScreen{hooks: hooks, item: item, source: source}
+	return ingestScreen{hooks: hooks, entry: e, source: source}
 }
 
 func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
@@ -65,7 +66,7 @@ func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
 				s.outcome = ingestCancelled
 				return s, nil
 			case tea.KeyEnter:
-				plan, err := s.hooks.StagePlan(s.item.Project, s.source.value())
+				plan, err := s.hooks.StagePlan(s.entry, s.source.value())
 				if err != nil {
 					s.err = err.Error()
 					return s, nil
@@ -100,7 +101,7 @@ func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
 				s.step = ingestLaunch
 				return s, nil
 			}
-			res, linked, err := s.hooks.Stage(s.item.Project, s.plan)
+			res, linked, err := s.hooks.Stage(s.entry, s.plan)
 			if err != nil {
 				s.err = err.Error()
 				return s, nil
@@ -126,8 +127,7 @@ func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
 
 func (s ingestScreen) view() string {
 	var b strings.Builder
-	p := s.item.Project
-	fmt.Fprintf(&b, "\n  %s   %s\n\n", title.Render("Ingest into "+p.Name), dim.Render(home.Display(p.VaultPath())))
+	fmt.Fprintf(&b, "\n  %s   %s\n\n", title.Render("Ingest into "+s.entry.Name), dim.Render(home.Display(s.entry.Path)))
 	row := func(k, v string) { fmt.Fprintf(&b, "  %s%s\n", label.Width(12).Render(k), v) }
 	switch s.step {
 	case ingestPath:

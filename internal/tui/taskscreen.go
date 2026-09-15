@@ -11,6 +11,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 // tasksScreen shows open tasks as boxes: one project's, or every project's as a board.
@@ -33,7 +34,7 @@ type tasksScreen struct {
 	hooks   Hooks
 	opener  Opener
 	item    *Item  // nil for the board
-	items   []Item // every project, for the board and for names
+	items   []Item // every vault, for the board and for names
 	rows    []taskRow
 	notes   int
 	cursor  int
@@ -68,7 +69,7 @@ func (s *tasksScreen) reload(items []Item) {
 	s.items = items
 	if s.item != nil {
 		for i := range items {
-			if items[i].Project.Rel == s.item.Project.Rel {
+			if items[i].Entry.Path == s.item.Entry.Path {
 				s.item = &items[i]
 			}
 		}
@@ -78,10 +79,13 @@ func (s *tasksScreen) reload(items []Item) {
 	s.err = ""
 	for i := range items {
 		it := &items[i]
-		if s.item != nil && it.Project.Rel != s.item.Project.Rel {
+		if it.Entry.Kind != vault.Project || it.Entry.Error != "" {
 			continue
 		}
-		led, notes, err := s.hooks.Tasks(it.Project)
+		if s.item != nil && it.Entry.Path != s.item.Entry.Path {
+			continue
+		}
+		led, notes, err := s.hooks.Tasks(it.Entry)
 		if err != nil {
 			if s.item != nil {
 				s.err = err.Error()
@@ -186,13 +190,13 @@ func (s tasksScreen) plant() tasksScreen {
 		return s
 	}
 	target := s.plantTarget()
-	planted, err := s.hooks.Plant(target.Project, tasks.Plant{Text: text})
+	planted, err := s.hooks.Plant(target.Entry, tasks.Plant{Text: text})
 	if err != nil {
 		s.err = err.Error()
 		return s
 	}
 	s.mode = tasksList
-	s.status = fmt.Sprintf("planted %s in %s", planted.ID, target.Project.Name)
+	s.status = fmt.Sprintf("planted %s in %s", planted.ID, target.Entry.Name)
 	s.changed = true
 	s.reload(s.items)
 	for i, row := range s.rows {
@@ -213,9 +217,9 @@ func (s tasksScreen) claude() tasksScreen {
 	row := s.current()
 	switch {
 	case row != nil:
-		s.launch = &taskLaunch{name: row.rec.Title, vault: row.project.Project.VaultPath(), dir: row.rec.Workdir, prompt: claudecode.TaskPrompt(row.rec.ID)}
+		s.launch = &taskLaunch{name: row.rec.Title, vault: row.project.Entry.Path, dir: row.rec.Workdir, prompt: claudecode.TaskPrompt(row.rec.ID)}
 	case s.item != nil:
-		s.launch = &taskLaunch{name: s.item.Project.Name, vault: s.item.Project.VaultPath(), prompt: "/claude-atlas:task"}
+		s.launch = &taskLaunch{name: s.item.Entry.Name, vault: s.item.Entry.Path, prompt: "/claude-atlas:task"}
 	default:
 		s.err = "select a task to continue"
 	}
@@ -231,7 +235,7 @@ func (s tasksScreen) open() tasksScreen {
 		s.err = "opening pages is not available here"
 		return s
 	}
-	if err := s.opener.OpenPath(row.project.Project.VaultPath() + "/" + row.rec.Path); err != nil {
+	if err := s.opener.OpenPath(row.project.Entry.Path + "/" + row.rec.Path); err != nil {
 		s.err = err.Error()
 		return s
 	}
@@ -242,11 +246,11 @@ func (s tasksScreen) open() tasksScreen {
 func (s tasksScreen) view() string {
 	var b strings.Builder
 	if s.item != nil {
-		fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render(s.item.Project.Name), catSt.Render("tasks"), dim.Render(home.Display(s.item.Project.VaultPath())))
+		fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render(s.item.Entry.Name), catSt.Render("tasks"), dim.Render(home.Display(s.item.Entry.Path)))
 	} else {
 		projects := map[string]bool{}
 		for _, row := range s.rows {
-			projects[row.project.Project.Rel] = true
+			projects[row.project.Entry.Path] = true
 		}
 		fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render("Atlas"), catSt.Render("tasks"), dim.Render(fmt.Sprintf("%d open across %d project%s", len(s.rows), len(projects), plural(len(projects)))))
 	}
@@ -281,7 +285,7 @@ func (s tasksScreen) view() string {
 			second += " · due " + row.rec.Due
 		}
 		if s.item == nil {
-			second = row.project.Project.Name + " · " + second
+			second = row.project.Entry.Name + " · " + second
 		}
 		lines = append(lines, dim.Render(second))
 		if row.rec.Workdir != "" {
@@ -297,7 +301,7 @@ func (s tasksScreen) view() string {
 	case tasksPlant:
 		target := s.plantTarget()
 		b.WriteString("  " + activeL.Width(9).Render("Idea") + s.idea.View() + "\n")
-		b.WriteString("  " + dim.Render("plants into "+target.Project.Name+" with status planted · Enter plant · Esc cancel") + "\n")
+		b.WriteString("  " + dim.Render("plants into "+target.Entry.Name+" with status planted · Enter plant · Esc cancel") + "\n")
 	default:
 		hints := "p plant"
 		if len(s.rows) > 0 {

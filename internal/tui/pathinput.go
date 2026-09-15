@@ -14,7 +14,8 @@ import (
 
 // pathField is a text input that completes paths the way a shell does: the best match
 // shows as ghost text, Tab accepts it, ↑↓ cycle the matches, and the matches show under
-// the line. Names that are not paths, like link pages, can be offered too.
+// the line. Names that are not paths, such as the folders a vault ingested from, can be
+// offered too.
 type pathField struct {
 	input textinput.Model
 	names []string

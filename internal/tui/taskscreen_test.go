@@ -7,33 +7,27 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
-	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 )
 
 func taskHooks(ledgers map[string]*tasks.Ledger, planted *[]string) Hooks {
-	hooks := Hooks{
-		Load: func() ([]*tree.Project, error) {
-			var ps []*tree.Project
-			for _, it := range sample() {
-				ps = append(ps, it.Project)
-			}
-			return ps, nil
-		},
-		Tasks: func(p *tree.Project) (tasks.Ledger, []string, error) {
-			if led, ok := ledgers[p.Rel]; ok {
+	return Hooks{
+		Load: func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
+		Tasks: func(e registry.Entry) (tasks.Ledger, []string, error) {
+			if led, ok := ledgers[e.Path]; ok {
 				return *led, nil, nil
 			}
 			return tasks.Empty(), nil, nil
 		},
-		Plant: func(p *tree.Project, plant tasks.Plant) (txn.Planted, error) {
-			*planted = append(*planted, p.Rel+": "+plant.Text)
-			led := ledgers[p.Rel]
+		Plant: func(e registry.Entry, plant tasks.Plant) (txn.Planted, error) {
+			*planted = append(*planted, e.Name+": "+plant.Text)
+			led := ledgers[e.Path]
 			if led == nil {
 				l := tasks.Empty()
 				led = &l
-				ledgers[p.Rel] = led
+				ledgers[e.Path] = led
 			}
 			id := "task-20260913-00" + string(rune('a'+len(led.Tasks)))
 			led.Tasks = append(led.Tasks, tasks.Record{Task: tasks.Task{ID: id, Path: "wiki/tasks/x.md", Title: plant.Text, Status: "planted", Priority: "normal"}})
@@ -41,17 +35,16 @@ func taskHooks(ledgers map[string]*tasks.Ledger, planted *[]string) Hooks {
 		},
 		Refresh: func() error { return nil },
 	}
-	return hooks
 }
 
 func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	ledgers := map[string]*tasks.Ledger{
-		"engineering/itl/p3": {Tasks: []tasks.Record{
+		"/v/p3": {Tasks: []tasks.Record{
 			{Task: tasks.Task{ID: "task-20260901-aaaa", Path: "wiki/tasks/Fix it.md", Title: "Fix it", Status: "active", Priority: "high", Workdir: "/code/p3"}, LastTouched: "2026-09-10"},
 			{Task: tasks.Task{ID: "task-20260901-bbbb", Path: "wiki/tasks/Later.md", Title: "Later", Status: "planted", Priority: "low"}, LastTouched: "2026-09-01"},
 			{Task: tasks.Task{ID: "task-20260801-cccc", Path: "wiki/tasks/archive/Old.md", Title: "Old", Status: "done", Priority: "normal"}},
 		}},
-		"welcome": {Tasks: []tasks.Record{{Task: tasks.Task{ID: "task-20260902-dddd", Path: "wiki/tasks/W.md", Title: "Welcome task", Status: "blocked", Priority: "normal"}}}},
+		"/v/welcome": {Tasks: []tasks.Record{{Task: tasks.Task{ID: "task-20260902-dddd", Path: "wiki/tasks/W.md", Title: "Welcome task", Status: "blocked", Priority: "normal"}}}},
 	}
 	var planted []string
 	var launched []string
@@ -91,7 +84,7 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	v = typeV(v, "Write the docs")
 	next, cmd = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	v = next.(view)
-	if len(planted) != 1 || planted[0] != "engineering/itl/p3: Write the docs" || cmd == nil || !strings.Contains(v.tasks.status, "planted task-") || len(v.tasks.rows) != 3 || !v.changed {
+	if len(planted) != 1 || planted[0] != "p3: Write the docs" || cmd == nil || !strings.Contains(v.tasks.status, "planted task-") || len(v.tasks.rows) != 3 || !v.changed {
 		t.Fatalf("plant: %v status=%q rows=%d", planted, v.tasks.status, len(v.tasks.rows))
 	}
 	if v.tasks.rows[v.tasks.cursor].rec.Title != "Write the docs" {
@@ -101,7 +94,7 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	if v.tasks != nil {
 		t.Fatal("esc closes")
 	}
-	// T shows every project's open tasks, blocked ones before planted ones, with project names.
+	// T shows every project's open tasks, blocked ones before planted ones, with vault names.
 	v = keyV(v, "T")
 	out = v.View()
 	if v.tasks == nil || v.tasks.item != nil || !strings.Contains(out, "4 open across 2 projects") || !strings.Contains(out, "welcome · task-20260902-dddd") {
@@ -117,8 +110,8 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	}
 	v = pressV(v, tea.KeyEsc, tea.KeyEsc)
 	// An empty project offers to plant; c there opens the task skill in the vault.
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // course
-	if r := v.current(); r == nil || r.kind != rowProject || r.item.Project.ID() != "course" {
+	v = pressV(v, tea.KeyDown, tea.KeyDown) // usc, course
+	if r := v.current(); r == nil || r.kind != rowVault || r.item.Entry.Name != "course" {
 		t.Fatalf("cursor %+v", v.current())
 	}
 	v = keyV(v, "t")
@@ -130,8 +123,14 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	if cmd == nil || launched[len(launched)-1] != "/v/course||/claude-atlas:task" {
 		t.Fatalf("c on an empty project: %v", launched)
 	}
-	none := keyV(pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown, tea.KeyDown, tea.KeyDown), "t")
+	none := keyV(pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown), "t")
 	if none.tasks != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("t without hooks reports why")
+	}
+	// A knowledge base has no tasks of its own.
+	kb := pressV(newView(sample(), op, taskHooks(ledgers, &planted)), tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	kb = keyV(kb, "t")
+	if kb.tasks != nil || !strings.Contains(kb.errMsg, "knowledge base") {
+		t.Fatalf("t on a knowledge base: tasks=%v err=%q", kb.tasks, kb.errMsg)
 	}
 }

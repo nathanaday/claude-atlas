@@ -12,18 +12,44 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
-	"github.com/nathanaday/claude-atlas/internal/tree"
+	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-func item(rel, name string, heat string) Item {
-	cat := ""
-	if i := strings.LastIndex(rel, "/"); i >= 0 {
-		cat = rel[:i]
-	}
+func item(kind vault.Kind, name string, tags []string, heat string) Item {
 	four := 4
-	p := &tree.Project{Path: "/tree/" + rel + ".md", Rel: rel, Frontmatter: tree.Frontmatter{Name: name, Vault: "/v/" + name, Priority: "normal", State: "active"}}
-	_ = cat
-	return Item{Project: p, State: &tree.State{Heat: heat, Pages: &four, GeneratedAt: "2026-09-12T18:00:00Z", OpenThreads: []string{"thread"}}}
+	e := registry.Entry{
+		ID: "id-" + name, Kind: kind, Name: name, Path: "/v/" + name, Mode: vault.Generic,
+		Created: "2026-09-01", Tags: tags,
+		State: &registry.State{VaultOK: true, Heat: heat, Pages: &four,
+			GeneratedAt: "2026-09-12T18:00:00Z", OpenThreads: []string{"thread"}},
+	}
+	if kind == vault.Knowledge {
+		e.Scope, e.Access = name+" sources", vault.AccessOpen
+	}
+	return Item{Entry: e}
+}
+
+func sample() []Item {
+	items := []Item{
+		item(vault.Project, "welcome", nil, "new"),
+		item(vault.Project, "p3", []string{"itl"}, "hot"),
+		item(vault.Project, "course", []string{"usc"}, "cold"),
+		item(vault.Knowledge, "papers", nil, "warm"),
+		item(vault.Knowledge, "ai-ml", nil, "cold"),
+	}
+	// p3 mounts a knowledge base and works in one repository.
+	items[1].Entry.Mounts = []registry.Mount{{ID: "id-ai-ml", Name: "ai-ml", Access: vault.AccessWrite, Effective: vault.AccessWrite, Path: "/v/ai-ml/wiki"}}
+	items[1].Entry.Repos = []registry.Repo{{Name: "atlas", Path: "/code/atlas", Remote: "git@example.com:atlas.git", Changes: "pr"}}
+	return items
+}
+
+func entriesOf(items []Item) []registry.Entry {
+	out := make([]registry.Entry, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.Entry)
+	}
+	return out
 }
 
 func pressV(v view, keys ...tea.KeyType) view {
@@ -34,34 +60,16 @@ func pressV(v view, keys ...tea.KeyType) view {
 	return v
 }
 
-func sample() []Item {
-	return []Item{
-		item("welcome", "welcome", "new"),
-		item("engineering/itl/p3", "p3", "hot"),
-		item("engineering/usc/cs566/course", "course", "cold"),
-		item("engineering/usc/cs566/deep/deeper/buried", "buried", "warm"),
-		item("engineering/usc/cs566/deep/other", "other", "warm"),
-	}
+func keyV(v view, s string) view {
+	next, _ := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+	return next.(view)
 }
 
-func TestTreeShowsThreeLayersAndFoldsDeeper(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
-	out := v.View()
-	t.Logf("\n%s", out)
-	for _, want := range []string{"▾ engineering", "▾ itl", "▾ usc", "▾ cs566", "▸ deep", "2 projects", "welcome", "p3", "course"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q", want)
-		}
+func typeV(v view, text string) view {
+	for _, r := range text {
+		v = keyV(v, string(r))
 	}
-	if strings.Contains(out, "buried") || strings.Contains(out, "other") {
-		t.Fatal("projects under a folded category should not render")
-	}
-	if !strings.HasSuffix(v.lines[len(v.lines)-1], "(end)") {
-		t.Fatal("tree should end with an explicit (end) marker")
-	}
-	if got := kinds(v); got != "PCCPCCPF" {
-		t.Fatalf("rows %s", got)
-	}
+	return v
 }
 
 func kinds(v view) string {
@@ -70,13 +78,42 @@ func kinds(v view) string {
 		switch r.kind {
 		case rowFolded:
 			out += "F"
-		case rowCategory:
+		case rowFolder:
 			out += "C"
 		default:
 			out += "P"
 		}
 	}
 	return out
+}
+
+func runCmd(v view, cmd tea.Cmd) view {
+	if cmd == nil {
+		return v
+	}
+	next, _ := v.Update(cmd())
+	return next.(view)
+}
+
+// The tree rows: projects(C) welcome(P) itl(C) p3(P) usc(C) course(P) knowledge(C) ai-ml(P) papers(P).
+func TestTreeShowsProjectsThenKnowledge(t *testing.T) {
+	v := newView(sample(), Opener{}, Hooks{})
+	out := v.View()
+	t.Logf("\n%s", out)
+	for _, want := range []string{"▾ projects", "▾ itl", "▾ usc", "▾ knowledge", "welcome", "p3", "course", "ai-ml", "papers"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Index(out, "▾ projects") > strings.Index(out, "▾ knowledge") {
+		t.Error("projects should come before knowledge")
+	}
+	if got := kinds(v); got != "CPCPCPCPP" {
+		t.Fatalf("rows %s", got)
+	}
+	if !strings.HasSuffix(v.lines[len(v.lines)-1], "(end)") {
+		t.Fatal("tree should end with an explicit (end) marker")
+	}
 }
 
 func TestDownRevealsTheEndAndNeverWraps(t *testing.T) {
@@ -114,14 +151,24 @@ func TestDownRevealsTheEndAndNeverWraps(t *testing.T) {
 
 func TestHintsFollowTheCursor(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
-	if out := v.View(); !strings.Contains(out, "o Obsidian · c Claude · i ingest · t tasks · e edit") {
-		t.Fatalf("project hints missing:\n%s", out)
+	if hints := v.treeHints(); strings.Contains(hints, "Obsidian") || !strings.Contains(hints, "Enter fold") {
+		t.Fatalf("category hints wrong: %q", hints)
 	}
-	v = pressV(v, tea.KeyDown) // engineering
-	out := v.View()
-	if strings.Contains(v.treeHints(), "Obsidian") || !strings.Contains(v.treeHints(), "Enter fold") || !strings.Contains(out, "- + fold all") {
-		t.Fatalf("category hints wrong:\n%s", out)
+	if out := v.View(); !strings.Contains(out, "- + fold all") || !strings.Contains(out, "N new knowledge") {
+		t.Fatalf("global hints wrong:\n%s", out)
 	}
+	v = pressV(v, tea.KeyDown) // welcome
+	if hints := v.treeHints(); !strings.Contains(hints, "o Obsidian · c Claude · i ingest · t tasks · l repos · e edit") {
+		t.Fatalf("project hints missing: %q", hints)
+	}
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown) // ai-ml
+	if r := v.current(); r.kind != rowVault || r.item.Entry.Kind != vault.Knowledge {
+		t.Fatalf("cursor on %+v", r)
+	}
+	if hints := v.treeHints(); strings.Contains(hints, "ingest") || strings.Contains(hints, "repos") || !strings.Contains(hints, "e edit") {
+		t.Fatalf("a knowledge base has no ingest, tasks, or repositories: %q", hints)
+	}
+	v = pressV(v, tea.KeyUp) // knowledge
 	v = pressV(v, tea.KeySpace)
 	if out := v.View(); !strings.Contains(out, "Enter unfold") {
 		t.Fatalf("folded category hints wrong:\n%s", out)
@@ -137,62 +184,65 @@ func TestHintsFollowTheCursor(t *testing.T) {
 
 func TestFoldBranchAndFoldAll(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // welcome, engineering, itl, p3
-	if r := v.current(); r.kind != rowProject || r.item.Project.Name != "p3" {
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // projects, welcome, itl, p3
+	if r := v.current(); r.kind != rowVault || r.item.Entry.Name != "p3" {
 		t.Fatalf("cursor on %+v", r)
 	}
 	v = pressV(v, tea.KeySpace) // collapses itl and moves onto it
-	if r := v.current(); r.kind != rowCategory || r.path != "engineering/itl" || !v.collapsed["engineering/itl"] {
+	if r := v.current(); r.kind != rowFolder || r.path != "projects/itl" || !v.collapsed["projects/itl"] {
 		t.Fatalf("after fold: %+v collapsed=%v", r, v.collapsed)
 	}
 	out := v.View()
-	if strings.Contains(out, "p3") || !strings.Contains(out, "▸ itl") || !strings.Contains(out, "1 project") {
-		t.Fatalf("folded branch still shows its project:\n%s", out)
+	if strings.Contains(out, "p3") || !strings.Contains(out, "▸ itl") || !strings.Contains(out, "1 vault") {
+		t.Fatalf("folded branch still shows its vault:\n%s", out)
 	}
 	v = pressV(v, tea.KeyEnter) // enter on a category expands it again
-	if v.collapsed["engineering/itl"] || !strings.Contains(v.View(), "p3") {
+	if v.collapsed["projects/itl"] || !strings.Contains(v.View(), "p3") {
 		t.Fatal("enter should expand the category")
 	}
 	v = keyV(v, "-")
-	if got := kinds(v); got != "PC" || !strings.Contains(v.View(), "▸ engineering") {
+	if got := kinds(v); got != "CC" || !strings.Contains(v.View(), "▸ projects") {
 		t.Fatalf("collapse all: rows %s\n%s", got, v.View())
 	}
-	if r := v.current(); r == nil || r.path != "engineering" {
+	if r := v.current(); r == nil || r.path != "projects" {
 		t.Fatalf("collapse all should leave the cursor on the visible ancestor: %+v", r)
 	}
 	v = keyV(v, "+")
-	if got := kinds(v); got != "PCCPCCPF" || v.current().path != "engineering" {
+	if got := kinds(v); got != "CPCPCPCPP" || v.current().path != "projects" {
 		t.Fatalf("expand all: rows %s cursor %+v", got, v.current())
 	}
 	v = pressV(v, tea.KeyLeft) // left on a category folds it
-	if r := v.current(); r.path != "engineering" || !v.collapsed["engineering"] || kinds(v) != "PC" {
+	if r := v.current(); r.path != "projects" || !v.collapsed["projects"] || kinds(v) != "CCPP" {
 		t.Fatalf("left on category: %+v rows %s", r, kinds(v))
-	}
-	v = pressV(v, tea.KeyUp, tea.KeySpace) // a top-level project has no branch to fold
-	if kinds(v) != "PC" || v.cursor != 0 {
-		t.Fatal("space on a top-level project changes nothing")
 	}
 }
 
+// A tag may carry a slash, and then the tree nests: layers past the third fold into one
+// row that Enter zooms into.
 func TestEnterOnFoldedZoomsAndEscReturns(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
-	for i := 0; i < len(v.rows)-1; i++ {
-		v = pressV(v, tea.KeyDown) // down to the folded row at the bottom
+	deep := []Item{
+		item(vault.Project, "buried", []string{"usc/cs566/deep/deeper"}, "warm"),
+		item(vault.Project, "other", []string{"usc/cs566/deep"}, "warm"),
 	}
+	v := newView(deep, Opener{}, Hooks{})
+	if got := kinds(v); got != "CCCF" {
+		t.Fatalf("rows %s\n%s", got, v.View())
+	}
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown)
 	if v.rows[v.cursor].kind != rowFolded {
 		t.Fatalf("cursor on %+v", v.rows[v.cursor])
 	}
 	v = pressV(v, tea.KeyEnter)
 	out := v.View()
 	t.Logf("\n%s", out)
-	if v.root != "engineering/usc/cs566/deep" || !strings.Contains(out, "▾ deeper") || !strings.Contains(out, "buried") || !strings.Contains(out, "other") {
+	if v.root != "projects/usc/cs566/deep" || !strings.Contains(out, "▾ deeper") || !strings.Contains(out, "buried") || !strings.Contains(out, "other") {
 		t.Fatalf("zoom failed: root=%q\n%s", v.root, out)
 	}
-	if !strings.Contains(out, "engineering › usc › cs566 › deep") {
+	if !strings.Contains(out, "projects › usc › cs566 › deep") {
 		t.Fatal("breadcrumb missing")
 	}
 	v = pressV(v, tea.KeyEsc)
-	if v.root != "" || v.rows[v.cursor].kind != rowFolded || v.rows[v.cursor].path != "engineering/usc/cs566/deep" {
+	if v.root != "" || v.rows[v.cursor].kind != rowFolded || v.rows[v.cursor].path != "projects/usc/cs566/deep" {
 		t.Fatalf("esc should return to where the user came from: root=%q row=%+v", v.root, v.rows[v.cursor])
 	}
 }
@@ -202,7 +252,10 @@ func TestDetailShowsEverything(t *testing.T) {
 	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyEnter) // p3
 	out := v.View()
 	t.Logf("\n%s", out)
-	for _, want := range []string{"p3", "tree/engineering/itl/p3.md", "🔥 hot", "Vault", "/v/p3", "Pages", "4", "Open threads", "- thread", "Vault check", "Esc back"} {
+	for _, want := range []string{"p3", "projects/itl/p3", "🔥 hot", "created 2026-09-01",
+		"Kind", "project", "Id", "id-p3", "Path", "/v/p3", "Mode", "generic", "Tags", "itl",
+		"Mounts", "ai-ml", "write", "Repositories", "atlas", "/code/atlas", "changes: pr", "git@example.com:atlas.git",
+		"Vault check", "ok", "Heat", "Pages", "4", "Open threads", "- thread", "Refreshed", "Esc back"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -210,6 +263,16 @@ func TestDetailShowsEverything(t *testing.T) {
 	v = pressV(v, tea.KeyEsc)
 	if v.detail != nil {
 		t.Fatal("esc should close the detail")
+	}
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyEnter) // ai-ml
+	out = v.View()
+	for _, want := range []string{"knowledge/ai-ml", "Scope", "ai-ml sources", "Access", "open"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("knowledge detail missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Tags") || strings.Contains(out, "i ingest") {
+		t.Errorf("a knowledge base has no tags and no ingest:\n%s", out)
 	}
 }
 
@@ -229,7 +292,7 @@ func TestScrollKeepsCursorVisible(t *testing.T) {
 
 func TestEmptyTree(t *testing.T) {
 	v := newView(nil, Opener{}, Hooks{})
-	if !strings.Contains(v.View(), "no projects yet") {
+	if !strings.Contains(v.View(), "no vaults yet") {
 		t.Fatal("empty message missing")
 	}
 	v = pressV(v, tea.KeyDown, tea.KeyEnter) // must not panic
@@ -254,14 +317,6 @@ func (f *fakeOpener) opener() Opener {
 	}
 }
 
-func runCmd(v view, cmd tea.Cmd) view {
-	if cmd == nil {
-		return v
-	}
-	next, _ := v.Update(cmd())
-	return next.(view)
-}
-
 func TestOpenRegisteredVaultDirectly(t *testing.T) {
 	f := &fakeOpener{registered: map[string]bool{"/v/p3": true}}
 	v := newView(sample(), f.opener(), Hooks{})
@@ -280,7 +335,8 @@ func TestOpenRegisteredVaultDirectly(t *testing.T) {
 func TestOpenUnknownVaultAsksThenRegisters(t *testing.T) {
 	f := &fakeOpener{registered: map[string]bool{}, running: true}
 	v := newView(sample(), f.opener(), Hooks{})
-	next, _ := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")}) // welcome
+	v = pressV(v, tea.KeyDown) // welcome
+	next, _ := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
 	v = next.(view)
 	if v.ask == nil || !strings.Contains(v.View(), "quit and relaunch") {
 		t.Fatalf("expected a confirmation\n%s", v.View())
@@ -329,6 +385,7 @@ func TestClaudeKeyHandsOffTheTerminal(t *testing.T) {
 		t.Fatal("status after return missing")
 	}
 	none := newView(sample(), Opener{}, Hooks{})
+	none = pressV(none, tea.KeyDown)
 	next, _ = none.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	if next.(view).errMsg == "" {
 		t.Fatal("missing launcher should report an error")
@@ -336,49 +393,52 @@ func TestClaudeKeyHandsOffTheTerminal(t *testing.T) {
 }
 
 func TestNewAndAdoptFromTheTree(t *testing.T) {
+	dir := t.TempDir()
 	var got []AddVault
 	hooks := Hooks{
-		Load:       func() ([]*tree.Project, error) { return nil, nil },
-		Categories: func() []string { return []string{"work"} },
-		Create: func(c AddVault) (string, error) {
-			got = append(got, c)
-			return "work/" + c.Slug, nil
-		},
-		VaultsDir: "/vaults",
+		Load:      func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
+		Create:    func(c AddVault) (string, error) { got = append(got, c); return c.Path, nil },
+		VaultsDir: dir,
 	}
 	v := newView(sample(), Opener{}, hooks)
 	v = keyV(v, "n")
-	if v.add == nil || v.add.adopting || !strings.Contains(v.View(), "Add a vault") {
+	if v.add == nil || v.add.adopting || v.add.kind != vault.Project || !strings.Contains(v.View(), "Add a vault") {
 		t.Fatalf("n should open the add screen:\n%s", v.View())
 	}
+	v = pressV(v, tea.KeyEnter) // kind: project
 	v = typeV(v, "Sensor Triage")
 	v = pressV(v, tea.KeyEnter)               // name
-	v = pressV(v, tea.KeyDown, tea.KeyEnter)  // category: work
-	v = pressV(v, tea.KeyEnter)               // location: the category's folder
 	v = pressV(v, tea.KeyRight, tea.KeyEnter) // mode: lyt
-	v = pressV(v, tea.KeyEnter)               // purpose: none
-	v = pressV(v, tea.KeyEnter)               // confirm
-	if v.add != nil || len(got) != 1 || got[0].Slug != "sensor-triage" || got[0].Category != "work" || got[0].Mode != "lyt" || got[0].Adopt || got[0].Path != "/vaults/work/sensor-triage" {
+	v = typeV(v, "usc, fall")
+	v = pressV(v, tea.KeyEnter) // tags
+	v = pressV(v, tea.KeyEnter) // path: the default
+	v = pressV(v, tea.KeyEnter) // confirm
+	want := filepath.Join(dir, "projects", "Sensor Triage")
+	if v.add != nil || len(got) != 1 {
 		t.Fatalf("create: add=%v got=%+v", v.add, got)
+	}
+	if c := got[0]; c.Kind != vault.Project || c.Name != "Sensor Triage" || c.Mode != "lyt" || c.Adopt ||
+		c.Path != want || strings.Join(c.Tags, ",") != "usc,fall" {
+		t.Fatalf("create: %+v, want path %s", c, want)
 	}
 	if !v.changed || v.status != "created Sensor Triage" {
 		t.Fatalf("status %q changed %v", v.status, v.changed)
 	}
 	// Adopt an existing Obsidian folder.
-	dir := filepath.Join(t.TempDir(), "Old Notes")
-	os.MkdirAll(filepath.Join(dir, ".obsidian"), 0o755)
+	old := filepath.Join(t.TempDir(), "Old Notes")
+	os.MkdirAll(filepath.Join(old, ".obsidian"), 0o755)
 	v = keyV(v, "a")
 	if v.add == nil || !v.add.adopting || !strings.Contains(v.View(), "Adopt a vault") {
 		t.Fatalf("a should open the adopt screen:\n%s", v.View())
 	}
 	v = typeV(v, t.TempDir())
 	v = pressV(v, tea.KeyEnter)
-	if v.add.step != stepName || v.add.err == "" {
-		t.Fatalf("a plain directory is not adoptable: step=%d err=%q", v.add.step, v.add.err)
+	if v.add.step() != stepPath || v.add.err == "" {
+		t.Fatalf("a plain directory is not adoptable: step=%d err=%q", v.add.step(), v.add.err)
 	}
-	v.add.where.setValue(dir)
+	v.add.path.setValue(old)
 	v = pressV(v, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter)
-	if v.add != nil || len(got) != 2 || !got[1].Adopt || got[1].Path != dir || got[1].Name != "Old Notes" || got[1].Slug != "old-notes" {
+	if v.add != nil || len(got) != 2 || !got[1].Adopt || got[1].Path != old || got[1].Name != "Old Notes" || got[1].Kind != vault.Project {
 		t.Fatalf("adopt: add=%v got=%+v", v.add, got)
 	}
 	if v.status != "adopted Old Notes" {
@@ -390,23 +450,43 @@ func TestNewAndAdoptFromTheTree(t *testing.T) {
 	if v.add != nil || len(got) != 2 {
 		t.Fatal("esc should cancel the add screen")
 	}
-	none := newView(sample(), Opener{}, Hooks{})
-	none = keyV(none, "n")
+	none := keyV(newView(sample(), Opener{}, Hooks{}), "n")
 	if none.add != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("n without hooks reports why")
+	}
+}
+
+func TestNewKnowledgeKeyOpensTheAddScreenWithKindSet(t *testing.T) {
+	dir := t.TempDir()
+	var got []AddVault
+	hooks := Hooks{
+		Load:      func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
+		Create:    func(c AddVault) (string, error) { got = append(got, c); return c.Path, nil },
+		VaultsDir: dir,
+	}
+	v := newView(sample(), Opener{}, hooks)
+	v = keyV(v, "N")
+	if v.add == nil || v.add.kind != vault.Knowledge {
+		t.Fatalf("N should open the add screen on knowledge: %+v", v.add)
+	}
+	v = pressV(v, tea.KeyEnter) // kind: knowledge
+	v = typeV(v, "ai-ml")
+	v = pressV(v, tea.KeyEnter, tea.KeyEnter) // name, mode: generic
+	v = typeV(v, "Papers on retrieval.")
+	v = pressV(v, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter) // scope, path, confirm
+	if len(got) != 1 {
+		t.Fatalf("got %+v", got)
+	}
+	if c := got[0]; c.Kind != vault.Knowledge || c.Scope != "Papers on retrieval." || len(c.Tags) != 0 ||
+		c.Path != filepath.Join(dir, "knowledge", "ai-ml") {
+		t.Fatalf("knowledge: %+v", c)
 	}
 }
 
 func TestRefreshKey(t *testing.T) {
 	calls := 0
 	hooks := Hooks{
-		Load: func() ([]*tree.Project, error) {
-			var ps []*tree.Project
-			for _, it := range sample() {
-				ps = append(ps, it.Project)
-			}
-			return ps, nil
-		},
+		Load:    func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
 		Refresh: func() error { calls++; return nil },
 	}
 	v := newView(sample(), Opener{}, hooks)
@@ -421,13 +501,13 @@ func TestRefreshKey(t *testing.T) {
 	if calls != 1 || v.busy != "" || v.status != "refreshed" || v.errMsg != "" {
 		t.Fatalf("after refresh: calls=%d busy=%q status=%q err=%q", calls, v.busy, v.status, v.errMsg)
 	}
-	if v.detail != nil || v.current() == nil || v.current().item.Project.ID() != "p3" {
+	if v.detail != nil || v.current() == nil || v.current().item.Entry.Name != "p3" {
 		t.Fatalf("a refresh from the tree stays in the tree, cursor kept: detail=%v", v.detail)
 	}
 	v = pressV(v, tea.KeyEnter) // details, then refresh from there
 	next, cmd = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
 	next, _ = next.(view).Update(cmd())
-	if v = next.(view); v.detail == nil || v.detail.Project.ID() != "p3" {
+	if v = next.(view); v.detail == nil || v.detail.Entry.Name != "p3" {
 		t.Fatal("a refresh from the details keeps them open")
 	}
 	none := keyV(newView(sample(), Opener{}, Hooks{}), "R")
@@ -443,22 +523,16 @@ func TestIngestFromTheTree(t *testing.T) {
 	var planned, staged []string
 	var launched string
 	hooks := Hooks{
-		Load: func() ([]*tree.Project, error) {
-			var ps []*tree.Project
-			for _, it := range sample() {
-				ps = append(ps, it.Project)
-			}
-			return ps, nil
-		},
-		StagePlan: func(p *tree.Project, source string) (*capture.StagePlan, error) {
+		Load: func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
+		StagePlan: func(en registry.Entry, source string) (*capture.StagePlan, error) {
 			if source == "" {
 				return nil, errors.New("name a file or folder to ingest")
 			}
 			planned = append(planned, source)
-			return &capture.StagePlan{Vault: p.VaultPath(), Sources: []string{source}, Dirs: []string{source},
+			return &capture.StagePlan{Vault: en.Path, Sources: []string{source}, Dirs: []string{source},
 				New: []capture.Staged{{From: filepath.Join(source, "a.pdf"), To: "inbox/Papers/a.pdf"}}, Unchanged: []string{"x"}}, nil
 		},
-		Stage: func(p *tree.Project, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
+		Stage: func(en registry.Entry, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
 			staged = append(staged, plan.New[0].To)
 			return &capture.StageResult{Staged: plan.New}, plan.Dirs, nil
 		},
@@ -494,8 +568,8 @@ func TestIngestFromTheTree(t *testing.T) {
 	}
 	// Nothing new but files waiting: Enter continues to the launch step instead of closing.
 	nothingNew := hooks
-	nothingNew.StagePlan = func(p *tree.Project, source string) (*capture.StagePlan, error) {
-		return &capture.StagePlan{Vault: p.VaultPath(), Sources: []string{source}, Unchanged: []string{"a"}, Waiting: 2}, nil
+	nothingNew.StagePlan = func(en registry.Entry, source string) (*capture.StagePlan, error) {
+		return &capture.StagePlan{Vault: en.Path, Sources: []string{source}, Unchanged: []string{"a"}, Waiting: 2}, nil
 	}
 	w := newView(sample(), op, nothingNew)
 	w = pressV(w, tea.KeyDown, tea.KeyDown, tea.KeyDown)
@@ -511,8 +585,8 @@ func TestIngestFromTheTree(t *testing.T) {
 	}
 	// Nothing new and nothing waiting: Enter closes with a note.
 	nothingAtAll := hooks
-	nothingAtAll.StagePlan = func(p *tree.Project, source string) (*capture.StagePlan, error) {
-		return &capture.StagePlan{Vault: p.VaultPath(), Sources: []string{source}, Unchanged: []string{"a", "b"}}, nil
+	nothingAtAll.StagePlan = func(en registry.Entry, source string) (*capture.StagePlan, error) {
+		return &capture.StagePlan{Vault: en.Path, Sources: []string{source}, Unchanged: []string{"a", "b"}}, nil
 	}
 	w = newView(sample(), op, nothingAtAll)
 	w = pressV(w, tea.KeyDown, tea.KeyDown, tea.KeyDown)
@@ -522,8 +596,7 @@ func TestIngestFromTheTree(t *testing.T) {
 	if w.ingest != nil || !strings.Contains(w.status, "nothing to ingest: 2 files already ingested") {
 		t.Fatalf("nothing at all: ingest=%v status=%q", w.ingest, w.status)
 	}
-	// Once more, starting Claude Code this time.
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	// Once more, starting Claude Code this time. The cursor never left p3.
 	v = keyV(v, "i")
 	v = typeV(v, src)
 	next, cmd := pressV(v, tea.KeyEnter, tea.KeyEnter).Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -537,5 +610,10 @@ func TestIngestFromTheTree(t *testing.T) {
 	none := keyV(pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown, tea.KeyDown, tea.KeyDown), "i")
 	if none.ingest != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("i without hooks reports why")
+	}
+	// A knowledge base has no inbox of its own.
+	kb := keyV(pressV(newView(sample(), op, hooks), tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown), "i")
+	if kb.ingest != nil || !strings.Contains(kb.errMsg, "knowledge base") {
+		t.Fatalf("i on a knowledge base: ingest=%v err=%q", kb.ingest, kb.errMsg)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tui"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 type harness struct {
@@ -300,15 +301,11 @@ func TestOpenVaultResolvesNamesAndPaths(t *testing.T) {
 	}
 }
 
-// The view still reads the old tree. On a v2 atlas there is none, so every screen that
-// would write a project or a repository page must refuse instead of writing at a
-// relative path in the working directory. Task 8 replaces the screen.
-func TestTreeBridgeRefusesToWriteWhileTheTreeIsGone(t *testing.T) {
-	h, vaults := setup(t)
+// The view reaches the backend only through these hooks; this is the wiring the screens
+// get, over a real atlas.
+func TestViewHooksCreateEditAndForget(t *testing.T) {
+	h, dir := setup(t)
 	cfg := h.config(t)
-	if cfg.TreeRoot() != "" {
-		t.Fatalf("a v2 atlas has no tree, got %q", cfg.TreeRoot())
-	}
 	e := &env{
 		home:    home.Home{Root: h.home},
 		console: console.NewWith(true, strings.NewReader(""), &h.out, false),
@@ -316,16 +313,55 @@ func TestTreeBridgeRefusesToWriteWhileTheTreeIsGone(t *testing.T) {
 		stdout:  &h.out,
 		stderr:  &h.err,
 	}
-	ghost := filepath.Join(vaults, "projects", "ghost")
-	_, err := e.hooks(cfg).Create(tui.AddVault{Name: "ghost", Slug: "ghost", Path: ghost, Mode: "generic"})
-	if err == nil || !strings.Contains(err.Error(), "the tree view is being replaced") {
-		t.Fatalf("Create should refuse, got %v", err)
+	hooks := e.hooks(cfg)
+	path := project(dir, "ghost")
+	got, err := hooks.Create(tui.AddVault{Kind: vault.Project, Name: "ghost", Path: path, Mode: "generic", Tags: []string{"usc"}})
+	if err != nil || got != path {
+		t.Fatalf("create: %q %v", got, err)
 	}
-	if _, err := os.Stat(ghost); err == nil {
-		t.Fatal("a refused Create must leave nothing behind")
+	if err := hooks.Refresh(); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join("tree", "ghost.md")); err == nil {
-		t.Fatal("nothing may be written relative to the working directory")
+	entries, err := hooks.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ghost registry.Entry
+	for _, en := range entries {
+		if en.Path == path {
+			ghost = en
+		}
+	}
+	if ghost.Name != "ghost" || ghost.Rel() != "projects/usc/ghost" || ghost.State == nil {
+		t.Fatalf("the registry should carry the new project with its state: %+v", ghost)
+	}
+	if err := hooks.Edit(ghost, vaults.Edit{Name: "Ghost"}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(path)
+	if err != nil || v.Config.Name != "Ghost" {
+		t.Fatalf("identity file: %+v %v", v.Config, err)
+	}
+	// A vault inside the vaults directory cannot be forgotten; one outside can.
+	if err := hooks.Unregister(ghost); err == nil || !strings.Contains(err.Error(), "vaults directory") {
+		t.Fatalf("forget inside: %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if _, err := hooks.Create(tui.AddVault{Kind: vault.Knowledge, Name: "outside", Path: outside, Mode: "generic", Scope: "Papers."}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := h.config(t); len(cfg.Vaults) != 1 || cfg.Vaults[0] != outside {
+		t.Fatalf("a vault outside the vaults directory is registered: %+v", cfg.Vaults)
+	}
+	kb, err := vault.Open(outside)
+	if err != nil || kb.Config.Kind != vault.Knowledge || kb.Config.Scope != "Papers." {
+		t.Fatalf("knowledge base: %+v %v", kb.Config, err)
+	}
+	if err := hooks.Unregister(registry.Entry{Path: outside}); err != nil {
+		t.Fatalf("forget outside: %v", err)
+	}
+	if cfg := h.config(t); len(cfg.Vaults) != 0 {
+		t.Fatalf("still registered: %+v", cfg.Vaults)
 	}
 }
 

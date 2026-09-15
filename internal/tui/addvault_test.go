@@ -9,132 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 )
-
-func labels(opts []option) []string {
-	out := make([]string, len(opts))
-	for i, o := range opts {
-		out[i] = o.label
-		if o.create {
-			out[i] = "+" + o.label
-		}
-	}
-	return out
-}
-
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func TestCategoryOptions(t *testing.T) {
-	known := []string{"personal", "university", "university/cs566"}
-	if got := labels(categoryOptions(known, "")); !equal(got, []string{topLevel, "personal", "university", "university/cs566"}) {
-		t.Fatalf("empty filter: %v", got)
-	}
-	if got := labels(categoryOptions(known, "CS5")); !equal(got, []string{"university/cs566", "+CS5"}) {
-		t.Fatalf("partial match offers create: %v", got)
-	}
-	if got := labels(categoryOptions(known, "personal")); !equal(got, []string{"personal"}) {
-		t.Fatalf("exact match offers no create: %v", got)
-	}
-	if got := labels(categoryOptions(known, " work/ ")); !equal(got, []string{"+work"}) {
-		t.Fatalf("new category is trimmed: %v", got)
-	}
-}
-
-func TestCategoriesListsNestedDirectoriesAndSkipsHidden(t *testing.T) {
-	root := t.TempDir()
-	for _, dir := range []string{"university/cs566", "personal", ".obsidian/plugins", "university/.hidden"} {
-		os.MkdirAll(filepath.Join(root, dir), 0o755)
-	}
-	if got := Categories(root); !equal(got, []string{"personal", "university", "university/cs566"}) {
-		t.Fatalf("got %v", got)
-	}
-	if got := Categories(filepath.Join(root, "missing")); len(got) != 0 {
-		t.Fatalf("missing root: %v", got)
-	}
-}
-
-func TestModelValidatesNameAndBuildsPaths(t *testing.T) {
-	root := t.TempDir()
-	m := newModel(root, []string{"work"})
-	if m.nameError() == "" {
-		t.Fatal("empty name should error")
-	}
-	m.name.SetValue("!!!")
-	if m.nameError() == "" {
-		t.Fatal("unsluggable name should error")
-	}
-	m.name.SetValue("Sensor Triage")
-	if m.nameError() != "" || m.slug() != "sensor-triage" || m.path() != filepath.Join(root, "sensor-triage") {
-		t.Fatalf("name handling: err=%q slug=%q path=%q", m.nameError(), m.slug(), m.path())
-	}
-	if m.pagePath() != "tree/sensor-triage.md" {
-		t.Fatalf("top-level page path %q", m.pagePath())
-	}
-	m.chosen = option{value: "work"}
-	if m.pagePath() != "tree/work/sensor-triage.md" || m.path() != filepath.Join(root, "work", "sensor-triage") {
-		t.Fatalf("category page path %q vault path %q", m.pagePath(), m.path())
-	}
-}
-
-func TestLocationFollowsTheCategoryUntilEdited(t *testing.T) {
-	root := t.TempDir()
-	m := newModel(root, []string{"personal", "work"})
-	m = typeText(m, "notes")
-	m = press(m, tea.KeyEnter, tea.KeyDown, tea.KeyEnter) // category: personal
-	if m.step != stepLocation || m.location.value() != home.Display(filepath.Join(root, "personal", "notes")) {
-		t.Fatalf("step %d location %q", m.step, m.location.value())
-	}
-	m = press(m, tea.KeyEsc, tea.KeyDown, tea.KeyEnter) // back; category: work
-	if m.location.value() != home.Display(filepath.Join(root, "work", "notes")) {
-		t.Fatalf("the default should follow the category: %q", m.location.value())
-	}
-	elsewhere := filepath.Join(t.TempDir(), "notes")
-	m.location.setValue("")
-	m = typeText(m, elsewhere)
-	m = press(m, tea.KeyEsc, tea.KeyUp, tea.KeyEnter) // back; category: personal
-	if m.step != stepLocation || m.location.value() != elsewhere || m.path() != elsewhere {
-		t.Fatalf("a typed location should stay: %q", m.location.value())
-	}
-	m = press(m, tea.KeyEnter)
-	if m.step != stepMode || !strings.Contains(m.View(), elsewhere) {
-		t.Fatalf("step %d\n%s", m.step, m.View())
-	}
-}
-
-func TestLocationRefusesTakenPathsAndVaultsInsideVaults(t *testing.T) {
-	root := t.TempDir()
-	taken := filepath.Join(root, "work", "taken")
-	os.MkdirAll(taken, 0o755)
-	os.WriteFile(filepath.Join(taken, ".claude-atlas.json"), []byte("{}"), 0o644)
-	m := newModel(root, []string{"work", "work/taken"})
-	m = typeText(m, "taken")
-	m = press(m, tea.KeyEnter)
-	m = typeText(m, "../out")
-	m = press(m, tea.KeyEnter)
-	if m.step != stepCategory || !strings.Contains(m.err, "inside the tree") {
-		t.Fatalf("a category outside the tree: step %d err %q", m.step, m.err)
-	}
-	m.category.reset()
-	m = typeText(m, "work")
-	m = press(m, tea.KeyEnter, tea.KeyEnter) // category: work; location: work/taken
-	if m.step != stepLocation || !strings.Contains(m.err, "already exists") {
-		t.Fatalf("taken path: step %d err %q", m.step, m.err)
-	}
-	m = press(m, tea.KeyEsc, tea.KeyDown, tea.KeyEnter, tea.KeyEnter) // category: work/taken
-	if m.step != stepLocation || !strings.Contains(m.err, "inside the vault") || !strings.Contains(m.View(), "inside the vault") {
-		t.Fatalf("nested vault: step %d err %q\n%s", m.step, m.err, m.View())
-	}
-}
 
 func press(m model, keys ...tea.KeyType) model {
 	for _, k := range keys {
@@ -152,84 +28,133 @@ func typeText(m model, text string) model {
 	return m
 }
 
-func TestFlowCreatesUnderNewCategory(t *testing.T) {
+func TestAddFormPathFollowsTheKindAndTheName(t *testing.T) {
 	root := t.TempDir()
-	m := newModel(root, []string{"personal", "university/cs566"})
-	m = press(m, tea.KeyEnter) // empty name is refused
-	if m.step != stepName || m.err == "" {
-		t.Fatalf("empty name accepted: step=%d err=%q", m.step, m.err)
+	m := newModel(root, vault.Project)
+	m = press(m, tea.KeyEnter) // kind: project
+	if m.step() != stepName {
+		t.Fatalf("step %d", m.step())
 	}
-	m = typeText(m, "Sensor Triage")
+	m = typeText(m, "notes")
+	m = press(m, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter) // name, mode, tags
+	if m.step() != stepPath || m.path.value() != home.Display(filepath.Join(root, "projects", "notes")) {
+		t.Fatalf("step %d path %q", m.step(), m.path.value())
+	}
+	// Back to the kind: a knowledge base goes under knowledge/ instead.
+	m = press(m, tea.KeyEsc, tea.KeyEsc, tea.KeyEsc, tea.KeyEsc)
+	if m.step() != stepKind {
+		t.Fatalf("esc should walk back, step %d", m.step())
+	}
+	m = press(m, tea.KeyRight, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter)
+	if m.kind != vault.Knowledge || m.step() != stepPath || m.path.value() != home.Display(filepath.Join(root, "knowledge", "notes")) {
+		t.Fatalf("kind %q step %d path %q", m.kind, m.step(), m.path.value())
+	}
+	// A typed path stays, whatever the kind and the name say.
+	elsewhere := filepath.Join(t.TempDir(), "notes")
+	m.path.setValue("")
+	m = typeText(m, elsewhere)
+	m = press(m, tea.KeyEsc, tea.KeyEsc, tea.KeyEsc, tea.KeyEsc, tea.KeyLeft, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter)
+	if m.kind != vault.Project || m.step() != stepPath || m.path.value() != elsewhere {
+		t.Fatalf("a typed path should stay: %q", m.path.value())
+	}
 	m = press(m, tea.KeyEnter)
-	if m.step != stepCategory {
-		t.Fatalf("expected category step, got %d", m.step)
-	}
-	t.Logf("\n%s", m.View())
-	m = typeText(m, "work")
-	t.Logf("\n%s", m.View())
-	m = press(m, tea.KeyEnter)
-	if m.step != stepLocation || !m.chosen.create || m.chosen.value != "work" {
-		t.Fatalf("expected new category work, got step=%d chosen=%+v", m.step, m.chosen)
-	}
-	if m.location.value() != home.Display(filepath.Join(root, "work", "sensor-triage")) {
-		t.Fatalf("location should default to the category's folder: %q", m.location.value())
-	}
-	t.Logf("\n%s", m.View())
-	m = press(m, tea.KeyEnter)
-	if m.step != stepMode {
-		t.Fatalf("expected mode step, got %d", m.step)
-	}
-	m = press(m, tea.KeyRight)
-	if m.mode != "lyt" || !strings.Contains(m.View(), "◂ lyt ▸") {
-		t.Fatalf("mode toggle: %q\n%s", m.mode, m.View())
-	}
-	m = press(m, tea.KeyLeft, tea.KeyEnter)
-	if m.step != stepPurpose || m.mode != "generic" {
-		t.Fatalf("expected purpose step in generic mode, got step=%d mode=%q", m.step, m.mode)
-	}
-	m = typeText(m, "Sort sensors.")
-	m = press(m, tea.KeyEnter)
-	if m.step != stepConfirm {
-		t.Fatalf("expected confirm step, got %d", m.step)
-	}
-	t.Logf("\n%s", m.View())
-	m = press(m, tea.KeyEnter)
-	if !m.done || m.pagePath() != "tree/work/sensor-triage.md" {
-		t.Fatalf("done=%v page=%s", m.done, m.pagePath())
-	}
-	r := m.result()
-	if r == nil || r.Name != "Sensor Triage" || r.Mode != "generic" || r.Purpose != "Sort sensors." || r.Adopt || r.Path != filepath.Join(root, "work", "sensor-triage") {
-		t.Fatalf("result %+v", r)
+	if m.step() != stepConfirm || !strings.Contains(m.View(), elsewhere) {
+		t.Fatalf("step %d\n%s", m.step(), m.View())
 	}
 }
 
-func TestAdoptModelValidatesPath(t *testing.T) {
-	m := newAdoptModel([]string{"work"})
-	if m.nameError() != "type the vault's path" {
-		t.Fatalf("empty: %q", m.nameError())
+func TestAddFormRefusesBadNamesAndTakenPaths(t *testing.T) {
+	root := t.TempDir()
+	taken := filepath.Join(root, "projects", "taken")
+	os.MkdirAll(taken, 0o755)
+	os.WriteFile(filepath.Join(taken, ".claude-atlas.json"), []byte("{}"), 0o644)
+	m := press(newModel(root, vault.Project), tea.KeyEnter)
+	m = press(m, tea.KeyEnter) // an empty name is refused
+	if m.step() != stepName || m.err == "" {
+		t.Fatalf("empty name: step %d err %q", m.step(), m.err)
+	}
+	m = typeText(m, "a/b")
+	m = press(m, tea.KeyEnter)
+	if m.step() != stepName || !strings.Contains(m.err, "/") {
+		t.Fatalf("a name is not a path: step %d err %q", m.step(), m.err)
+	}
+	m.name.SetValue("taken")
+	m = press(m, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter)
+	if m.step() != stepPath || !strings.Contains(m.err, "already exists") {
+		t.Fatalf("taken path: step %d err %q", m.step(), m.err)
+	}
+	m.path.setValue(filepath.Join(taken, "inner"))
+	m = press(m, tea.KeyEnter)
+	if m.step() != stepPath || !strings.Contains(m.err, "inside the vault") || !strings.Contains(m.View(), "inside the vault") {
+		t.Fatalf("nested vault: step %d err %q\n%s", m.step(), m.err, m.View())
+	}
+}
+
+// The temp directory a test writes into carries the test's own name, and the form shows
+// that path, so this name avoids the words the assertions look for.
+func TestAddFormCarriesWhatTheKindNeeds(t *testing.T) {
+	root := t.TempDir()
+	m := press(newModel(root, vault.Project), tea.KeyEnter)
+	m = typeText(m, "Sensor Triage")
+	m = press(m, tea.KeyEnter, tea.KeyEnter) // name, mode: generic
+	if !strings.Contains(m.View(), "Tags") || strings.Contains(m.View(), "Scope") {
+		t.Fatalf("a project is asked for tags:\n%s", m.View())
+	}
+	m = typeText(m, " usc , fall ")
+	m = press(m, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter) // tags, path, confirm
+	r := m.result()
+	if r == nil || r.Kind != vault.Project || r.Name != "Sensor Triage" || r.Mode != "generic" || r.Adopt ||
+		strings.Join(r.Tags, ",") != "usc,fall" || r.Scope != "" || r.Path != filepath.Join(root, "projects", "Sensor Triage") {
+		t.Fatalf("project result %+v", r)
+	}
+
+	m = press(newModel(root, vault.Knowledge), tea.KeyEnter)
+	m = typeText(m, "ai-ml")
+	m = press(m, tea.KeyEnter, tea.KeyRight, tea.KeyEnter) // name; mode: lyt
+	if !strings.Contains(m.View(), "Scope") || strings.Contains(m.View(), "Tags") {
+		t.Fatalf("a knowledge base is asked for a scope:\n%s", m.View())
+	}
+	m = typeText(m, "Retrieval papers.")
+	m = press(m, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter)
+	r = m.result()
+	if r == nil || r.Kind != vault.Knowledge || r.Mode != "lyt" || r.Scope != "Retrieval papers." || len(r.Tags) != 0 ||
+		r.Path != filepath.Join(root, "knowledge", "ai-ml") {
+		t.Fatalf("knowledge result %+v", r)
+	}
+}
+
+func TestAdoptFormValidatesThePathAndAsksTheKind(t *testing.T) {
+	m := newAdoptModel()
+	if m.step() != stepPath || m.pathError() != "type the vault's path" {
+		t.Fatalf("step %d err %q", m.step(), m.pathError())
 	}
 	plain := t.TempDir()
-	m.where.setValue(plain)
-	if !strings.Contains(m.nameError(), "not a vault") {
-		t.Fatalf("plain dir: %q", m.nameError())
+	m.path.setValue(plain)
+	if !strings.Contains(m.pathError(), "not a vault") {
+		t.Fatalf("plain dir: %q", m.pathError())
 	}
-	m.where.setValue(filepath.Join(plain, "missing"))
-	if !strings.Contains(m.nameError(), "not a directory") {
-		t.Fatalf("missing: %q", m.nameError())
+	m.path.setValue(filepath.Join(plain, "missing"))
+	if !strings.Contains(m.pathError(), "not a directory") {
+		t.Fatalf("missing: %q", m.pathError())
 	}
 	old := filepath.Join(plain, "My Vault")
 	os.MkdirAll(filepath.Join(old, "wiki"), 0o755)
-	m.where.setValue(old)
-	if m.nameError() != "" || m.slug() != "my-vault" || m.path() != old {
-		t.Fatalf("adoptable: err=%q slug=%q path=%q", m.nameError(), m.slug(), m.path())
+	m.path.setValue(old)
+	m = press(m, tea.KeyEnter)
+	if m.step() != stepKind {
+		t.Fatalf("step %d err %q", m.step(), m.err)
 	}
-	m = press(m, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter, tea.KeyEnter)
-	if m.step != stepConfirm || !strings.Contains(m.View(), "adopt this vault") {
-		t.Fatalf("step %d\n%s", m.step, m.View())
+	m = press(m, tea.KeyRight, tea.KeyEnter) // kind: knowledge
+	if m.step() != stepName || m.name.Value() != "My Vault" {
+		t.Fatalf("the folder's name is the default: step %d name %q", m.step(), m.name.Value())
+	}
+	m = press(m, tea.KeyEnter, tea.KeyEnter)
+	if m.step() != stepConfirm || !strings.Contains(m.View(), "adopt this vault") {
+		t.Fatalf("step %d\n%s", m.step(), m.View())
 	}
 	m = press(m, tea.KeyEnter)
 	r := m.result()
-	if r == nil || !r.Adopt || r.Name != "My Vault" || r.Path != old {
+	if r == nil || !r.Adopt || r.Kind != vault.Knowledge || r.Name != "My Vault" || r.Path != old || r.Mode != "generic" {
 		t.Fatalf("result %+v", r)
 	}
 }
@@ -238,42 +163,30 @@ func TestAdoptPathCompletes(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "Vaults", "old"), 0o755)
 	os.MkdirAll(filepath.Join(root, "Videos"), 0o755)
-	m := newAdoptModel(nil)
+	m := newAdoptModel()
 	m = typeText(m, filepath.Join(root, "V"))
-	if got := m.where.input.MatchedSuggestions(); len(got) != 2 || got[0] != filepath.Join(root, "Vaults")+"/" {
+	if got := m.path.input.MatchedSuggestions(); len(got) != 2 || got[0] != filepath.Join(root, "Vaults")+"/" {
 		t.Fatalf("suggestions %v", got)
 	}
 	m = press(m, tea.KeyTab)
-	if m.where.value() != filepath.Join(root, "Vaults")+"/" {
-		t.Fatalf("tab should complete: %q", m.where.value())
+	if m.path.value() != filepath.Join(root, "Vaults")+"/" {
+		t.Fatalf("tab should complete: %q", m.path.value())
 	}
 	if !strings.Contains(m.View(), "old/") {
 		t.Fatalf("matches should show under the line:\n%s", m.View())
 	}
 	m = press(m, tea.KeyTab)
-	if m.where.value() != filepath.Join(root, "Vaults", "old")+"/" {
-		t.Fatalf("second tab: %q", m.where.value())
+	if m.path.value() != filepath.Join(root, "Vaults", "old")+"/" {
+		t.Fatalf("second tab: %q", m.path.value())
 	}
 }
 
-func TestFlowBackAndPickExistingCategory(t *testing.T) {
-	m := newModel(t.TempDir(), []string{"personal", "university/cs566"})
-	m = typeText(m, "notes")
-	m = press(m, tea.KeyEnter, tea.KeyDown, tea.KeyDown) // top level → personal → university/cs566
-	m = press(m, tea.KeyEnter)
-	if m.chosen.value != "university/cs566" || m.chosen.create {
-		t.Fatalf("chosen %+v", m.chosen)
-	}
-	m = press(m, tea.KeyEsc) // back to category
-	if m.step != stepCategory {
-		t.Fatalf("esc should go back, step=%d", m.step)
-	}
-	m = press(m, tea.KeyEsc, tea.KeyEsc) // back to name, then cancel
+func TestAddFormCancels(t *testing.T) {
+	m := press(newModel(t.TempDir(), vault.Project), tea.KeyEsc)
 	if !m.cancelled {
 		t.Fatal("esc on the first step should cancel")
 	}
-	m2 := press(newModel(t.TempDir(), nil), tea.KeyCtrlC)
-	if !m2.cancelled {
+	if m2 := press(newModel(t.TempDir(), vault.Project), tea.KeyEnter, tea.KeyCtrlC); !m2.cancelled {
 		t.Fatal("ctrl+c should cancel")
 	}
 }
