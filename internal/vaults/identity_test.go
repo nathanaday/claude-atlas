@@ -195,6 +195,10 @@ func TestEditIdentityByKind(t *testing.T) {
 	if v.Config.Scope != kbScope || v.Config.Access != kbAccess {
 		t.Fatalf("scope/access: %+v", v.Config)
 	}
+	// One edit is one operation, whatever it changes, and its summary names the fields.
+	if subject := lastCommitSubject(t, kb.Path); subject != "setup: edit scope, access" {
+		t.Fatalf("commit subject: %q", subject)
+	}
 
 	if err := EditIdentity(project, Edit{Name: "cs566-renamed"}, identityNow); err != nil {
 		t.Fatal(err)
@@ -209,6 +213,91 @@ func TestEditIdentityByKind(t *testing.T) {
 	v, err = vault.Open(kb.Path)
 	if err != nil || v.Config.Name != "ai-ml-renamed" {
 		t.Fatalf("kb name: %+v %v", v, err)
+	}
+}
+
+// TestAddRepoRefusesADuplicateFromAStaleEntry proves the identity file decides: the entry
+// a caller holds may be older than the file it describes.
+func TestAddRepoRefusesADuplicateFromAStaleEntry(t *testing.T) {
+	cfg, h, project, _ := fixtureEntries(t)
+	first := filepath.Join(t.TempDir(), "docs")
+	second := filepath.Join(t.TempDir(), "docs")
+	for _, dir := range []string{first, second} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := AddRepo(h, cfg, project, first, true, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	// The same entry value again: its snapshot has no repositories, the file has one.
+	if _, _, err := AddRepo(h, cfg, project, second, true, identityNow); err == nil || !strings.Contains(err.Error(), "already") {
+		t.Fatalf("stale entry: %v", err)
+	}
+	v, err := vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Repos) != 1 {
+		t.Fatalf("the file should hold one repository: %+v", v.Config.Repos)
+	}
+	if cfg.RepoPath(project.ID, "docs") != first {
+		t.Fatalf("the config should still point at the first folder: %q", cfg.RepoPath(project.ID, "docs"))
+	}
+}
+
+// TestEditRepoRemoteAndPath covers the two edits beyond the change policy: the remote, and
+// the folder the project reaches under that name.
+func TestEditRepoRemoteAndPath(t *testing.T) {
+	cfg, h, project, _ := fixtureEntries(t)
+	if _, _, err := CreateRepo(h, cfg, project, "hw", "", identityNow); err != nil {
+		t.Fatal(err)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+
+	url := "git@github.com:me/hw.git"
+	updated, err := EditRepo(h, cfg, project, "hw", RepoEdit{Remote: &url}, identityNow)
+	if err != nil || updated.Remote != url {
+		t.Fatalf("set remote: %+v %v", updated, err)
+	}
+	updated, err = EditRepo(h, cfg, project, "hw", RepoEdit{Remote: strPtr("")}, identityNow)
+	if err != nil || updated.Remote != "" {
+		t.Fatalf("clear remote: %+v %v", updated, err)
+	}
+	v, err := vault.Open(project.Path)
+	if err != nil || len(v.Config.Repos) != 1 || v.Config.Repos[0].Remote != "" {
+		t.Fatalf("identity file: %+v %v", v.Config.Repos, err)
+	}
+
+	// Point the entry at a folder outside the vault: the config records the mapping.
+	outside := filepath.Join(t.TempDir(), "hw")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", outside).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s", out)
+	}
+	if _, err := EditRepo(h, cfg, project, "hw", RepoEdit{Path: outside}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RepoPath(project.ID, "hw") != outside {
+		t.Fatalf("mapping: %q", cfg.RepoPath(project.ID, "hw"))
+	}
+	reloaded, err := h.Load()
+	if err != nil || reloaded.RepoPath(project.ID, "hw") != outside {
+		t.Fatalf("mapping not saved: %+v %v", reloaded.Repos, err)
+	}
+
+	// Point it back at repos/<name>: the mapping goes away, since that is the default.
+	if _, err := EditRepo(h, cfg, project, "hw", RepoEdit{Path: project.RepoDir("hw")}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RepoPath(project.ID, "hw") != "" {
+		t.Fatalf("mapping should be cleared: %q", cfg.RepoPath(project.ID, "hw"))
+	}
+	reloaded, err = h.Load()
+	if err != nil || reloaded.RepoPath(project.ID, "hw") != "" {
+		t.Fatalf("cleared mapping not saved: %+v %v", reloaded.Repos, err)
 	}
 }
 

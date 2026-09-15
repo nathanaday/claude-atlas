@@ -632,6 +632,39 @@ func TestUpdateConfigCommitsOnceAndValidates(t *testing.T) {
 	if err := UpdateConfig(root, "bad", now, func(c *Config) error { return errors.New("no") }); err == nil {
 		t.Fatal("change's error is returned")
 	}
+	// The file decides what is unique, whatever the caller thought it held.
+	if err := UpdateConfig(root, "two repos", now, func(c *Config) error {
+		c.Repos = []Repo{{Name: "hw"}, {Name: "HW"}}
+		return nil
+	}); err == nil || !strings.Contains(err.Error(), `two repositories named "HW"`) {
+		t.Fatalf("two repositories with one name: %v", err)
+	}
+	if v, _ := Open(root); len(v.Config.Repos) != 0 {
+		t.Fatalf("a refused update writes nothing: %+v", v.Config.Repos)
+	}
+	if err := UpdateConfig(root, "two mounts", now, func(c *Config) error {
+		c.Mounts = []Mount{{ID: "k1", Name: "ai-ml", Access: AccessRead}, {ID: "k1", Name: "robotics", Access: AccessRead}}
+		return nil
+	}); err == nil || !strings.Contains(err.Error(), "two mounts of k1") {
+		t.Fatalf("two mounts with one id: %v", err)
+	}
+	if err := UpdateConfig(root, "two mounts", now, func(c *Config) error {
+		c.Mounts = []Mount{{ID: "k1", Name: "ai-ml", Access: AccessRead}, {ID: "k2", Name: "ai-ml", Access: AccessRead}}
+		return nil
+	}); err == nil || !strings.Contains(err.Error(), "two mounts of ai-ml") {
+		t.Fatalf("two mounts with one name: %v", err)
+	}
+	kb := filepath.Join(t.TempDir(), "k")
+	if _, err := Init(kb, Options{Kind: Knowledge}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateConfig(kb, "two grants", now, func(c *Config) error {
+		c.Access = AccessGuarded
+		c.Grants = []Grant{{ID: "p1", Name: "cs566", Access: AccessRead}, {ID: "p1", Name: "cs566", Access: AccessWrite}}
+		return nil
+	}); err == nil || !strings.Contains(err.Error(), "two grants for p1") {
+		t.Fatalf("two grants for one project: %v", err)
+	}
 	if !ValidAccess("guarded", true) || ValidAccess("read", true) || !ValidAccess("read", false) || ValidAccess("open", false) {
 		t.Fatal("ValidAccess")
 	}

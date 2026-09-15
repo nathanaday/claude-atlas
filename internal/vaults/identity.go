@@ -107,45 +107,42 @@ func cleanTags(tags []string) []string {
 	return out
 }
 
-// EditIdentity changes a vault's identity file, one field at a time. vault.UpdateConfig
-// validates each field against the vault's kind before it writes anything, so a field
-// that does not belong to e's kind (scope on a project, tags on a knowledge base) fails
-// without touching the file.
+// EditIdentity changes a vault's identity file: one operation, one commit, whatever the
+// edit touches. vault.UpdateConfig validates every field against the vault's kind before
+// it writes anything, so a field that does not belong to e's kind (scope on a project,
+// tags on a knowledge base) fails without touching the file.
 func EditIdentity(e registry.Entry, edit Edit, now time.Time) error {
+	var fields []string
 	if edit.Name != "" {
-		if err := vault.UpdateConfig(e.Path, "edit name", now, func(c *vault.Config) error {
-			c.Name = edit.Name
-			return nil
-		}); err != nil {
-			return err
-		}
+		fields = append(fields, "name")
 	}
 	if edit.Tags != nil {
-		tags := cleanTags(*edit.Tags)
-		if err := vault.UpdateConfig(e.Path, "edit tags", now, func(c *vault.Config) error {
-			c.Tags = tags
-			return nil
-		}); err != nil {
-			return err
-		}
+		fields = append(fields, "tags")
 	}
 	if edit.Scope != nil {
-		if err := vault.UpdateConfig(e.Path, "edit scope", now, func(c *vault.Config) error {
-			c.Scope = *edit.Scope
-			return nil
-		}); err != nil {
-			return err
-		}
+		fields = append(fields, "scope")
 	}
 	if edit.Access != nil {
-		if err := vault.UpdateConfig(e.Path, "edit access", now, func(c *vault.Config) error {
-			c.Access = *edit.Access
-			return nil
-		}); err != nil {
-			return err
-		}
+		fields = append(fields, "access")
 	}
-	return nil
+	if len(fields) == 0 {
+		return nil
+	}
+	return vault.UpdateConfig(e.Path, "edit "+strings.Join(fields, ", "), now, func(c *vault.Config) error {
+		if edit.Name != "" {
+			c.Name = edit.Name
+		}
+		if edit.Tags != nil {
+			c.Tags = cleanTags(*edit.Tags)
+		}
+		if edit.Scope != nil {
+			c.Scope = *edit.Scope
+		}
+		if edit.Access != nil {
+			c.Access = *edit.Access
+		}
+		return nil
+	})
 }
 
 // requireProject refuses a repository operation on a knowledge base.
@@ -175,20 +172,32 @@ func checkContainment(e registry.Entry, name, path string) error {
 	return nil
 }
 
+// alreadyHasRepo is what a caller reads when a project already names that repository.
+func alreadyHasRepo(e registry.Entry, name string) error {
+	return fmt.Errorf("%s already has a repository named %q", e.Name, name)
+}
+
 // checkRepoTarget validates a new repository before it is recorded: its name must be
-// unique on e, and a path that sits inside the vault must sit under repos/.
+// unique on e, and a path that sits inside the vault must sit under repos/. recordRepo
+// checks the name again against the identity file, which is the one that decides.
 func checkRepoTarget(e registry.Entry, name, path string) error {
 	if hasRepo(e, name) {
-		return fmt.Errorf("%s already has a repository named %q", e.Name, name)
+		return alreadyHasRepo(e, name)
 	}
 	return checkContainment(e, name, path)
 }
 
 // recordRepo appends name's repository to e's identity file, and, when path is not the
-// project's own repos/<name>, records the path in the config too.
+// project's own repos/<name>, records the path in the config too. It checks the name
+// against the file itself, since e may be older than the file.
 func recordRepo(h home.Home, cfg *home.Config, e registry.Entry, name, path, remote string, now time.Time) (vault.Repo, string, error) {
 	repo := vault.Repo{Name: name, Remote: remote}
 	if err := vault.UpdateConfig(e.Path, "add repository "+name, now, func(c *vault.Config) error {
+		for _, r := range c.Repos {
+			if strings.EqualFold(r.Name, name) {
+				return alreadyHasRepo(e, name)
+			}
+		}
 		c.Repos = append(c.Repos, repo)
 		return nil
 	}); err != nil {

@@ -255,6 +255,42 @@ func TestRepoCommands(t *testing.T) {
 	if code := h.run("repos"); code != 0 || !strings.Contains(h.out.String(), "welcome") || !strings.Contains(h.out.String(), "docs") {
 		t.Fatalf("every project's repositories: exit %d\n%s", code, h.out.String())
 	}
+
+	// --changes settles the policy on the spot; nothing is asked.
+	notes := filepath.Join(filepath.Dir(vaults), "notes")
+	os.MkdirAll(notes, 0o755)
+	os.WriteFile(filepath.Join(notes, "a.md"), []byte("x"), 0o644)
+	if code := h.run("link", "welcome", notes, "--init", "--changes", "commit"); code != 0 || strings.Contains(h.out.String(), "How should claude-atlas land") {
+		t.Fatalf("link --changes exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(repoLineFor(h.out.String(), "notes"), "changes: commit") {
+		t.Fatalf("link --changes records the policy:\n%s", h.out.String())
+	}
+
+	// edit-repo --remote records a remote, and "" clears it.
+	remote := "https://example.com/notes.git"
+	if code := h.run("edit-repo", "welcome", "notes", "--remote", remote); code != 0 {
+		t.Fatalf("edit-repo --remote exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(repoLineFor(h.out.String(), "notes"), "remote "+remote) {
+		t.Fatalf("the remote should show:\n%s", h.out.String())
+	}
+	if code := h.run("edit-repo", "welcome", "notes", "--remote", ""); code != 0 {
+		t.Fatalf("clear remote exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("repos", "welcome"); code != 0 || strings.Contains(h.out.String(), remote) {
+		t.Fatalf("the remote should be gone:\n%s", h.out.String())
+	}
+}
+
+// repoLineFor is the line `repos` printed for one repository.
+func repoLineFor(out, name string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), name+" ") {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestRefreshAndDoctorReportProblems(t *testing.T) {

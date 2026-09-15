@@ -730,6 +730,38 @@ func validChanges(s string) bool {
 	return false
 }
 
+// checkUnique refuses a config that names one thing twice. A caller may hold an older
+// picture of the vault than the file does, so the file decides.
+func checkUnique(cfg Config) error {
+	repos := map[string]bool{}
+	for _, r := range cfg.Repos {
+		key := strings.ToLower(r.Name)
+		if repos[key] {
+			return fmt.Errorf("two repositories named %q", r.Name)
+		}
+		repos[key] = true
+	}
+	mountIDs, mountNames := map[string]bool{}, map[string]bool{}
+	for _, m := range cfg.Mounts {
+		if mountIDs[m.ID] {
+			return fmt.Errorf("two mounts of %s", m.ID)
+		}
+		name := strings.ToLower(m.Name)
+		if mountNames[name] {
+			return fmt.Errorf("two mounts of %s", m.Name)
+		}
+		mountIDs[m.ID], mountNames[name] = true, true
+	}
+	grants := map[string]bool{}
+	for _, g := range cfg.Grants {
+		if grants[g.ID] {
+			return fmt.Errorf("two grants for %s", g.ID)
+		}
+		grants[g.ID] = true
+	}
+	return nil
+}
+
 // UpdateConfig rewrites the identity file through change and commits it as one setup
 // operation named by summary. An unchanged file makes no commit. It is the one way a
 // vault's own facts (name, tags, scope, access, grants, mounts, repos) change.
@@ -774,6 +806,9 @@ func UpdateConfig(root, summary string, now time.Time, change func(*Config) erro
 		if !validChanges(r.Changes) {
 			return fmt.Errorf("repo %s: changes must be pr or commit, not %q", r.Name, r.Changes)
 		}
+	}
+	if err := checkUnique(cfg); err != nil {
+		return err
 	}
 	switch cfg.Kind {
 	case Project:
