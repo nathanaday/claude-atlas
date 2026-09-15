@@ -193,6 +193,18 @@ func TestStubIntoCreatesInTheKnowledgeBase(t *testing.T) {
 	if ops, err := History(p, 1, false); err != nil || ops[0].Kind != "setup" {
 		t.Fatalf("the project gets no operation: %+v %v", ops, err)
 	}
+	if r, err := lint.Run(p.Root, lint.Options{AsOf: now}); err != nil || len(r.WantedPages) != 1 || r.WantedPages[0].Title != "Vanishing Gradient" {
+		t.Fatalf("the project cannot see the page until it mounts the knowledge base: %+v %v", r.WantedPages, err)
+	}
+	if err := os.MkdirAll(p.Path(vault.KbDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(kb.Path(vault.WikiDir), p.Path(vault.KbDir+"/cs566")); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := lint.Run(p.Root, lint.Options{AsOf: now}); err != nil || len(r.WantedPages) != 0 {
+		t.Fatalf("the project reads the stub through its mount: %+v %v", r.WantedPages, err)
+	}
 	if _, err := StubInto(p, kb, []StubTitle{{Title: "Nowhere"}}, "", "cs566", now); err == nil || !strings.Contains(err.Error(), "nothing in the wiki links to") {
 		t.Fatalf("a title nothing links to: %v", err)
 	}

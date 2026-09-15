@@ -794,8 +794,18 @@ func TestStubIntoAMount(t *testing.T) {
 	if _, err := os.Stat(p.Path(out.Stubs[0].Path)); err != nil {
 		t.Fatalf("the project reads the stub through its mount: %v", err)
 	}
-	// Task 7 teaches lint to resolve a link through a mount; until then the project's
-	// lint still wants Backprop.
+	var report struct {
+		Summary struct {
+			Wanted int `json:"wanted_pages"`
+		} `json:"summary"`
+		DeadLinks []any `json:"dead_links"`
+	}
+	if msg := c.call("lint", nil, &report); msg != "" {
+		t.Fatal(msg)
+	}
+	if report.Summary.Wanted != 0 || len(report.DeadLinks) != 0 {
+		t.Fatalf("the project's links resolve through the mount: %+v", report)
+	}
 }
 
 func TestStubNamesWhatCommittedWhenALaterOperationFails(t *testing.T) {

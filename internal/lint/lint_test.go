@@ -340,6 +340,158 @@ func TestKindErrors(t *testing.T) {
 	}
 }
 
+// A project reads a mounted knowledge base through kb/<name>, the way Obsidian follows
+// the symlink, so a link to one of its pages resolves.
+func TestLinksResolveThroughMounts(t *testing.T) {
+	asOf := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
+	aiml := fixture(t, map[string]string{
+		"wiki/index.md":                    mkpage("Index", "# Index\n\n- [[Backpropagation]]\n"),
+		"wiki/hot.md":                      mkpage("Hot", "# Hot\n"),
+		"wiki/concepts/Backpropagation.md": "---\ntitle: Backpropagation\ntype: concept\nstatus: developing\ncreated: 2026-01-01\nupdated: 2026-01-01\naliases:\n  - backprop\ntags:\n  - x\n---\n\n# Backpropagation\n\n## Causes\n\ntext\n",
+		"wiki/concepts/Shared.md":          mkpage("Shared", "# Shared\n\nthe knowledge base's page\n"),
+		"wiki/concepts/Twice.md":           mkpage("Twice", "# Twice\n\ntext\n"),
+	})
+	other := fixture(t, map[string]string{
+		"wiki/concepts/Twice.md": mkpage("Twice", "# Twice\n\ntext\n"),
+	})
+	root := fixture(t, map[string]string{
+		"wiki/index.md":           mkpage("Index", "# Index\n\n- [[Own]]\n- [[Shared]]\n"),
+		"wiki/concepts/Own.md":    mkpage("Own", "# Own\n\ntext\n"),
+		"wiki/concepts/Shared.md": mkpage("Shared", "# Shared\n\nthe project's page\n"),
+		"wiki/concepts/Notes.md": mkpage("Notes", "# Notes\n\n[[Backpropagation]] [[backprop]] [[Backpropogation]] [[Shared]] [[Twice]]\n"+
+			"[[Backpropagation#Causes]] [[Nowhere]] [[kb/ai-ml/concepts/Shared]]\n"),
+	})
+
+	check := func(what string, r *Report) {
+		t.Helper()
+		var dead []string
+		for _, f := range r.DeadLinks {
+			dead = append(dead, f.Source+"→"+f.Target+":"+f.Reason+":"+f.Suggestion)
+		}
+		if strings.Join(dead, "|") != "wiki/concepts/Notes.md→Backpropogation:target-not-found:Backpropagation" {
+			t.Fatalf("%s: dead links %v", what, dead)
+		}
+		if len(r.AmbiguousTargets) != 1 || r.AmbiguousTargets[0].Target != "Twice" ||
+			strings.Join(r.AmbiguousTargets[0].Candidates, ",") != "kb/ai-ml/concepts/Twice.md,kb/other/concepts/Twice.md" {
+			t.Fatalf("%s: ambiguous %+v", what, r.AmbiguousTargets)
+		}
+		var dups []string
+		for _, d := range r.DuplicateBasenames {
+			dups = append(dups, d.Basename+":"+strings.Join(d.Paths, ","))
+		}
+		wantDups := []string{
+			"Shared:kb/ai-ml/concepts/Shared.md,wiki/concepts/Shared.md",
+			"Twice:kb/ai-ml/concepts/Twice.md,kb/other/concepts/Twice.md",
+		}
+		if strings.Join(dups, "|") != strings.Join(wantDups, "|") {
+			t.Fatalf("%s: duplicates\n got %v\nwant %v", what, dups, wantDups)
+		}
+		var wanted []string
+		for _, w := range r.WantedPages {
+			wanted = append(wanted, w.Title)
+		}
+		if strings.Join(wanted, ",") != "Nowhere" {
+			t.Fatalf("%s: wanted %v", what, wanted)
+		}
+		if r.Summary.PagesScanned != 4 || r.Summary.LinksScanned != 10 {
+			t.Fatalf("%s: a mount's pages and links are not the project's: %+v", what, r.Summary)
+		}
+		if len(r.MountErrors) != 0 {
+			t.Fatalf("%s: mount errors %+v", what, r.MountErrors)
+		}
+		var named []string
+		for _, f := range r.Orphans {
+			named = append(named, f.Path)
+		}
+		for _, f := range r.UnindexedPages {
+			named = append(named, f.Path)
+		}
+		for _, f := range r.MissingFrontmatter {
+			named = append(named, f.Path)
+		}
+		for _, f := range r.EmptySections {
+			named = append(named, f.Path)
+		}
+		for _, f := range r.ReadErrors {
+			named = append(named, f.Path)
+		}
+		for _, f := range r.StaleIndexEntries {
+			named = append(named, f.Source)
+		}
+		for _, s := range r.Stubs {
+			named = append(named, s.Path)
+		}
+		for _, f := range r.DeadLinks {
+			named = append(named, f.Source, f.ResolvedPath)
+		}
+		for _, w := range r.WantedPages {
+			for _, l := range w.Links {
+				named = append(named, l.Source)
+			}
+		}
+		if joined := strings.Join(named, ","); strings.Contains(joined, vault.KbDir+"/") {
+			t.Fatalf("%s: a mount's page is a finding: %s", what, joined)
+		}
+	}
+
+	// Given mounts, before the project has a kb/ folder at all.
+	given := map[string]string{"ai-ml": filepath.Join(aiml, "wiki"), "other": filepath.Join(other, "wiki")}
+	r, err := Run(root, Options{AsOf: asOf, Mounts: given})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("given mounts", r)
+
+	if err := os.MkdirAll(filepath.Join(root, vault.KbDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ai-ml", "other"} {
+		if err := os.Symlink(given[name], filepath.Join(root, vault.KbDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err = Run(root, Options{AsOf: asOf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("symlinks", r)
+	issues := r.Summary.IssuesFound
+
+	// A map of no mounts leaves the symlinks unread.
+	r, err = Run(root, Options{AsOf: asOf, Mounts: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wanted []string
+	for _, w := range r.WantedPages {
+		wanted = append(wanted, w.Title)
+	}
+	if strings.Join(wanted, ",") != "backprop,Backpropagation,Backpropogation,Nowhere,Twice" {
+		t.Fatalf("no mounts, nothing resolves: %v", wanted)
+	}
+
+	if err := os.Symlink(filepath.Join(root, "gone"), filepath.Join(root, vault.KbDir, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	r, err = Run(root, Options{AsOf: asOf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.MountErrors) != 1 || r.MountErrors[0].Path != "kb/gone" || !strings.Contains(r.MountErrors[0].Message, "points at nothing") {
+		t.Fatalf("mount errors %+v", r.MountErrors)
+	}
+	if r.Summary.CategoryCounts["mount_errors"] != 1 || r.Summary.IssuesFound != issues+1 {
+		t.Fatalf("summary %+v", r.Summary)
+	}
+	if !strings.Contains(r.Markdown(), "## Mounts (1)") {
+		t.Fatalf("markdown:\n%s", r.Markdown())
+	}
+	// The mounts that do resolve still do: only the typo is dead.
+	if len(r.DeadLinks) != 1 || r.DeadLinks[0].Target != "Backpropogation" {
+		t.Fatalf("dead links beside the broken mount: %+v", r.DeadLinks)
+	}
+}
+
 func TestFolderIndexPagesCatalogAndAreNotOrphans(t *testing.T) {
 	root := fixture(t, map[string]string{
 		"wiki/index.md":             mkpage("Index", "# Index\n\n- [[Alpha]]\n"),
