@@ -24,8 +24,8 @@ var genericFolders = map[string]string{
 	"source":   "wiki/sources",
 	"entity":   "wiki/entities",
 	"concept":  "wiki/concepts",
-	"question": "wiki/questions",
-	"session":  "wiki/sessions",
+	"question": QuestionsDir,
+	"session":  SessionsDir,
 }
 
 // RoutableTypes lists the page types a vault of a kind files in a mode. A knowledge base
@@ -118,7 +118,11 @@ func folderFor(kind Kind, mode Mode, pageType string) (string, error) {
 		}
 		return "wiki/notes", nil
 	}
-	return genericFolders[pageType], nil
+	folder, ok := genericFolders[pageType]
+	if !ok {
+		return "", fmt.Errorf("type %q is not filed in a %s in %s mode; use one of %s", pageType, kind.Noun(), mode, strings.Join(types, ", "))
+	}
+	return folder, nil
 }
 
 // Skeleton is the starting text for a new page: frontmatter plus the headings that type

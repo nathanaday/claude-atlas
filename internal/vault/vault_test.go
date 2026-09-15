@@ -262,6 +262,9 @@ func TestAdoptAsKnowledgeRemovesTaskScaffolding(t *testing.T) {
 	if !res.FromV1 || res.Kind != Knowledge || strings.Join(res.Removed, ",") != "ideas,inbox,wiki/meta/ledgers/task-ledger.json,wiki/tasks" {
 		t.Fatalf("result %+v", res)
 	}
+	if res.Baseline != "" {
+		t.Fatalf("a committed, clean tree needs no baseline: %q", res.Baseline)
+	}
 	v, err := Open(root)
 	if err != nil || v.Config.Kind != Knowledge || v.Config.Mode != LYT || v.Config.Created != "2026-09-01" || v.Config.ID == "" {
 		t.Fatalf("open %+v %v", v, err)
@@ -293,6 +296,117 @@ func TestAdoptAsKnowledgeRemovesTaskScaffolding(t *testing.T) {
 	os.WriteFile(filepath.Join(withSources, "inbox", "paper.pdf"), []byte("%PDF"), 0o644)
 	if _, err := Adopt(withSources, Options{Kind: Knowledge}, now); err == nil || !strings.Contains(err.Error(), "inbox/ holds 1 file") {
 		t.Fatalf("an inbox with sources stops the removal: %v", err)
+	}
+}
+
+func TestAdoptAsKnowledgeCommitsABaselineBeforeRemoving(t *testing.T) {
+	needGit(t)
+	root := filepath.Join(t.TempDir(), "plain")
+	for rel, body := range map[string]string{
+		"wiki/index.md":       "---\ntitle: Index\n---\n\n# Index\n",
+		"wiki/tasks/Do it.md": "the task text\n",
+		"ideas/note.md":       "an idea\n",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := Adopt(root, Options{Kind: Knowledge}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Baseline == "" || res.Commit == "" || res.Baseline == res.Commit {
+		t.Fatalf("baseline %q commit %q", res.Baseline, res.Commit)
+	}
+	repo := gitx.Repo{Dir: root}
+	commits, err := repo.Log(2)
+	if err != nil || len(commits) != 2 {
+		t.Fatalf("log %+v %v", commits, err)
+	}
+	if commits[0].SHA != res.Commit || !strings.HasPrefix(commits[0].Subject, "setup: adopt knowledge plain") {
+		t.Fatalf("adoption commit %+v", commits[0])
+	}
+	if commits[1].SHA != res.Baseline || commits[1].Subject != "setup: baseline before adopting as knowledge base" {
+		t.Fatalf("baseline commit %+v", commits[1])
+	}
+	saved, err := repo.ShowFile(res.Baseline, "wiki/tasks/Do it.md")
+	if err != nil || string(saved) != "the task text\n" {
+		t.Fatalf("the baseline must hold the removed page: %q %v", saved, err)
+	}
+	for _, rel := range []string{"wiki/tasks", "ideas"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+			t.Errorf("%s still exists", rel)
+		}
+	}
+	if dirty, _ := repo.Dirty(); dirty {
+		t.Fatal("adopt must leave the tree clean")
+	}
+	project := filepath.Join(t.TempDir(), "ready")
+	if _, err := Init(project, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Adopt(project, Options{Kind: Project}, now)
+	if err != nil || again.Baseline != "" {
+		t.Fatalf("a clean vault with history gets no baseline: %+v %v", again, err)
+	}
+}
+
+func TestAdoptRepairsADamagedIdentityFile(t *testing.T) {
+	needGit(t)
+	broken := filepath.Join(t.TempDir(), "broken")
+	if _, err := Init(broken, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(broken, Marker), []byte("{not json"), 0o644)
+	res, err := Adopt(broken, Options{Kind: Project}, now)
+	if err != nil || !res.Repaired || res.Kind != Project {
+		t.Fatalf("unreadable json: %+v %v", res, err)
+	}
+	v, err := Open(broken)
+	if err != nil || v.Config.Kind != Project || v.Config.ID == "" {
+		t.Fatalf("open after the repair: %+v %v", v, err)
+	}
+	commits, _ := gitx.Repo{Dir: broken}.Log(1)
+	if len(commits) == 0 || !strings.Contains(commits[0].Subject, "repaired identity file") {
+		t.Fatalf("commit %+v", commits)
+	}
+
+	noID := filepath.Join(t.TempDir(), "kb")
+	if _, err := Init(noID, Options{Kind: Knowledge, Name: "Old KB"}, now); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(noID, Marker), []byte(`{"schema":"claude-atlas.vault.v2","kind":"knowledge","name":"Old KB","mode":"lyt","created":"2026-01-02"}`), 0o644)
+	res, err = Adopt(noID, Options{}, now)
+	if err != nil || !res.Repaired || res.Kind != Knowledge {
+		t.Fatalf("a file with no id: %+v %v", res, err)
+	}
+	v, err = Open(noID)
+	if err != nil || v.Config.ID == "" || v.Config.Name != "Old KB" || v.Config.Created != "2026-01-02" || v.Config.Mode != LYT {
+		t.Fatalf("repaired knowledge base %+v %v", v, err)
+	}
+
+	noKind := filepath.Join(t.TempDir(), "nokind")
+	if _, err := Init(noKind, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(noKind, Marker), []byte(`{"schema":"claude-atlas.vault.v2","id":"1","kind":"","name":"nokind","mode":"generic"}`), 0o644)
+	if _, err := Adopt(noKind, Options{}, now); err == nil || !strings.Contains(err.Error(), "pass --as") {
+		t.Fatalf("a repair without a kind must ask for one: %v", err)
+	}
+
+	future := filepath.Join(t.TempDir(), "future")
+	if _, err := Init(future, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	marker := []byte(`{"schema":"claude-atlas.vault.v3","id":"1","kind":"project","name":"future"}`)
+	os.WriteFile(filepath.Join(future, Marker), marker, 0o644)
+	if _, err := Adopt(future, Options{}, now); err == nil || !strings.Contains(err.Error(), "unsupported schema") {
+		t.Fatalf("an unknown schema is refused: %v", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(future, Marker)); string(after) != string(marker) {
+		t.Fatalf("the identity file must be untouched:\n%s", after)
 	}
 }
 

@@ -52,6 +52,10 @@ const (
 	InboxTasksDir  = "inbox/tasks"
 	IdeasDir       = "ideas"
 
+	// Questions and sessions are a project's pages.
+	QuestionsDir = "wiki/questions"
+	SessionsDir  = "wiki/sessions"
+
 	// A folder's index page takes the folder's name, so no page shares the basename of
 	// wiki/index.md. LegacyTasksIndex is where older versions wrote the task index.
 	CanvasIndex      = "wiki/canvases/canvases.md"
@@ -197,7 +201,11 @@ func ReadConfig(root string) (Config, bool) {
 }
 
 // IsVault reports whether root carries the identity file.
-func IsVault(root string) bool {
+func IsVault(root string) bool { return markerExists(root) }
+
+// markerExists reports whether the identity file is there, readable or not. Adopt tells a
+// damaged file from a directory that has none this way.
+func markerExists(root string) bool {
 	info, err := os.Stat(filepath.Join(root, Marker))
 	return err == nil && info.Mode().IsRegular()
 }
@@ -559,9 +567,14 @@ func moveLegacy(root string) ([]Move, error) {
 	return moved, nil
 }
 
-// projectOnly are the paths a knowledge base does not have. Adopting as a knowledge base
-// removes them; the user agreed that tasks and ideas start fresh.
-var projectOnly = []string{IdeasDir, InboxDir, TaskLedgerPath, TasksDir}
+// ProjectOnly are the paths a knowledge base does not have. No plan writes them there,
+// and lint reports them when they exist.
+var ProjectOnly = []string{InboxDir, IdeasDir, TasksDir, TaskLedgerPath, QuestionsDir, SessionsDir}
+
+// ProjectScaffolding is the part of ProjectOnly that adopting as a knowledge base
+// removes: the inbox, the ideas folder, the tasks, and the task ledger. Question and
+// session pages stay; they hold knowledge the user moves by hand.
+var ProjectScaffolding = []string{IdeasDir, InboxDir, TaskLedgerPath, TasksDir}
 
 // inboxSources counts the files in inbox/ other than task notes and dotfiles: sources
 // nobody has ingested, which adopt must not delete.
@@ -572,7 +585,7 @@ func inboxSources(root string) int {
 			return nil
 		}
 		if d.IsDir() {
-			if p == filepath.Join(root, filepath.FromSlash(InboxTasksDir)) || strings.HasPrefix(d.Name(), ".") && p != filepath.Join(root, InboxDir) {
+			if p == filepath.Join(root, filepath.FromSlash(InboxTasksDir)) || strings.HasPrefix(d.Name(), ".") {
 				return fs.SkipDir
 			}
 			return nil
@@ -585,13 +598,35 @@ func inboxSources(root string) int {
 	return n
 }
 
-// removeProjectFiles deletes the project-only paths that exist and reports them.
-func removeProjectFiles(root string) ([]string, error) {
+// checkInbox refuses the adoption while inbox/ holds sources nobody has ingested.
+func checkInbox(root string) error {
 	if n := inboxSources(root); n > 0 {
-		return nil, fmt.Errorf("inbox/ holds %d file%s; ingest them through a project or move them out before adopting as a knowledge base", n, map[bool]string{true: "", false: "s"}[n == 1])
+		return fmt.Errorf("inbox/ holds %d file%s; ingest them through a project or move them out before adopting as a knowledge base", n, map[bool]string{true: "", false: "s"}[n == 1])
 	}
+	return nil
+}
+
+// baseline commits the tree as it is, so git holds every file adopt is about to remove.
+// It returns "" when there is nothing to commit. Untracked files count as a change, so a
+// repository without a commit takes this path too.
+func baseline(repo gitx.Repo, now time.Time) (string, error) {
+	dirty, err := repo.Dirty()
+	if err != nil {
+		return "", err
+	}
+	if !dirty {
+		return "", nil
+	}
+	if err := repo.AddAll(); err != nil {
+		return "", err
+	}
+	return repo.Commit(CommitMessage("setup", "baseline before adopting as knowledge base", NewOperationID("setup", now)))
+}
+
+// removeProjectFiles deletes the project scaffolding that exists and reports it.
+func removeProjectFiles(root string) ([]string, error) {
 	var removed []string
-	for _, rel := range projectOnly {
+	for _, rel := range ProjectScaffolding {
 		p := filepath.Join(root, filepath.FromSlash(rel))
 		if _, err := os.Lstat(p); err != nil {
 			continue
@@ -822,26 +857,65 @@ type AdoptResult struct {
 	AlreadyAdopted bool
 	// FromV1 is set when a v1 identity file was rewritten.
 	FromV1 bool
+	// Repaired is set when a damaged identity file was rebuilt.
+	Repaired bool
+	// Baseline is the commit that recorded the tree before adopt removed anything.
+	Baseline string
 }
 
-// adoptConfig decides the identity file adopt writes: a current one is kept, a v1 one is
-// rewritten with its mode and creation date, and a vault without one gets a new one.
-// Without a kind, adopt keeps the vault's kind or makes it a project.
-func adoptConfig(root string, existing Config, hasMarker bool, opts Options, now time.Time) (Config, error) {
-	if hasMarker && existing.Schema == Schema {
+// markerState reads the identity file's condition into res: a current file means the vault
+// is adopted, a v1 file is rewritten, and a file that does not parse, names no id, or names
+// no valid kind is repaired. Any other schema is refused.
+func markerState(root string, existing Config, parsed bool, res *AdoptResult) error {
+	if !markerExists(root) {
+		return nil
+	}
+	if !parsed {
+		res.Repaired = true
+		return nil
+	}
+	switch existing.Schema {
+	case Schema:
+		_, err := ParseKind(string(existing.Kind))
+		res.Repaired = existing.ID == "" || err != nil
+		res.AlreadyAdopted = !res.Repaired
+	case SchemaV1:
+		res.FromV1 = true
+	default:
+		return fmt.Errorf("%s: unsupported schema %q", filepath.Join(root, Marker), existing.Schema)
+	}
+	return nil
+}
+
+// adoptConfig decides the identity file adopt writes: a current one is kept, a v1 or a
+// damaged one is rebuilt with its mode and creation date, and a vault without one gets a
+// new one. Without a kind, adopt keeps the vault's kind or makes it a project; a repair
+// asks for the kind rather than choosing one.
+func adoptConfig(root string, existing Config, res *AdoptResult, opts Options, now time.Time) (Config, error) {
+	if res.AlreadyAdopted {
 		if opts.Kind != "" && opts.Kind != existing.Kind {
 			return Config{}, fmt.Errorf("%s is already a %s; a vault's kind does not change", root, existing.Kind)
 		}
 		return existing, nil
 	}
 	if opts.Kind == "" {
-		opts.Kind = Project
+		switch k, err := ParseKind(string(existing.Kind)); {
+		case err == nil:
+			opts.Kind = k
+		case res.Repaired:
+			return Config{}, errors.New("the identity file names no kind; pass --as knowledge or --as project")
+		default:
+			opts.Kind = Project
+		}
 	}
 	if opts.Mode == "" {
 		opts.Mode = existing.Mode
 	}
 	if opts.Mode == "" && IsLegacy(root) {
 		opts.Mode = legacyMode(root)
+	}
+	if opts.Name == "" {
+		opts.Name = existing.Name
 	}
 	cfg, err := newConfig(root, opts, now)
 	if err != nil {
@@ -854,10 +928,11 @@ func adoptConfig(root string, existing Config, hasMarker bool, opts Options, now
 }
 
 // Adopt turns an existing directory, an Obsidian vault, a claude-obsidian vault, or a v1
-// vault into a claude-atlas vault of a kind. It adds only what is missing and commits a
-// baseline that includes every file already there. It rewrites a v1 identity file, moves
+// vault into a claude-atlas vault of a kind. It adds only what is missing and commits
+// every file already there. It rewrites a v1 identity file, repairs a damaged one, moves
 // files an older version put at other paths, and, when adopting as a knowledge base,
-// removes the project-only paths; otherwise it never replaces or removes a file.
+// commits a baseline and then removes the project scaffolding; otherwise it never
+// replaces or removes a file.
 func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	if err := requireGit(); err != nil {
 		return nil, err
@@ -876,9 +951,12 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	if !IsAdoptable(abs) {
 		return nil, fmt.Errorf("%s is not a vault: it has no .obsidian/, wiki/, or vault identity file; create one with `claude-atlas new-vault`", abs)
 	}
-	existing, hasMarker := ReadConfig(abs)
-	res := &AdoptResult{Root: abs, WasLegacy: IsLegacy(abs), AlreadyAdopted: hasMarker && existing.Schema == Schema, FromV1: hasMarker && existing.Schema != Schema}
-	cfg, err := adoptConfig(abs, existing, hasMarker, opts, now)
+	existing, parsed := ReadConfig(abs)
+	res := &AdoptResult{Root: abs, WasLegacy: IsLegacy(abs)}
+	if err := markerState(abs, existing, parsed, res); err != nil {
+		return nil, err
+	}
+	cfg, err := adoptConfig(abs, existing, res, opts, now)
 	if err != nil {
 		return nil, err
 	}
@@ -887,17 +965,30 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	if repo.InsideOtherRepo() {
 		return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
 	}
+	if !repo.IsRepo() {
+		if err := repo.Init(); err != nil {
+			return nil, err
+		}
+		res.GitInitialized = true
+	}
+	// Removing the project scaffolding is one step, but git holds it first.
 	if cfg.Kind == Knowledge && !res.AlreadyAdopted {
+		if err := checkInbox(abs); err != nil {
+			return nil, err
+		}
+		if res.Baseline, err = baseline(repo, now); err != nil {
+			return nil, err
+		}
 		if res.Removed, err = removeProjectFiles(abs); err != nil {
 			return nil, err
 		}
 	}
-	if res.AlreadyAdopted {
+	if res.AlreadyAdopted && cfg.Kind == Project {
 		if res.Moved, err = moveLegacy(abs); err != nil {
 			return nil, err
 		}
 	}
-	if res.FromV1 {
+	if res.FromV1 || res.Repaired {
 		if err := writeFile(abs, Marker, cfg.Encode()); err != nil {
 			return nil, err
 		}
@@ -909,12 +1000,6 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	}
 	res.Added = append(res.Added, added...)
 	sort.Strings(res.Added)
-	if !repo.IsRepo() {
-		if err := repo.Init(); err != nil {
-			return nil, err
-		}
-		res.GitInitialized = true
-	}
 	dirty, err := repo.Dirty()
 	if err != nil {
 		return nil, err
@@ -932,6 +1017,9 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 		what = fmt.Sprintf("adopt claude-obsidian vault as %s %s", cfg.Kind, cfg.Name)
 	case res.FromV1:
 		what = fmt.Sprintf("adopt v1 vault as %s %s", cfg.Kind, cfg.Name)
+	}
+	if res.Repaired {
+		what += "; repaired identity file"
 	}
 	if len(res.Removed) > 0 {
 		what += "; removed " + strings.Join(res.Removed, ", ")
