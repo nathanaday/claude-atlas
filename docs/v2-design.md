@@ -1,10 +1,11 @@
 # Atlas v2: knowledge bases and projects
 
-Status: designed 2026-09-14, not implemented. This is a new version of the
-project. Existing vaults migrate by hand; nothing here keeps compatibility with
-the v1 identity file, the v1 layout, or the atlas vault. `core-design.md`
-still describes the engine. `atlas-design.md` and the atlas sections of
-`tasks-design.md` are superseded by this document.
+Status: designed 2026-09-14. Phases 1 and 2 are built (kinds; the registry).
+Phases 3–7 are not. This is a new version of the project. Existing vaults
+migrate by hand; nothing here keeps compatibility with the v1 identity file,
+the v1 layout, or the atlas vault. `core-design.md` still describes the
+engine. `atlas-design.md` and the atlas sections of `tasks-design.md` are
+superseded by this document.
 
 ## What changes and why
 
@@ -355,36 +356,49 @@ atlas installed is ready to work.
 - `vaults` lists vaults outside `vaults_dir`. `repos` maps a project id and a
   repository name to a path, for repositories outside the project folder.
   These are the only stored paths.
-- The server, the hooks, and the CLI find vaults by scanning: `vaults_dir`
-  three levels deep, plus the listed paths, for identity files. The scan
-  reads only the identity files. Nothing depends on the registry below.
-- `state/registry.json` is derived for `view`, `list`, `show`, and `doctor`.
-  `refresh` deletes and rewrites it from the scan: every vault with id, kind,
-  name, path, mode, page counts, heat, and last operation; for a project, its
-  mounts and repositories resolved to paths with effective access, and its
-  open tasks; for a knowledge base, the projects that mount it. A mount whose
-  id the scan does not find is a finding.
+- The server, the hooks, and the CLI find vaults by scanning (`registry.Scan`):
+  `vaults_dir` at most five levels deep, plus the listed paths, for identity
+  files. The scan skips folders whose name starts with a dot and folders named
+  `node_modules`, and does not descend into a vault it has found. It reads only
+  the identity files. Nothing depends on the registry below.
+- `state/registry.json` is derived for `view`, `list`, and `show`. `refresh`
+  deletes the state directory and rewrites the file from the scan: every vault
+  with id, kind, name, path, mode, page counts, heat, unfinished work, and last
+  operation; for a project, its mounts and repositories resolved to paths with
+  effective access, and its open tasks; for a knowledge base, the projects that
+  mount it. A mount whose id the scan does not find is a finding. Every command
+  that acts on a vault scans afresh, so a stale file never decides what it acts
+  on; `doctor` scans and does not read the file at all.
+- A vault the scan finds but cannot read (a v1 identity file, one that is not
+  JSON) becomes an entry with a path and a reason. `view` files it under
+  `problems`, `list` and `doctor` name it.
 
-Default locations: `<vaults dir>/knowledge/<name>` and
+Default locations (`vaults.PathFor`): `<vaults dir>/knowledge/<name>` and
 `<vaults dir>/projects/<name>`. The user may give a path. A vault never goes
 inside another vault; `repos/<name>/` inside a project is the one exception,
 and the project's git ignores it.
 
-`view` shows two lists. Projects, grouped by tag: name, mounts with access,
-repositories, open tasks, heat. Knowledge bases: name, access, page count,
-the projects that mount it. Every key is one command:
+`view` is one tree. A project sits at `projects/<first tag>/<name>`, or
+`projects/<name>` with no tag; a knowledge base at `knowledge/<name>`; a vault
+the scan could not read under `problems`. Each is a box with its heat, name,
+page count, unfinished count, and days idle. Enter opens the detail: id, path,
+mode, and either a project's tags or a knowledge base's scope, access, grants,
+and the projects that mount it; then the mounts with effective access, the
+repositories with what git says, the state the last refresh derived, the open
+tasks, and the signals. Every key is one command:
 
 | Key | Command |
 |---|---|
 | `n` new project, `N` new knowledge base | `new-project NAME`, `new-knowledge NAME` |
 | `a` adopt | `adopt PATH --as project\|knowledge` |
-| `m` mount, `u` unmount | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB` |
-| `g` grant, `G` revoke | `grant KB PROJECT --write\|--read`, `revoke KB PROJECT` |
-| `e` edit | `edit NAME --name --tags --scope --access` |
+| Enter on a vault | `show NAME` |
+| `e` edit, then `r` forget | `edit NAME --name --tags --scope --access`, `remove NAME` |
 | `l` repositories | `new-repo`, `link`, `unlink`, `edit-repo`, `repos` |
-| `t` tasks, `p` plant, `c` continue | `tasks`, `plant`, `open-claude --task` |
+| `t` tasks, `p` plant, `c` continue; `T` every project's tasks | `tasks`, `plant`, `open-claude --task` |
 | `o` Obsidian, `c` Claude Code, `i` ingest | `open-vault`, `open-claude`, `ingest` |
 | `R` refresh | `refresh` |
+| `m` mount, `u` unmount (phase 3) | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB` |
+| `g` grant, `G` revoke (phase 3) | `grant KB PROJECT --write\|--read`, `revoke KB PROJECT` |
 
 Removed: `relate`, `unrelate`, `edit-link`, the `related` field, the category
 move, `Overview.md`, `Tree.md`, `categories/`, `repos/` pages, `About.md`,
@@ -467,8 +481,9 @@ mount.
    this document. Then `mount`, `unmount`, `grant`, `revoke`; effective access
    in `plan`, `apply`, and the guard; `route` and lint across mounts; `via` in
    the ledger; the session hook; the `mounts` tool.
-4. `view` over the registry: the two lists and the keys above; CLI parity;
-   `doctor` checks mounts and grants.
+4. The mount and grant keys in `view`; CLI parity; `doctor` checks mounts and
+   grants. The rest of `view` moved into phase 2: the screens had to run over
+   the registry as soon as the project pages went.
 5. Projects inside repositories: git with a pathspec; `new-project --in`.
 6. Skills, agents, README, CLAUDE.md, `usage.md`. The plugin and the binary go
    to 1.0.0.

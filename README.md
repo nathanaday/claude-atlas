@@ -13,7 +13,7 @@ What Claude learns in one session is gone by the next, and reading piles up
 faster than notes get written. claude-atlas gives Claude Code an Obsidian vault
 it can fill and consult: drop a source into the inbox, get linked pages that
 cite it, ask the vault later. Every change is a plan you see first and one git
-commit you can undo. The atlas is the page that shows all your vaults at once.
+commit you can undo. `claude-atlas` on its own shows every vault on one screen.
 
 - **Ingest from an inbox.** Files in, cited pages out; sources kept immutable.
 - **Ask the vault.** Answers name their evidence, or say what is missing.
@@ -25,9 +25,8 @@ commit you can undo. The atlas is the page that shows all your vaults at once.
   repository on a project, or create one, for the code, papers, and decks;
   a session started inside it reaches the vault and its tasks with no file
   added to the repo.
-- **One view across vaults.** Heat, open threads, unfinished work, and your
-  declared priority, side by side. Projects, the repos and folders they
-  share, and the tree itself draw as one graph in Obsidian.
+- **One view across vaults.** Every vault on one screen: heat, open threads,
+  unfinished work, open tasks, and each project's repositories, side by side.
 - **Native Obsidian.** Plain Markdown, wikilinks, Canvas boards, Bases views.
 
 
@@ -61,16 +60,16 @@ claude-atlas setup
 ```
 
 Setup shows its plan and asks before it does anything. It installs the
-claude-atlas plugin into Claude Code, creates the atlas vault, and creates your
-first knowledge vault. Run it again at any time; finished steps are skipped.
+claude-atlas plugin into Claude Code and creates your first project. Run it
+again at any time; finished steps are skipped.
 
 ## Usage
 
-Create a vault, put a source in its inbox, and start Claude Code inside it:
+Create a project, put a source in its inbox, and start Claude Code inside it:
 
 ```bash
-claude-atlas new-vault sensor-triage --category work
-cp ~/Downloads/dinov2.pdf ~/Documents/Vaults/work/sensor-triage/inbox/
+claude-atlas new-project sensor-triage
+cp ~/Downloads/dinov2.pdf ~/Documents/Vaults/projects/sensor-triage/inbox/
 claude-atlas open-claude sensor-triage
 ```
 
@@ -78,18 +77,19 @@ In the session, `/claude-atlas:wiki-ingest` reads the inbox and writes cited
 pages; `/claude-atlas:wiki-query` answers from the vault. Claude shows a
 preview before every change, and `claude-atlas undo` takes one back.
 
-See every vault at once. The tree does everything the commands do: `o` opens
+See every vault at once. The view does everything the commands do: `o` opens
 a vault in Obsidian, `c` starts Claude Code in it, `i` ingests sources, `t`
-shows its tasks and plants new ones, `l` shows and edits its linked repos and
-folders, `e` edits its project page, `T` boards every project's tasks, `n`
-creates a vault, `a` adopts one, `R` refreshes:
+shows a project's tasks and plants new ones, `l` shows and edits its
+repositories, `e` edits the vault's name, tags, or scope, `T` boards every
+project's tasks, `n` and `N` create a project or a knowledge base, `a` adopts
+a folder, `R` refreshes:
 
 ```bash
 claude-atlas
 ```
 
-Every command, the slash menu, linking repos, adopting an existing vault, and
-configuration: [docs/usage.md](docs/usage.md).
+Every command, the slash menu, mounting repositories, adopting an existing
+vault, and configuration: [docs/usage.md](docs/usage.md).
 
 ## The wiki and the repository
 
@@ -97,31 +97,35 @@ Two places hold a project, and they are different in kind.
 
 The **vault** is memory and thinking: the wiki pages Claude writes and cites,
 the hot cache a session starts from, the tasks and their history. It is
-structured, reviewed, and committed one operation at a time, and its shape is
-the wiki's.
+structured, reviewed, and committed one operation at a time, and it follows
+the wiki's layout.
 
 A **repository** is where the deliverables go: the code, the paper, the
 slides, the homework, the report. It is a plain git repository with its own
 history and whatever structure the work needs, and it owes nothing to the
-wiki's layout. Linking it to a project mounts it: a session started inside it
-reaches the vault and its tasks, the atlas reports its branch and last commit,
-and a task's work happens there. A course project keeps its papers and decks
-in one; a codebase is one, with the wiki as the knowledge behind it.
+wiki's layout. Mounting it on a project connects the two: a session started
+inside it reaches the vault and its tasks, the atlas reports its branch and
+last commit, and a task's work happens there. A course project keeps its
+papers and decks in one; a codebase is one, with the wiki as the knowledge
+behind it.
 
-Every link is a git repository. Create one beside the wiki in the vault's
-folder, ignored by the vault's own git, or anywhere on the machine; clone one
-from GitHub; or mount one that exists. A repository with a remote carries a
-choice of how a session lands its changes, pull requests or commits, and the
-session is told at its start. Folders of sources you ingest from need no
-link; the vault remembers where it staged from.
+Every mount is a git repository. Create one in the project's `repos/` folder,
+ignored by the vault's own git, or anywhere on the machine; clone one from
+GitHub; or mount one that exists. A repository with a remote carries a choice
+of how a session lands its changes, pull requests or commits, and the session
+is told at its start. Folders of sources you ingest from are not mounted; the
+vault remembers where it staged from.
 
 ## Inside a vault
+
+A project:
 
 ```
 sensor-triage/
 ├── inbox/                    sources waiting to be ingested
 │   └── tasks/                task notes waiting to be planted
 ├── ideas/                    your scratch notes, outside the wiki
+├── repos/                    mounted repositories, each with its own git
 ├── .raw/captured/            immutable copies of ingested sources
 ├── .git/                     one commit per operation
 └── wiki/
@@ -134,31 +138,33 @@ sensor-triage/
     └── meta/ledgers/         source-ledger.json, task-ledger.json
 ```
 
+A knowledge base holds what several projects read, the sources, entities, and
+concepts of one domain. It is the same vault without `inbox/`, `ideas/`,
+`repos/`, `wiki/questions/`, `wiki/sessions/`, and `wiki/tasks/`.
+
 Two filing modes: `generic` files pages by type into the folders above; `lyt`
 keeps atomic notes in `wiki/notes/` and navigates them through Maps of Content.
 Change it with `claude-atlas mode sensor-triage lyt`.
 
 ## The atlas
 
+Every vault carries its own identity file, `.claude-atlas.json`: its id, its
+kind (`project` or `knowledge`), its name, its filing mode, and its tags. The
+atlas keeps no list of your vaults. It scans the vaults directory for identity
+files, adds the paths you keep elsewhere, and derives the rest:
+
 ```
-~/Documents/Atlas/            an Obsidian vault; open it like any other
-├── Overview.md               every project, its heat, threads, and signals
-├── Tree.md                   the root of the graph
-├── About.md                  orientation
-├── Reference.md              every command with examples
-├── tree/                     yours: folders are categories, files are projects
-├── repos/                    one page per mounted repository
-└── categories/               generated: one page per folder under tree/
+~/.claude-atlas/
+├── config.json               the vaults directory, the vaults outside it,
+│                             repository paths, the plugin, Claude Code, heat
+└── state/registry.json       derived: every vault with its heat, page count,
+                              unfinished work, open tasks, and repositories
 ```
 
-Each project page under `tree/` holds your intent: purpose, priority, state,
-what it is blocked on, the repos and folders it works with, and the projects
-it belongs with. Everything else is derived from the vault on every refresh,
-so the overview never goes stale. The most useful line on it is where the two
-disagree: a project marked `high` whose vault has been cold for weeks.
-
-Every page is a node, so the graph view shows the whole ecosystem: categories
-to projects, projects to the repos and folders they share.
+`claude-atlas refresh` rewrites the registry in full, so nothing in it goes
+stale, and `claude-atlas view` shows it: projects grouped by their first tag,
+knowledge bases beside them, and any folder the scan could not read under
+`problems`.
 
 ## Conventions
 
@@ -170,12 +176,13 @@ Full reasoning in [docs/core-design.md](docs/core-design.md).
   undo never touches them.
 - The core owns what it can derive: the log, the source ledger, the history,
   the health check. Claude writes pages.
-- The atlas never writes into a vault, and no vault knows the atlas exists.
+- Ids travel, paths stay. A vault holds its own facts and no path; the atlas
+  holds the few paths it cannot compute, and derives everything else.
 
 ## Documentation
 
 - Usage — [docs/usage.md](docs/usage.md)
-- Design and decisions — [docs/core-design.md](docs/core-design.md), [docs/atlas-design.md](docs/atlas-design.md), [docs/tasks-design.md](docs/tasks-design.md)
+- Design and decisions — [docs/core-design.md](docs/core-design.md), [docs/v2-design.md](docs/v2-design.md), [docs/tasks-design.md](docs/tasks-design.md)
 - Skills — [skills/](skills/), one `SKILL.md` per skill
 - Plugin manifest — [.claude-plugin/plugin.json](.claude-plugin/plugin.json)
 

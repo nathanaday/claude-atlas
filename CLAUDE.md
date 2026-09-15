@@ -2,8 +2,8 @@
 
 A Go binary and a Claude Code plugin. The binary creates and maintains
 Obsidian knowledge vaults and serves the MCP tools Claude uses inside them; the
-plugin carries the skills and hooks. The atlas side reports on every vault from
-one Obsidian page.
+plugin carries the skills and hooks. The atlas side lists every vault from a
+scan of the vaults directory and shows them in a terminal view.
 
 Read `README.md` first. This file holds what the code and README do not say.
 
@@ -11,9 +11,9 @@ Read `README.md` first. This file holds what the code and README do not say.
 
 | Thing | Location |
 |---|---|
-| v2: knowledge bases, projects, mounts, access (phase 1 built: kinds) | `docs/v2-design.md` |
+| v2: knowledge bases, projects, mounts, access (phases 1–2 built: kinds, the registry) | `docs/v2-design.md` |
 | Core design and the reasons behind it | `docs/core-design.md` |
-| The atlas side: tree, link pages, graph (superseded by v2) | `docs/atlas-design.md` |
+| The atlas side before v2 (superseded by `v2-design.md`) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
 | Original brainstorm (not a contract) | `docs/spec.md` |
 | The skills' contracts | `skills/<name>/SKILL.md` and `skills/wiki/references/` |
@@ -42,20 +42,13 @@ safety net, and adds the cross-vault view.
 
 ## Three rules for the atlas
 
-1. The atlas never writes into a vault.
-2. A vault never learns the atlas exists. A project page records a vault path;
-   the vault records nothing.
-3. The atlas never stores a fact it can compute. `~/.claude-atlas/state/` is
-   rebuilt in full by `refresh`, and so are `Overview.md`, `Tree.md`, and
-   `categories/`. `tree/` and `repos/` are the user's; refresh touches a
-   project page for one reason only, to turn a plain folder path in `repos`
-   into a link to its page, and moves a git-backed page from the retired
-   `materials/` under `repos/`.
-4. A link is a mounted repository, always a git repository: deliverables live
-   there, memory lives in the vault. Ingest sources are not links. A
-   repository's page carries its remote and its change policy (`changes: pr`
-   or `commit`); the vault records nothing about mounts, and sessions learn
-   the policy from the hook and the `repos` tool.
+1. A knowledge base never learns who mounts it. The atlas computes that list
+   from the projects' identity files.
+2. A project never links another project. Projects share knowledge bases.
+3. Ids travel; paths stay. The identity file holds no path; the atlas config
+   holds the paths the atlas cannot compute, and nothing else.
+   `~/.claude-atlas/state/registry.json` is derived, and `refresh` rebuilds it
+   in full.
 
 ## Two layers, one backend
 
@@ -83,32 +76,31 @@ internal/vault/         identity file, layout, templates, Init, Adopt, mode rout
 internal/gitx/          the git commands the core needs
 internal/txn/           plans, preview, apply, recovery, undo, history, planting a task
 internal/tasks/         task pages, the derived task ledger and index; never decides to write
-internal/discover/      the vault a folder belongs to, through the atlas's link pages
+internal/discover/      the project a folder belongs to, through the projects' repositories
 internal/capture/       inbox listing and capture into .raw/captured/
 internal/ledger/        the source ledger
 internal/lint/          the health check (ported from claude-obsidian's engine)
 internal/mcpserver/     the tools, thin over the packages above
-internal/hooks/         session-start (vault or linked repo, open tasks, hot cache), guard, stop
+internal/hooks/         session-start (a vault or a project's repository, open tasks, hot cache), guard, stop
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
-internal/tree/          project pages (frontmatter) and derived state files
-internal/refresh/       derive state, generate categories/ and Tree.md, render Overview.md
-internal/pages/         About.md and Reference.md from templates
-internal/vaults/        create, register, edit project pages, mount and create repositories, relate projects
-internal/links/         repository pages under repos/ (materials/ is legacy), git init and create, the facts about them
-internal/tui/           Bubble Tea screens: the tree (view), the project editor, the links screen, ingest, the add and adopt screens
+internal/registry/      the scan for identity files, the resolved entries, the registry state file
+internal/refresh/       derive one vault's state, rewrite the registry, list a vault's signals
+internal/vaults/        create, adopt, register, edit identity files, mount and create repositories
+internal/links/         git init, create and clone, change policies, the facts git reports
+internal/tui/           Bubble Tea screens: the view, the vault editor, the repositories screen, tasks, ingest, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
 internal/home/          ~/.claude-atlas and config.json
 internal/console/       prompts and step lines
 ```
 
-`~/.claude-atlas/` holds config and derived state. Anything the user views
-lives under `~/Documents`: the atlas vault (default `~/Documents/Atlas`) and
-the vaults directory (default `~/Documents/Vaults`). A new vault goes to
-`<vaults dir>/<category>/<name>` unless the user gives a path
-(`vaults.DefaultPath`). When a page changes category, a vault in its
-category's folder is offered the move (`vaults.CategoryPath`); nothing else
-reads a vault's location from its category. A vault never goes inside another
-vault (`vaults.CheckNewPath`, `vaults.CheckMove`).
+`~/.claude-atlas/` holds `config.json` and `state/registry.json`. The vaults
+are the user's and live under the vaults directory (default
+`~/Documents/Vaults`). A new vault goes to `<vaults dir>/knowledge/<name>` or
+`<vaults dir>/projects/<name>` unless the user gives a path (`vaults.PathFor`,
+`vaults.ResolvePath`). A vault outside the vaults directory is listed in the
+config, because the scan cannot find it there (`vaults.Register`); a vault
+inside it needs no entry and cannot be forgotten (`vaults.Unregister`). A vault
+never goes inside another vault (`vaults.CheckNewPath`).
 
 ## Constraints
 
@@ -121,16 +113,27 @@ vault (`vaults.CheckNewPath`, `vaults.CheckMove`).
   `$CLAUDE_ATLAS_BIN`. `plugin.json` and `marketplace.json` carry the version
   the binary should match; `status` and `doctor` warn on a mismatch.
 - Every write path goes through `txn.Prepare` and `txn.Apply`. `vault.Init`,
-  `vault.Adopt`, and `vault.Upgrade` are the only code that writes vault files
-  directly, and only before or outside an operation. The template includes the
-  vault's CSS snippet and an appearance file that enables it; upgrade merges
-  the snippet into an existing appearance file.
+  `vault.Adopt`, `vault.Upgrade`, and `vault.UpdateConfig` are the only code
+  that writes vault files directly, and only before or outside an operation.
+  The template includes the vault's CSS snippet and an appearance file that
+  enables it; upgrade merges the snippet into an existing appearance file.
 - A vault has a kind, `knowledge` or `project` (`vault.Kind`, in the v2
   identity file with an `id` and a `name`). A knowledge base has no inbox,
   ideas, tasks, questions, or sessions; `txn`, the tools, lint, and the hook
-  refuse or skip them there. `new-vault --kind` and `adopt --as` choose the
-  kind; it does not change afterwards. Templates live under
+  refuse or skip them there. `new-project`, `new-knowledge`, and `adopt --as`
+  choose the kind; it does not change afterwards. Templates live under
   `internal/vault/templates/{common,knowledge,project}/`.
+- A vault's own facts change only through `vault.UpdateConfig`, which
+  validates the whole identity file against the kind, refuses a new kind or a
+  new id, and commits the file as a `setup` operation. `vaults.EditIdentity`
+  and the repository functions are its only callers.
+- A repository is where a project's deliverables go, always a git repository;
+  memory stays in the vault, and ingest sources are not repositories. The
+  project's identity file records the name, the remote, and the change policy
+  (`changes: pr` or `commit`); a repository outside `<project>/repos/<name>`
+  has its path in the atlas config, and a path inside the vault but outside
+  `repos/` is refused. Sessions learn the policy from the hook and the `repos`
+  tool.
 - A kind bounds a plan's writes (`txn.allowed`). Reserved everywhere:
   `wiki/log.md`, both ledgers, `wiki/tasks/tasks.md` and its old path
   `wiki/tasks/index.md`, `.git`, `.vault-meta`, `.obsidian`, `.raw` except
@@ -143,17 +146,21 @@ vault (`vaults.CheckNewPath`, `vaults.CheckMove`).
   basename of `wiki/index.md`. When a template path changes, `vault.Upgrade`
   and `vault.Adopt` move the old file (`vault.legacyPaths`).
 - The server and the hooks resolve the vault in this order: an explicit
-  `vault`, `CLAUDE_ATLAS_VAULT`, the nearest identity file, then the atlas: a
-  folder that exactly one project links belongs to that project's vault.
+  `vault`, `CLAUDE_ATLAS_VAULT`, the nearest identity file, then the registry:
+  a folder inside exactly one project's repository belongs to that project
+  (`discover.Vault`).
+- The scan is the truth. `registry.Scan` walks the vaults directory at most
+  five levels deep for identity files, skips dot-directories and
+  `node_modules`, never descends into a vault it has found, and adds the paths
+  in `config.vaults`. A vault it finds but cannot read (a v1 identity file,
+  one that is not JSON) becomes an entry with a `Path` and an `Error`, which
+  the view files under `problems`. Every command that acts on a vault scans
+  afresh; `registry.json` is for display only.
 - Lint and refresh are read-only toward every vault, offline, and idempotent.
 - TUI models keep all logic in `Update`; tests drive them with `tea.KeyMsg`.
 - Tests never touch a real `~/.claude-atlas`, never install a plugin, and skip
   when `git` is missing. MCP tools are tested in-process over the SDK's
   in-memory transport.
-- Atlas edits a project page only through `tree.UpdateFrontmatter`. Links to
-  other atlas pages are written as `[[dir/name|name]]`, double-quoted, the way
-  Obsidian writes them; `tree.Walk` resolves them and reports what resolves to
-  nothing in `Project.Warnings`.
 - Prose follows the user's global writing guide.
 
 ## Claude Code plugin facts, verified on 2.1.270
@@ -178,28 +185,11 @@ vault (`vaults.CheckNewPath`, `vaults.CheckMove`).
 
 ## Obsidian facts
 
-- A `[[link]]` inside a text or list property is a real link: it shows in
-  the graph view and the backlinks pane, `[[` in the property editor offers
-  completion, and renames update it. Full paths (`[[repos/name|name]]`) avoid
-  the ambiguity of two files with one base name.
-- The graph view's filter and groups take search syntax: `path:repos/`,
-  `-path:Overview.md`, `OR`. `.obsidian/graph.json` stores groups as
-  `{"query": ..., "color": {"a": 1, "rgb": <int>}}`; refresh writes it only
-  when it is missing.
-
 - `obsidian://open?path=` only opens vaults Obsidian already knows. Obsidian
   reads its registry (`obsidian.json` under its config dir) once at launch,
   prunes entries whose path is gone, and rewrites the file whenever its state
   changes. `open-vault` quits Obsidian first (macOS, AppleScript), adds one
   entry, relaunches, then opens the URI. Verified on Obsidian 1.8.7 / 1.13.7.
-
-## iCloud Drive facts
-
-- `~/Documents` is often an iCloud Drive folder. When a folder is renamed away
-  and a new folder takes its name within a second, iCloud can rename the moved
-  folder to `name 2`. `moveVault` does this when a vault moves into a folder
-  of its own name (`admin` to `admin/admin`); check the result. Seen on
-  macOS with Darwin 25.6.
 
 ## Build and test
 
@@ -229,7 +219,6 @@ with `claude --plugin-dir .` from inside a vault. End-to-end by hand:
 ## Open questions
 
 - A `search` tool with BM25 ranking, once Grep proves insufficient.
-- A Claude Code skill for the bird's-eye conversation over the atlas tree.
+- A Claude Code skill for the bird's-eye conversation across every vault.
 - Distribution: a Homebrew tap and release binaries; then the wrapper can
   download a checksummed binary into `${CLAUDE_PLUGIN_DATA}`.
-- Archived projects: hidden or dimmed on the overview?
