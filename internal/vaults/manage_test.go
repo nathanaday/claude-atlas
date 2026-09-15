@@ -27,7 +27,7 @@ func setup(t *testing.T) (*home.Config, *tree.Project) {
 	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults"), AtlasVault: filepath.Join(root, "Atlas")}
 	os.MkdirAll(cfg.TreeRoot(), 0o755)
 	vault := fakeVault(t, filepath.Join(cfg.VaultsDir, "a"))
-	p, err := Register(cfg, vault, RegisterOptions{Name: "A", Purpose: "why", Category: "work"})
+	p, err := RegisterProject(cfg, vault, RegisterOptions{Name: "A", Purpose: "why", Category: "work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func setup(t *testing.T) (*home.Config, *tree.Project) {
 func TestUpdateFieldsAndCategory(t *testing.T) {
 	cfg, p := setup(t)
 	top := ""
-	if err := Update(cfg, p, Edit{Name: "A2", ClearPurpose: true, Priority: "high", State: "paused", Category: &top}); err != nil {
+	if err := Update(cfg, p, TreeEdit{Name: "A2", ClearPurpose: true, Priority: "high", State: "paused", Category: &top}); err != nil {
 		t.Fatal(err)
 	}
 	projects, problems, _ := tree.Walk(cfg.TreeRoot())
@@ -53,14 +53,14 @@ func TestUpdateFieldsAndCategory(t *testing.T) {
 func TestUpdateRepointsToAnExistingVault(t *testing.T) {
 	cfg, p := setup(t)
 	other := fakeVault(t, filepath.Join(cfg.VaultsDir, "elsewhere"))
-	if err := Update(cfg, p, Edit{Vault: other}); err != nil {
+	if err := Update(cfg, p, TreeEdit{Vault: other}); err != nil {
 		t.Fatal(err)
 	}
 	projects, _, _ := tree.Walk(cfg.TreeRoot())
 	if projects[0].VaultPath() != other {
 		t.Fatalf("vault %s", projects[0].VaultPath())
 	}
-	if err := Update(cfg, projects[0], Edit{Vault: t.TempDir()}); err == nil {
+	if err := Update(cfg, projects[0], TreeEdit{Vault: t.TempDir()}); err == nil {
 		t.Fatal("repointing at a non-vault should fail")
 	}
 }
@@ -68,10 +68,10 @@ func TestUpdateRepointsToAnExistingVault(t *testing.T) {
 func TestUpdateMovesTheVaultDirectoryWhenAsked(t *testing.T) {
 	cfg, p := setup(t)
 	target := filepath.Join(cfg.VaultsDir, "moved", "a")
-	if err := Update(cfg, p, Edit{Vault: target}); err == nil {
+	if err := Update(cfg, p, TreeEdit{Vault: target}); err == nil {
 		t.Fatal("a missing target without MoveVault should fail")
 	}
-	if err := Update(cfg, p, Edit{Vault: target, MoveVault: true}); err != nil {
+	if err := Update(cfg, p, TreeEdit{Vault: target, MoveVault: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(target, ".claude-obsidian.json")); err != nil {
@@ -89,7 +89,7 @@ func TestUpdateMovesTheVaultDirectoryWhenAsked(t *testing.T) {
 func TestUpdateMovesAVaultIntoItsOwnFolder(t *testing.T) {
 	cfg, p := setup(t)
 	target := filepath.Join(p.VaultPath(), "a")
-	if err := Update(cfg, p, Edit{Vault: target, MoveVault: true}); err != nil {
+	if err := Update(cfg, p, TreeEdit{Vault: target, MoveVault: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(target, ".claude-obsidian.json")); err != nil {
@@ -106,7 +106,7 @@ func TestUpdateMovesAVaultIntoItsOwnFolder(t *testing.T) {
 func TestUpdateMoveCarriesRepositoriesAndPrunesEmptyFolders(t *testing.T) {
 	cfg, _ := setup(t)
 	from := fakeVault(t, filepath.Join(cfg.VaultsDir, "old", "b"))
-	p, err := Register(cfg, from, RegisterOptions{Name: "B"})
+	p, err := RegisterProject(cfg, from, RegisterOptions{Name: "B"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestUpdateMoveCarriesRepositoriesAndPrunesEmptyFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := filepath.Join(cfg.VaultsDir, "engineering", "b")
-	if err := Update(cfg, reload(t, cfg, p), Edit{Vault: target, MoveVault: true}); err != nil {
+	if err := Update(cfg, reload(t, cfg, p), TreeEdit{Vault: target, MoveVault: true}); err != nil {
 		t.Fatal(err)
 	}
 	pages, _, _ := links.Walk(cfg.AtlasVault)
@@ -138,7 +138,7 @@ func TestCategoryPathFollowsOnlyAVaultInItsCategoryFolder(t *testing.T) {
 	if got := CategoryPath(cfg.VaultsDir, placed, "ops"); got != "" {
 		t.Fatalf("a vault outside its category's folder stays: %q", got)
 	}
-	q, err := Register(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "work", "b")), RegisterOptions{Name: "B", Category: "work"})
+	q, err := RegisterProject(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "work", "b")), RegisterOptions{Name: "B", Category: "work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestUpdateRefusesToMoveAVaultIntoAnother(t *testing.T) {
 	other := filepath.Join(cfg.VaultsDir, "other")
 	os.MkdirAll(other, 0o755)
 	os.WriteFile(filepath.Join(other, vault.Marker), []byte("{}"), 0o644)
-	err := Update(cfg, p, Edit{Vault: filepath.Join(other, "a"), MoveVault: true})
+	err := Update(cfg, p, TreeEdit{Vault: filepath.Join(other, "a"), MoveVault: true})
 	if err == nil || !strings.Contains(err.Error(), "inside the vault") {
 		t.Fatalf("got %v", err)
 	}
@@ -173,7 +173,7 @@ func TestUpdateRefusesToMoveAVaultIntoAnother(t *testing.T) {
 		t.Fatal("the vault should not have moved")
 	}
 	os.RemoveAll(other)
-	if err := Update(cfg, p, Edit{Vault: filepath.Join(t.TempDir(), "a"), MoveVault: true}); err != nil {
+	if err := Update(cfg, p, TreeEdit{Vault: filepath.Join(t.TempDir(), "a"), MoveVault: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(cfg.VaultsDir); err != nil {
@@ -263,7 +263,7 @@ func TestAddAndRemoveLinksThroughPages(t *testing.T) {
 	}
 	// Another project links the same repo by page name and shares the node.
 	other := fakeVault(t, filepath.Join(cfg.VaultsDir, "b"))
-	q, err := Register(cfg, other, RegisterOptions{Name: "B"})
+	q, err := RegisterProject(cfg, other, RegisterOptions{Name: "B"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestNewRepoBesideTheWikiOrElsewhere(t *testing.T) {
 	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "real"), vault.Options{Kind: vault.Project, Mode: vault.Generic}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	p, err := Register(cfg, filepath.Join(cfg.VaultsDir, "real"), RegisterOptions{Name: "Real"})
+	p, err := RegisterProject(cfg, filepath.Join(cfg.VaultsDir, "real"), RegisterOptions{Name: "Real"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestUpdateLinkRenamesMovesAndRepoints(t *testing.T) {
 	if err != nil || page.Kind != links.Materials {
 		t.Fatal(err)
 	}
-	q, _ := Register(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "b")), RegisterOptions{Name: "B"})
+	q, _ := RegisterProject(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "b")), RegisterOptions{Name: "B"})
 	if _, err := AddLink(cfg, q, "docs", false); err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func TestUpgradeLinksGivesPlainPathsPages(t *testing.T) {
 
 func TestRelateAndUnrelate(t *testing.T) {
 	cfg, a := setup(t)
-	b, _ := Register(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "b")), RegisterOptions{Name: "B", Category: "work"})
+	b, _ := RegisterProject(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "b")), RegisterOptions{Name: "B", Category: "work"})
 	if err := Relate(cfg, a, a); err == nil {
 		t.Fatal("self relation should fail")
 	}
@@ -497,15 +497,15 @@ func TestRelateAndUnrelate(t *testing.T) {
 	if err := Unrelate(cfg, a, b); err == nil {
 		t.Fatal("unrelating unrelated projects should fail")
 	}
-	// Edit replaces the whole list.
-	if err := Update(cfg, a, Edit{Related: &[]string{b.Rel}}); err != nil {
+	// TreeEdit replaces the whole list.
+	if err := Update(cfg, a, TreeEdit{Related: &[]string{b.Rel}}); err != nil {
 		t.Fatal(err)
 	}
 	a = reload(t, cfg, a)
 	if len(a.RelatedTo) != 1 {
 		t.Fatalf("edit related: %v", a.Related)
 	}
-	if err := Update(cfg, a, Edit{Related: &[]string{"nope"}}); err == nil {
+	if err := Update(cfg, a, TreeEdit{Related: &[]string{"nope"}}); err == nil {
 		t.Fatal("unknown project should fail")
 	}
 }
@@ -513,7 +513,7 @@ func TestRelateAndUnrelate(t *testing.T) {
 func TestUpdateIntentFields(t *testing.T) {
 	cfg, p := setup(t)
 	blocked, review, done := "hardware", "2026-10-01", "Ships."
-	if err := Update(cfg, p, Edit{BlockedOn: &blocked, ReviewAfter: &review, DefinitionOfDone: &done}); err != nil {
+	if err := Update(cfg, p, TreeEdit{BlockedOn: &blocked, ReviewAfter: &review, DefinitionOfDone: &done}); err != nil {
 		t.Fatal(err)
 	}
 	projects, _, _ := tree.Walk(cfg.TreeRoot())
@@ -522,14 +522,14 @@ func TestUpdateIntentFields(t *testing.T) {
 		t.Fatalf("got %+v", got.Frontmatter)
 	}
 	bad := "next week"
-	if err := Update(cfg, got, Edit{ReviewAfter: &bad}); err == nil || !ValidReviewDate(bad) == false && err == nil {
+	if err := Update(cfg, got, TreeEdit{ReviewAfter: &bad}); err == nil || !ValidReviewDate(bad) == false && err == nil {
 		t.Fatal("a non-date review_after must be refused")
 	}
-	if err := Update(cfg, got, Edit{Priority: "urgent"}); err == nil {
+	if err := Update(cfg, got, TreeEdit{Priority: "urgent"}); err == nil {
 		t.Fatal("an unknown priority must be refused")
 	}
 	empty := ""
-	if err := Update(cfg, got, Edit{BlockedOn: &empty, ReviewAfter: &empty}); err != nil {
+	if err := Update(cfg, got, TreeEdit{BlockedOn: &empty, ReviewAfter: &empty}); err != nil {
 		t.Fatal(err)
 	}
 	projects, _, _ = tree.Walk(cfg.TreeRoot())
@@ -555,12 +555,12 @@ func TestCloneRepoAndChangePolicy(t *testing.T) {
 	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "real"), vault.Options{Kind: vault.Project, Mode: vault.Generic}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	p, err := Register(cfg, filepath.Join(cfg.VaultsDir, "real"), RegisterOptions{Name: "Real"})
+	p, err := RegisterProject(cfg, filepath.Join(cfg.VaultsDir, "real"), RegisterOptions{Name: "Real"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	url := bareRepo(t, "upstream")
-	page, err := CloneRepo(cfg, p, url, "")
+	page, err := CloneRepoPage(cfg, p, url, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,10 +595,10 @@ func TestCloneRepoAndChangePolicy(t *testing.T) {
 	if err != nil || cleared.Changes != "" || cleared.Remote != "" || cleared.Policy() != links.ChangesCommit {
 		t.Fatalf("cleared %+v %v", cleared, err)
 	}
-	if _, err := CloneRepo(cfg, p, url, ""); err == nil {
+	if _, err := CloneRepoPage(cfg, p, url, ""); err == nil {
 		t.Fatal("cloning onto an existing folder should fail")
 	}
-	if _, err := CloneRepo(cfg, p, "https://nowhere.invalid/x.git", filepath.Join(cfg.VaultsDir, "gone")); err == nil {
+	if _, err := CloneRepoPage(cfg, p, "https://nowhere.invalid/x.git", filepath.Join(cfg.VaultsDir, "gone")); err == nil {
 		t.Fatal("a failed clone should fail")
 	}
 	// Linking an existing repository records its remote.

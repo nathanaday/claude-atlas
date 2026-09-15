@@ -14,10 +14,10 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-// Edit is a set of changes to one project. Empty strings mean "unchanged" except
+// TreeEdit is a set of changes to one project. Empty strings mean "unchanged" except
 // Purpose, which may be cleared by setting ClearPurpose. Pointer fields are unchanged
 // when nil and cleared when they point at "".
-type Edit struct {
+type TreeEdit struct {
 	Name             string
 	Purpose          string
 	ClearPurpose     bool
@@ -44,8 +44,8 @@ func ValidReviewDate(s string) bool {
 	return err == nil
 }
 
-// Update applies an Edit: frontmatter first, then the vault, then the page's category.
-func Update(cfg *home.Config, p *tree.Project, edit Edit) error {
+// Update applies a TreeEdit: frontmatter first, then the vault, then the page's category.
+func Update(cfg *home.Config, p *tree.Project, edit TreeEdit) error {
 	fields := map[string]any{}
 	if edit.Priority != "" && !contains(tree.Priorities, edit.Priority) {
 		return fmt.Errorf("priority must be one of %s", strings.Join(tree.Priorities, ", "))
@@ -416,9 +416,9 @@ func NewRepo(cfg *home.Config, p *tree.Project, name, at string) (links.Page, er
 	return AddLink(cfg, p, dir, false)
 }
 
-// CloneRepo clones a repository from url, into at or beside the wiki, and mounts it.
+// CloneRepoPage clones a repository from url, into at or beside the wiki, and mounts it.
 // The page records the remote; changes defaults to pull requests until set.
-func CloneRepo(cfg *home.Config, p *tree.Project, url, at string) (links.Page, error) {
+func CloneRepoPage(cfg *home.Config, p *tree.Project, url, at string) (links.Page, error) {
 	url = strings.TrimSpace(url)
 	name := links.NameFromURL(url)
 	if name == "" {

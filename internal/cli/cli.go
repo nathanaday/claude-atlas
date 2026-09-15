@@ -408,7 +408,7 @@ func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, erro
 	} else if _, err := vaults.Create(choice.Path, vault.Options{Kind: vault.Project, Mode: mode, Name: choice.Name}, e.console, false); err != nil {
 		return "", err
 	}
-	project, err := vaults.Register(cfg, choice.Path, opts)
+	project, err := vaults.RegisterProject(cfg, choice.Path, opts)
 	if err != nil {
 		return "", err
 	}
@@ -430,7 +430,7 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 			}
 			return state
 		},
-		Update:    func(p *tree.Project, edit vaults.Edit) error { return vaults.Update(cfg, p, edit) },
+		Update:    func(p *tree.Project, edit vaults.TreeEdit) error { return vaults.Update(cfg, p, edit) },
 		Unlink:    vaults.Unlink,
 		Create:    func(choice tui.AddVault) (string, error) { return e.createOrAdopt(cfg, choice) },
 		Refresh:   func() error { _, _, err := e.refreshAll(cfg); return err },
@@ -446,7 +446,7 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 			return vaults.AddLink(cfg, p, target, initGit)
 		},
 		NewRepo:    func(p *tree.Project, name, at string) (links.Page, error) { return vaults.NewRepo(cfg, p, name, at) },
-		CloneRepo:  func(p *tree.Project, url, at string) (links.Page, error) { return vaults.CloneRepo(cfg, p, url, at) },
+		CloneRepo:  func(p *tree.Project, url, at string) (links.Page, error) { return vaults.CloneRepoPage(cfg, p, url, at) },
 		SetChanges: func(page links.Page, policy string) (links.Page, error) { return vaults.SetChanges(cfg, page, policy) },
 		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
 		Sources: func(p *tree.Project) []string {
@@ -580,7 +580,7 @@ func (e *env) adoptPath(path string, opts vaults.RegisterOptions, vopts vault.Op
 	if existing := tree.FindByVault(projects, abs); existing != nil {
 		c.Step(console.Skip, "registered", "already tree/"+existing.Rel+".md")
 	} else {
-		project, err := vaults.Register(cfg, abs, opts)
+		project, err := vaults.RegisterProject(cfg, abs, opts)
 		if err != nil {
 			return 1, err
 		}
@@ -611,7 +611,7 @@ func (e *env) createVault(arg string, opts vaults.RegisterOptions, vopts vault.O
 
 // finishVault registers a vault that was just created, refreshes, and reports.
 func (e *env) finishVault(cfg *home.Config, path string, opts vaults.RegisterOptions) (int, error) {
-	project, err := vaults.Register(cfg, path, opts)
+	project, err := vaults.RegisterProject(cfg, path, opts)
 	if err != nil {
 		return 1, err
 	}
@@ -1109,7 +1109,7 @@ func (e *env) edit(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	change := vaults.Edit{Name: *name, Priority: *priority, State: *state, Vault: *vaultPath, MoveVault: *move}
+	change := vaults.TreeEdit{Name: *name, Priority: *priority, State: *state, Vault: *vaultPath, MoveVault: *move}
 	if set["purpose"] {
 		change.Purpose = *purpose
 		change.ClearPurpose = *purpose == ""
@@ -1270,7 +1270,7 @@ func (e *env) link(args []string) (int, error) {
 	target := positional[1]
 	if links.IsRemoteURL(target) {
 		e.console.Say("  cloning %s …", target)
-		page, err = vaults.CloneRepo(cfg, p, target, *at)
+		page, err = vaults.CloneRepoPage(cfg, p, target, *at)
 	} else {
 		page, err = vaults.AddLink(cfg, p, target, *initGit)
 		var notRepo *vaults.NotRepoError

@@ -181,7 +181,7 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 		if _, err := vaults.Create(firstPath, vault.Options{Kind: vault.Project}, c, false); err != nil {
 			return 1, err
 		}
-		node, err := vaults.Register(cfg, firstPath, vaults.RegisterOptions{
+		node, err := vaults.RegisterProject(cfg, firstPath, vaults.RegisterOptions{
 			Purpose: "Created by claude-atlas setup to verify the installation.",
 		})
 		if err != nil {

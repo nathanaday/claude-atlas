@@ -25,7 +25,7 @@ type Hooks struct {
 	Load       func() ([]*tree.Project, error)
 	Categories func() []string
 	State      func(rel string) *tree.State
-	Update     func(*tree.Project, vaults.Edit) error
+	Update     func(*tree.Project, vaults.TreeEdit) error
 	Unlink     func(*tree.Project) error
 	// Create makes or adopts a vault and registers it; it returns the project's rel.
 	Create func(AddVault) (string, error)
@@ -171,7 +171,7 @@ type editor struct {
 	mode      editMode
 	err       string
 	discard   bool
-	pendingMv vaults.Edit
+	pendingMv vaults.TreeEdit
 	// follow marks pendingMv as a vault following a new category; n then saves the rest.
 	follow  bool
 	outcome editOutcome
@@ -468,7 +468,7 @@ func (e editor) save() editor {
 		e.field = fieldReviewAfter
 		return e
 	}
-	edit := vaults.Edit{Name: e.draft.Name, Priority: e.draft.Priority, State: e.draft.State}
+	edit := vaults.TreeEdit{Name: e.draft.Name, Priority: e.draft.Priority, State: e.draft.State}
 	if e.draft.Purpose != e.original.Purpose {
 		edit.Purpose = e.draft.Purpose
 		edit.ClearPurpose = e.draft.Purpose == ""
@@ -513,7 +513,7 @@ func (e editor) save() editor {
 	return e.apply(edit)
 }
 
-func (e editor) apply(edit vaults.Edit) editor {
+func (e editor) apply(edit vaults.TreeEdit) editor {
 	if err := e.hooks.Update(e.current, edit); err != nil {
 		e.err = err.Error()
 		e.mode = editFields

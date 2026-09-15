@@ -326,7 +326,7 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	os.MkdirAll(h.Root, 0o755)
 	h.Save(cfg)
 	os.MkdirAll(cfg.TreeRoot(), 0o755)
-	p, err := vaults.Register(cfg, v.Root, vaults.RegisterOptions{Name: "V"})
+	p, err := vaults.RegisterProject(cfg, v.Root, vaults.RegisterOptions{Name: "V"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -88,8 +88,8 @@ type RegisterOptions struct {
 	Priority string
 }
 
-// Register adds a project page pointing at an existing vault.
-func Register(cfg *home.Config, root string, opts RegisterOptions) (*tree.Project, error) {
+// RegisterProject adds a project page pointing at an existing vault.
+func RegisterProject(cfg *home.Config, root string, opts RegisterOptions) (*tree.Project, error) {
 	root, err := filepath.Abs(home.Expand(root))
 	if err != nil {
 		return nil, err

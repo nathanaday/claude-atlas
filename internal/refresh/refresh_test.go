@@ -191,7 +191,7 @@ func TestRunAgainstARealVault(t *testing.T) {
 	if _, err := vault.Init(fresh, vault.Options{Kind: vault.Project, Mode: vault.Generic}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	project, err := vaults.Register(cfg, fresh, vaults.RegisterOptions{Category: "area"})
+	project, err := vaults.RegisterProject(cfg, fresh, vaults.RegisterOptions{Category: "area"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,7 +23,7 @@ func fakeAtlas(t *testing.T) (*home.Config, Hooks) {
 		vault := filepath.Join(cfg.VaultsDir, spec.name)
 		os.MkdirAll(vault, 0o755)
 		os.WriteFile(filepath.Join(vault, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v2","id":"00000000-0000-4000-8000-000000000001","kind":"project","name":"v","mode":"generic","created":"2026-09-12"}`), 0o644)
-		if _, err := vaults.Register(cfg, vault, vaults.RegisterOptions{Name: spec.name, Category: spec.cat}); err != nil {
+		if _, err := vaults.RegisterProject(cfg, vault, vaults.RegisterOptions{Name: spec.name, Category: spec.cat}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -39,7 +39,7 @@ func fakeAtlas(t *testing.T) (*home.Config, Hooks) {
 			}
 			return nil
 		},
-		Update: func(p *tree.Project, edit vaults.Edit) error { return vaults.Update(cfg, p, edit) },
+		Update: func(p *tree.Project, edit vaults.TreeEdit) error { return vaults.Update(cfg, p, edit) },
 		Unlink: vaults.Unlink,
 		Links: func() []links.Page {
 			pages, _, _ := links.Walk(cfg.AtlasVault)
@@ -49,7 +49,7 @@ func fakeAtlas(t *testing.T) (*home.Config, Hooks) {
 			return vaults.AddLink(cfg, p, target, initGit)
 		},
 		NewRepo:    func(p *tree.Project, name, at string) (links.Page, error) { return vaults.NewRepo(cfg, p, name, at) },
-		CloneRepo:  func(p *tree.Project, url, at string) (links.Page, error) { return vaults.CloneRepo(cfg, p, url, at) },
+		CloneRepo:  func(p *tree.Project, url, at string) (links.Page, error) { return vaults.CloneRepoPage(cfg, p, url, at) },
 		SetChanges: func(page links.Page, policy string) (links.Page, error) { return vaults.SetChanges(cfg, page, policy) },
 		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
 		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
