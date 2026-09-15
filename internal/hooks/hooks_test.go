@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
@@ -224,6 +226,120 @@ func TestSessionStartInAKnowledgeBase(t *testing.T) {
 		if strings.Contains(text, absent) {
 			t.Errorf("a knowledge base session mentions %q:\n%s", absent, text)
 		}
+	}
+}
+
+func TestSessionStartListsMountsAndMountedBy(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	now := time.Now()
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := h.Default(filepath.Join(root, "Vaults"))
+	if err := os.MkdirAll(h.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	projectRoot := vaults.PathFor(cfg.VaultsDir, vault.Project, "cs566")
+	if _, err := vault.Init(projectRoot, vault.Options{Kind: vault.Project, Name: "cs566"}, now); err != nil {
+		t.Fatal(err)
+	}
+	kbRoot := vaults.PathFor(cfg.VaultsDir, vault.Knowledge, "ai-ml")
+	if _, err := vault.Init(kbRoot, vault.Options{Kind: vault.Knowledge, Name: "ai-ml"}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb := ix.ByPath(kbRoot)
+	if kb == nil {
+		t.Fatal("knowledge base not scanned")
+	}
+	scope := "Machine learning: models, training, evaluation, deployment, agents"
+	if err := vaults.EditIdentity(*kb, vaults.Edit{Scope: &scope}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	ix, err = registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := ix.ByPath(projectRoot)
+	kb = ix.ByPath(kbRoot)
+	if project == nil || kb == nil {
+		t.Fatal("fixture not scanned")
+	}
+	if _, err := vaults.Mount(*project, *kb, "", "", now); err != nil {
+		t.Fatal(err)
+	}
+
+	e := env(map[string]string{home.EnvHome: h.Root})
+	report, err := lint.Run(kbRoot, lint.Options{AsOf: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLine := fmt.Sprintf("Knowledge: ai-ml (write) · %s · %d pages · kb/ai-ml", scope, report.Summary.PagesScanned)
+
+	var out bytes.Buffer
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+projectRoot+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{wantLine, SearchSentence} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in project session:\n%s", want, text)
+		}
+	}
+
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+kbRoot+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "mounted by cs566 (write)") {
+		t.Errorf("missing mounted-by in kb session:\n%s", out.String())
+	}
+
+	// Guarding the knowledge base drops the project's mount to read, since cs566 has no
+	// grant, and the knowledge base's own line names the new access.
+	guarded := vault.AccessGuarded
+	ix, err = registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb = ix.ByPath(kbRoot)
+	if err := vaults.EditIdentity(*kb, vaults.Edit{Access: &guarded}, now); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+projectRoot+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Knowledge: ai-ml (read)") {
+		t.Errorf("missing read access after guard:\n%s", out.String())
+	}
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+kbRoot+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "guarded") {
+		t.Errorf("missing guarded in kb session:\n%s", out.String())
+	}
+
+	// A missing symlink warns the project session to refresh.
+	if err := os.Remove(filepath.Join(projectRoot, vault.KbDir, "ai-ml")); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+projectRoot+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "symlink missing; run claude-atlas refresh") {
+		t.Errorf("missing symlink warning:\n%s", out.String())
 	}
 }
 

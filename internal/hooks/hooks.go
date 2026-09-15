@@ -14,9 +14,12 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/discover"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/lint"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // MaxContextBytes bounds the hot cache text a session start may inject.
@@ -31,6 +34,10 @@ const KnowledgeSkills = "/claude-atlas:wiki  wiki-query  wiki-lint  wiki-fold  w
 
 // MaxTaskLines bounds how many open tasks the session start lists.
 const MaxTaskLines = 8
+
+// SearchSentence tells a project session to check the wiki and its mounted knowledge
+// bases before answering from the code alone.
+const SearchSentence = "Search the project and its knowledge bases (the wiki-query skill) before answering from the code alone."
 
 type input struct {
 	Cwd       string          `json:"cwd"`
@@ -76,16 +83,17 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	}
 	via := ""
 	policy := ""
+	h := home.Resolve(env(home.EnvHome))
 	// A repository may sit inside the project's own folder or anywhere else; the registry
 	// knows either way, and a session inside one is told how changes land there.
-	match, candidates, _ := discover.Vault(home.Resolve(env(home.EnvHome)), in.Cwd)
+	match, candidates, _ := discover.Vault(h, in.Cwd)
 	if err != nil {
 		switch {
 		case match != nil:
 			if v, err = vault.Open(match.Project.Path); err != nil {
 				return nil
 			}
-			via = fmt.Sprintf("claude-atlas: this folder is the repository %s of the project %s, whose vault is at %s. The atlas tools use that vault. Search the wiki (the wiki-query skill, or Grep under its wiki/) before answering from the code alone; keep a decision with the save skill.\n", match.Repo.Name, match.Project.Name, match.Project.Path)
+			via = fmt.Sprintf("claude-atlas: this folder is the repository %s of the project %s, whose vault is at %s. The atlas tools use that vault. Keep a decision with the save skill.\n", match.Repo.Name, match.Project.Name, match.Project.Path)
 		case len(candidates) > 1:
 			_, err := fmt.Fprintf(w, "claude-atlas: this folder is linked by several atlas projects: %s. Pass vault to the atlas tools, or set %s.\n", discover.Describe(candidates), vault.EnvVault)
 			return err
@@ -102,15 +110,33 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	case "1":
 		contextEnabled = true
 	}
+	// The atlas registry names a project's mounts and a knowledge base's mounters; with
+	// no atlas config, or a scan that fails, entry stays nil and the session says nothing
+	// about mounts.
+	var ix *registry.Index
+	var entry *registry.Entry
+	if cfg, cerr := h.Load(); cerr == nil {
+		if scanned, serr := registry.Scan(cfg); serr == nil {
+			ix = scanned
+			entry = ix.ByPath(v.Root)
+		}
+	}
 	var b strings.Builder
 	noun := v.Config.Kind.Noun()
-	if via != "" {
+	switch {
+	case via != "":
 		b.WriteString(via)
-	} else {
+	case v.Config.Kind == vault.Knowledge && entry != nil:
+		b.WriteString(knowledgeBaseLine(v, *entry))
+	default:
 		fmt.Fprintf(&b, "claude-atlas %s: %s (%s mode) at %s\n", noun, v.Name(), v.Config.Mode, v.Root)
 	}
 	if policy != "" {
 		b.WriteString(policy + "\n")
+	}
+	if v.Config.Kind == vault.Project {
+		b.WriteString(mountLines(ix, entry, now))
+		b.WriteString(SearchSentence + "\n")
 	}
 	if v.Config.Kind == vault.Knowledge {
 		b.WriteString("Knowledge enters through a project that mounts this knowledge base. Here: lint, repair, fold, stub. Change wiki pages only through the atlas MCP tools (plan, then apply). Skills: " + KnowledgeSkills + "\n")
@@ -132,6 +158,50 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	}
 	_, err = io.WriteString(w, b.String())
 	return err
+}
+
+// knowledgeBaseLine names a knowledge base's own access and the projects that mount it.
+func knowledgeBaseLine(v *vault.Vault, e registry.Entry) string {
+	who := "nothing yet"
+	if len(e.MountedBy) > 0 {
+		parts := make([]string, len(e.MountedBy))
+		for i, ref := range e.MountedBy {
+			parts[i] = fmt.Sprintf("%s (%s)", ref.Name, ref.Access)
+		}
+		who = strings.Join(parts, ", ")
+	}
+	return fmt.Sprintf("claude-atlas knowledge base: %s (%s mode, %s) at %s, mounted by %s.\n", v.Name(), v.Config.Mode, e.Access, v.Root, who)
+}
+
+// mountLines lists a project's mounts, one per line: the knowledge base's name, its
+// effective access, its scope, its page count, and the mount's folder under kb/. An
+// unresolved mount names its error instead of the rest; a mount whose symlink is missing
+// or points elsewhere says so, so the session runs refresh before it trusts kb/.
+func mountLines(ix *registry.Index, entry *registry.Entry, now time.Time) string {
+	if entry == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, m := range entry.Mounts {
+		if m.Error != "" {
+			fmt.Fprintf(&b, "Knowledge: %s (unresolved: %s)\n", m.Name, m.Error)
+			continue
+		}
+		parts := []string{fmt.Sprintf("Knowledge: %s (%s)", m.Name, m.Effective)}
+		if kb := ix.ByID(m.ID); kb != nil && kb.Scope != "" {
+			parts = append(parts, kb.Scope)
+		}
+		if report, err := lint.Run(filepath.Dir(m.Path), lint.Options{AsOf: now}); err == nil {
+			parts = append(parts, fmt.Sprintf("%d pages", report.Summary.PagesScanned))
+		}
+		parts = append(parts, "kb/"+m.Name)
+		line := strings.Join(parts, " · ")
+		if vaults.MountState(*entry, m) != vaults.MountOK {
+			line += " · symlink missing; run claude-atlas refresh"
+		}
+		b.WriteString(line + "\n")
+	}
+	return b.String()
 }
 
 // taskLines summarizes the open tasks: counts, then the tasks themselves, active first,
