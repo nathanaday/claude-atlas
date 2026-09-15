@@ -28,12 +28,25 @@ var genericFolders = map[string]string{
 	"session":  "wiki/sessions",
 }
 
-// RoutableTypes lists the page types a mode files.
-func RoutableTypes(mode Mode) []string {
-	if mode == LYT {
-		return []string{"note", "moc", "source", "entity", "concept", "question", "session"}
+// RoutableTypes lists the page types a vault of a kind files in a mode. A knowledge base
+// holds sources, entities, and concepts; a project adds questions and sessions.
+func RoutableTypes(kind Kind, mode Mode) []string {
+	types := []string{"source", "entity", "concept"}
+	if kind == Project {
+		types = append(types, "question", "session")
 	}
-	return []string{"source", "entity", "concept", "question", "session"}
+	if mode == LYT {
+		types = append([]string{"note", "moc"}, types...)
+	}
+	return types
+}
+
+// Noun is the kind as a person says it.
+func (k Kind) Noun() string {
+	if k == Knowledge {
+		return "knowledge base"
+	}
+	return string(k)
 }
 
 var (
@@ -75,7 +88,7 @@ func lastRune(s string) (rune, int) {
 // skeleton with the vault's frontmatter conventions. It reads nothing but the target path.
 func (v *Vault) RouteFor(pageType, title string, now time.Time) (*Route, error) {
 	mode := v.Config.Mode
-	folder, err := folderFor(mode, pageType)
+	folder, err := folderFor(v.Config.Kind, mode, pageType)
 	if err != nil {
 		return nil, err
 	}
@@ -88,20 +101,24 @@ func (v *Vault) RouteFor(pageType, title string, now time.Time) (*Route, error) 
 	return route, nil
 }
 
-func folderFor(mode Mode, pageType string) (string, error) {
-	if mode == LYT {
-		switch pageType {
-		case "moc":
-			return "wiki/mocs", nil
-		case "note", "source", "entity", "concept", "question", "session":
-			return "wiki/notes", nil
+func folderFor(kind Kind, mode Mode, pageType string) (string, error) {
+	types := RoutableTypes(kind, mode)
+	found := false
+	for _, t := range types {
+		if t == pageType {
+			found = true
 		}
-		return "", fmt.Errorf("type %q is not filed in lyt mode; use one of %s", pageType, strings.Join(RoutableTypes(LYT), ", "))
 	}
-	if folder, ok := genericFolders[pageType]; ok {
-		return folder, nil
+	if !found {
+		return "", fmt.Errorf("type %q is not filed in a %s in %s mode; use one of %s", pageType, kind.Noun(), mode, strings.Join(types, ", "))
 	}
-	return "", fmt.Errorf("type %q is not filed in generic mode; use one of %s", pageType, strings.Join(RoutableTypes(Generic), ", "))
+	if mode == LYT {
+		if pageType == "moc" {
+			return "wiki/mocs", nil
+		}
+		return "wiki/notes", nil
+	}
+	return genericFolders[pageType], nil
 }
 
 // Skeleton is the starting text for a new page: frontmatter plus the headings that type

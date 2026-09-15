@@ -578,7 +578,7 @@ func (s *Server) mode(ctx context.Context, req *mcp.CallToolRequest, a ModeArgs)
 	if err != nil {
 		return nil, ModeOut{}, err
 	}
-	out := ModeOut{Mode: string(v.Config.Mode), Types: vault.RoutableTypes(v.Config.Mode)}
+	out := ModeOut{Mode: string(v.Config.Mode), Types: vault.RoutableTypes(v.Config.Kind, v.Config.Mode)}
 	if a.Set == "" {
 		return nil, out, nil
 	}
@@ -597,7 +597,7 @@ func (s *Server) mode(ctx context.Context, req *mcp.CallToolRequest, a ModeArgs)
 	po := s.planOut(plan)
 	out.Previous = string(v.Config.Mode)
 	out.Mode = string(mode)
-	out.Types = vault.RoutableTypes(mode)
+	out.Types = vault.RoutableTypes(v.Config.Kind, mode)
 	out.Plan = &po
 	return nil, out, nil
 }

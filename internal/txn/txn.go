@@ -173,8 +173,20 @@ func normalizePath(p string) (string, error) {
 	return p, nil
 }
 
-// allowed enforces each kind's write scope.
-func allowed(kind Kind, p string, mode WriteMode) error {
+// allowed enforces each kind's write scope, and the vault kind's: a knowledge base has
+// no inbox, ideas, tasks, questions, or sessions.
+func allowed(vk vault.Kind, kind Kind, p string, mode WriteMode) error {
+	under := func(dir string) bool { return strings.HasPrefix(p, dir+"/") }
+	if vk == vault.Knowledge {
+		for _, dir := range []string{vault.InboxDir, vault.IdeasDir, vault.TasksDir, "wiki/questions", "wiki/sessions"} {
+			if under(dir) {
+				return fmt.Errorf("%s/ belongs to a project, not a knowledge base: %s", dir, p)
+			}
+		}
+		if p == vault.TaskLedgerPath {
+			return fmt.Errorf("%s belongs to a project, not a knowledge base", p)
+		}
+	}
 	switch {
 	case p == ".git" || strings.HasPrefix(p, ".git/"),
 		p == vault.MetaDir || strings.HasPrefix(p, vault.MetaDir+"/"):
@@ -188,7 +200,6 @@ func allowed(kind Kind, p string, mode WriteMode) error {
 	case p == vault.LegacyTasksIndex:
 		return fmt.Errorf("%s is the task index's old path; the core moves it to %s", p, vault.TasksIndex)
 	}
-	under := func(dir string) bool { return strings.HasPrefix(p, dir+"/") }
 	if under(vault.TasksDir) && kind != Task && kind != Repair {
 		return fmt.Errorf("task pages change only through a task operation (or a repair): %s", p)
 	}
@@ -307,6 +318,9 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 	if !validKind(req.Kind) {
 		return nil, fmt.Errorf("unknown operation kind %q", req.Kind)
 	}
+	if v.Config.Kind == vault.Knowledge && req.Kind == Task {
+		return nil, errors.New("a knowledge base has no tasks; plant the task in a project that mounts it")
+	}
 	summary := strings.Join(strings.Fields(req.Summary), " ")
 	if summary == "" {
 		return nil, errors.New("summary is required: one line saying what the operation does")
@@ -336,7 +350,7 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 		if w.Mode != Create && w.Mode != Replace && w.Mode != Delete {
 			return nil, fmt.Errorf("%s: mode must be create, replace, or delete", p)
 		}
-		if err := allowed(req.Kind, p, w.Mode); err != nil {
+		if err := allowed(v.Config.Kind, req.Kind, p, w.Mode); err != nil {
 			return nil, err
 		}
 		current, size, exists, err := fileState(v, p)

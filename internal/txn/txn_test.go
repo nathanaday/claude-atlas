@@ -40,6 +40,22 @@ func newVault(t *testing.T) *vault.Vault {
 	return v
 }
 
+func newKnowledge(t *testing.T) *vault.Vault {
+	t.Helper()
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := filepath.Join(t.TempDir(), "kb")
+	if _, err := vault.Init(root, vault.Options{Kind: vault.Knowledge}, now); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
 func read(t *testing.T, v *vault.Vault, rel string) string {
 	t.Helper()
 	data, err := os.ReadFile(v.Path(rel))
@@ -537,5 +553,39 @@ func TestTaskKindBoundsWrites(t *testing.T) {
 	}
 	if _, err := Prepare(v, Request{Kind: Repair, Summary: "fix", Writes: []Write{{Path: p, Mode: Replace, Content: text}}}, now); err != nil {
 		t.Fatalf("repair: %v", err)
+	}
+}
+
+func TestKnowledgeBaseBoundsWrites(t *testing.T) {
+	v := newKnowledge(t)
+	cases := []struct {
+		name string
+		req  Request
+		want string
+	}{
+		{"task kind", Request{Kind: Task, Summary: "x", Writes: []Write{{Path: "wiki/tasks/A.md", Mode: Create, Content: mkpage("A", "")}}}, "no tasks"},
+		{"question", Request{Kind: Save, Summary: "x", Writes: []Write{{Path: "wiki/questions/Q.md", Mode: Create, Content: mkpage("Q", "")}}}, "belongs to a project"},
+		{"session", Request{Kind: Save, Summary: "x", Writes: []Write{{Path: "wiki/sessions/S.md", Mode: Create, Content: mkpage("S", "")}}}, "belongs to a project"},
+		{"inbox", Request{Kind: Ingest, Summary: "x", Writes: []Write{{Path: "inbox/a.md", Mode: Delete}}}, "belongs to a project"},
+		{"ideas", Request{Kind: Repair, Summary: "x", Writes: []Write{{Path: "ideas/a.md", Mode: Create, Content: []byte("x")}}}, "belongs to a project"},
+	}
+	for _, c := range cases {
+		if _, err := Prepare(v, c.req, now); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want %q", c.name, err, c.want)
+		}
+	}
+	req, _, err := PlantRequest(v, tasks.Plant{Title: "T", Text: "t"}, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(v, req, now); err == nil || !strings.Contains(err.Error(), "no tasks") {
+		t.Fatalf("plant in a knowledge base: %v", err)
+	}
+	plan, err := Prepare(v, Request{Kind: Save, Summary: "add A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: mkpage("A", "text\n")}}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(v, plan, now); err != nil {
+		t.Fatal(err)
 	}
 }

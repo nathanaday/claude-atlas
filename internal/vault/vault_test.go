@@ -348,6 +348,29 @@ func TestRouteAndSkeleton(t *testing.T) {
 	}
 }
 
+func TestRoutableTypesByKind(t *testing.T) {
+	needGit(t)
+	if got := strings.Join(RoutableTypes(Knowledge, Generic), ","); got != "source,entity,concept" {
+		t.Fatalf("knowledge generic: %s", got)
+	}
+	if got := strings.Join(RoutableTypes(Project, LYT), ","); got != "note,moc,source,entity,concept,question,session" {
+		t.Fatalf("project lyt: %s", got)
+	}
+	kb := filepath.Join(t.TempDir(), "kb")
+	Init(kb, Options{Kind: Knowledge}, now)
+	v, _ := Open(kb)
+	if _, err := v.RouteFor("question", "Why", now); err == nil || !strings.Contains(err.Error(), "knowledge base") {
+		t.Fatalf("questions belong to a project: %v", err)
+	}
+	r, err := v.RouteFor("concept", "Backpropagation", now)
+	if err != nil || r.Path != "wiki/concepts/Backpropagation.md" {
+		t.Fatalf("route %+v %v", r, err)
+	}
+	if Knowledge.Noun() != "knowledge base" || Project.Noun() != "project" {
+		t.Fatal("nouns")
+	}
+}
+
 func TestFrontmatter(t *testing.T) {
 	fields, body, err := Frontmatter("---\ntitle: A\ntags:\n  - x\n---\n\nBody\n")
 	if err != nil || fields["title"] != "A" || body != "\nBody\n" || len(StringList(fields, "tags")) != 1 {
