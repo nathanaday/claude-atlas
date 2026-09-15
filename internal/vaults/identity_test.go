@@ -319,6 +319,23 @@ func TestAddCreateCloneRemoveAndEditRepos(t *testing.T) {
 		t.Fatal("expected an error for an invalid changes policy")
 	}
 
+	// A Path inside the vault but not under repos/ → error "under repos/", config
+	// mapping unchanged.
+	insideWiki := filepath.Join(project.Path, "wiki", "x")
+	if err := os.MkdirAll(insideWiki, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", insideWiki).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s", out)
+	}
+	hwPathBefore := cfg.RepoPath(project.ID, "hw")
+	if _, err := EditRepo(h, cfg, project, "hw", RepoEdit{Path: insideWiki}, identityNow); err == nil || !strings.Contains(err.Error(), "under repos/") {
+		t.Fatalf("edit path under wiki: %v", err)
+	}
+	if cfg.RepoPath(project.ID, "hw") != hwPathBefore {
+		t.Fatalf("config mapping changed: %q, want %q", cfg.RepoPath(project.ID, "hw"), hwPathBefore)
+	}
+
 	// RemoveRepo("hw") → gone from identity, folder still exists.
 	if err := RemoveRepo(h, cfg, project, "hw", identityNow); err != nil {
 		t.Fatal(err)
@@ -334,6 +351,34 @@ func TestAddCreateCloneRemoveAndEditRepos(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(project.Path, "repos", "hw")); err != nil {
 		t.Fatalf("hw folder should still exist: %v", err)
+	}
+
+	// RemoveRepo also clears a repository's config mapping: "extern" was added from
+	// outside the vault, so it has one.
+	if cfg.RepoPath(project.ID, "extern") == "" {
+		t.Fatal("extern should have a config mapping before removal")
+	}
+	if err := RemoveRepo(h, cfg, project, "extern", identityNow); err != nil {
+		t.Fatal(err)
+	}
+	v, err = vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range v.Config.Repos {
+		if r.Name == "extern" {
+			t.Fatalf("extern should be gone: %+v", v.Config.Repos)
+		}
+	}
+	reloaded, err = h.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.RepoPath(project.ID, "extern") != "" {
+		t.Fatalf("extern config mapping should be cleared: %q", reloaded.RepoPath(project.ID, "extern"))
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("extern folder should still exist: %v", err)
 	}
 
 	// On the knowledge base entry every function errors with "knowledge base".

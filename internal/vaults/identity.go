@@ -153,16 +153,22 @@ func hasRepo(e registry.Entry, name string) bool {
 	return false
 }
 
+// checkContainment refuses a path that sits inside the vault but not under repos/<name>:
+// a repository goes under repos/ or outside the vault entirely.
+func checkContainment(e registry.Entry, name, path string) error {
+	if _, ok := under(e.Path, path); ok && path != e.RepoDir(name) {
+		return errors.New("a repository goes under repos/ or outside the vault")
+	}
+	return nil
+}
+
 // checkRepoTarget validates a new repository before it is recorded: its name must be
 // unique on e, and a path that sits inside the vault must sit under repos/.
 func checkRepoTarget(e registry.Entry, name, path string) error {
 	if hasRepo(e, name) {
 		return fmt.Errorf("%s already has a repository named %q", e.Name, name)
 	}
-	if _, ok := under(e.Path, path); ok && path != e.RepoDir(name) {
-		return errors.New("a repository goes under repos/ or outside the vault")
-	}
-	return nil
+	return checkContainment(e, name, path)
 }
 
 // recordRepo appends name's repository to e's identity file, and, when path is not the
@@ -324,6 +330,9 @@ func EditRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, edit
 	if edit.Path != "" {
 		abs, err := filepath.Abs(home.Expand(edit.Path))
 		if err != nil {
+			return vault.Repo{}, err
+		}
+		if err := checkContainment(e, name, abs); err != nil {
 			return vault.Repo{}, err
 		}
 		info, err := os.Stat(abs)
