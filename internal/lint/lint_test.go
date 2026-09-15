@@ -305,6 +305,7 @@ func TestKindErrors(t *testing.T) {
 		"wiki/index.md":                      mkpage("Index", "# Index\n"),
 		"inbox/paper.md":                     "x",
 		"wiki/tasks/tasks.md":                mkpage("Tasks", "# Tasks\n"),
+		"wiki/questions/Q.md":                mkpage("Q", "# Q\n"),
 		"wiki/meta/ledgers/task-ledger.json": `{"schema":"claude-atlas.task-ledger.v1","tasks":[]}`,
 	})
 	r, err := Run(kb, Options{AsOf: asOf})
@@ -315,10 +316,10 @@ func TestKindErrors(t *testing.T) {
 	for _, f := range r.KindErrors {
 		got = append(got, f.Path)
 	}
-	if strings.Join(got, ",") != ".claude-atlas.json,inbox,wiki/meta/ledgers/task-ledger.json,wiki/tasks" {
+	if strings.Join(got, ",") != ".claude-atlas.json,inbox,wiki/meta/ledgers/task-ledger.json,wiki/questions,wiki/tasks" {
 		t.Fatalf("kind errors %v", got)
 	}
-	if r.Summary.CategoryCounts["kind_errors"] != 4 || r.Version != 3 || !strings.Contains(r.Markdown(), "## Kind (4)") {
+	if r.Summary.CategoryCounts["kind_errors"] != 5 || r.Version != 3 || !strings.Contains(r.Markdown(), "## Kind (5)") {
 		t.Fatalf("summary %+v\n%s", r.Summary, r.Markdown())
 	}
 	project := fixture(t, map[string]string{

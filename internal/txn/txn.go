@@ -178,13 +178,16 @@ func normalizePath(p string) (string, error) {
 func allowed(vk vault.Kind, kind Kind, p string, mode WriteMode) error {
 	under := func(dir string) bool { return strings.HasPrefix(p, dir+"/") }
 	if vk == vault.Knowledge {
-		for _, dir := range []string{vault.InboxDir, vault.IdeasDir, vault.TasksDir, "wiki/questions", "wiki/sessions"} {
-			if under(dir) {
-				return fmt.Errorf("%s/ belongs to a project, not a knowledge base: %s", dir, p)
+		for _, rel := range vault.ProjectOnly {
+			if rel == vault.TaskLedgerPath {
+				if p == rel {
+					return fmt.Errorf("%s belongs to a project, not a knowledge base", p)
+				}
+				continue
 			}
-		}
-		if p == vault.TaskLedgerPath {
-			return fmt.Errorf("%s belongs to a project, not a knowledge base", p)
+			if under(rel) {
+				return fmt.Errorf("%s/ belongs to a project, not a knowledge base: %s", rel, p)
+			}
 		}
 	}
 	switch {

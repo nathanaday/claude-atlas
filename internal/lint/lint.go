@@ -206,15 +206,19 @@ func taskErrors(pg *page, asOf time.Time) []PathFinding {
 
 // knowledgeHasNo says why each project-only folder is out of place in a knowledge base.
 var knowledgeHasNo = map[string]string{
-	vault.InboxDir: "sources enter through a project that mounts it",
-	vault.IdeasDir: "ideas live in a project",
-	vault.TasksDir: "tasks live in a project",
+	vault.InboxDir:     "sources enter through a project that mounts it",
+	vault.IdeasDir:     "ideas live in a project",
+	vault.TasksDir:     "tasks live in a project",
+	vault.QuestionsDir: "move its pages to a project or delete them",
+	vault.SessionsDir:  "move its pages to a project or delete them",
 }
 
-// kindErrors checks the vault against its kind. A knowledge base has no inbox, ideas, or
-// tasks and carries no project fields; a project carries no knowledge base fields. A
-// tree without a current identity file is not checked.
+// kindErrors checks the vault against its kind. A knowledge base has none of the
+// project-only paths and carries no project fields; a project carries no knowledge base
+// fields. A tree without a current identity file is not checked.
 func kindErrors(root string, present map[string]bool) []PathFinding {
+	// Reads the file on disk, not the overlay; a plan that rewrites the identity file
+	// (mount, grant) will need the overlay here.
 	cfg, ok := vault.ReadConfig(root)
 	if !ok || cfg.Schema != vault.Schema {
 		return nil
@@ -222,13 +226,16 @@ func kindErrors(root string, present map[string]bool) []PathFinding {
 	var out []PathFinding
 	switch cfg.Kind {
 	case vault.Knowledge:
-		for _, dir := range []string{vault.InboxDir, vault.IdeasDir, vault.TasksDir} {
-			if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(dir))); err == nil && info.IsDir() {
-				out = append(out, PathFinding{Path: dir, Message: "a knowledge base has no " + dir + "/; " + knowledgeHasNo[dir]})
+		for _, rel := range vault.ProjectOnly {
+			if rel == vault.TaskLedgerPath {
+				if present[rel] {
+					out = append(out, PathFinding{Path: rel, Message: "a knowledge base has no task ledger"})
+				}
+				continue
 			}
-		}
-		if present[vault.TaskLedgerPath] {
-			out = append(out, PathFinding{Path: vault.TaskLedgerPath, Message: "a knowledge base has no task ledger"})
+			if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil && info.IsDir() {
+				out = append(out, PathFinding{Path: rel, Message: "a knowledge base has no " + rel + "/; " + knowledgeHasNo[rel]})
+			}
 		}
 		if len(cfg.Tags)+len(cfg.Mounts)+len(cfg.Repos) > 0 {
 			out = append(out, PathFinding{Path: vault.Marker, Message: "a knowledge base carries no tags, mounts, or repos; those are a project's fields"})
