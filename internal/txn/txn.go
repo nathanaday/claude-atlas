@@ -43,14 +43,15 @@ const (
 	Capture  Kind = "capture"
 	Undo     Kind = "undo"
 	Task     Kind = "task"
+	Stub     Kind = "stub"
 )
 
-// ModelKinds are the kinds a plan from the model may use. Capture and undo are the core's own.
+// ModelKinds are the kinds a plan from the model may use. Capture, undo, and stub are the core's own.
 var ModelKinds = []Kind{Ingest, Save, Markdown, Repair, Fold, Canvas, Base, Config, Task}
 
 func validKind(k Kind) bool {
 	switch k {
-	case Ingest, Save, Markdown, Repair, Fold, Canvas, Base, Config, Capture, Task:
+	case Ingest, Save, Markdown, Repair, Fold, Canvas, Base, Config, Capture, Task, Stub:
 		return true
 	}
 	return false
@@ -234,6 +235,10 @@ func allowed(kind Kind, p string, mode WriteMode) error {
 			}
 		case !tasks.IsPage(p):
 			return fmt.Errorf("a task operation writes task pages under %s/ (and %s/), %s, and removes notes from %s/: %s", vault.TasksDir, vault.TaskArchiveDir, vault.HotPage, vault.InboxTasksDir, p)
+		}
+	case Stub:
+		if !under(vault.WikiDir) || !strings.EqualFold(path.Ext(p), ".md") {
+			return fmt.Errorf("a stub operation writes only pages under wiki/: %s", p)
 		}
 	default:
 		return fmt.Errorf("unknown operation kind %q", kind)
