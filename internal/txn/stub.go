@@ -37,7 +37,13 @@ type StubResult struct {
 // for the empty pages a link points to, and commits them as one operation. With no titles
 // it stubs all of them.
 func StubPages(v *vault.Vault, titles []StubTitle, defaultType string, now time.Time) (StubResult, error) {
-	req, stubbed, err := StubRequest(v, titles, defaultType, now)
+	return stubOperation(v, v, titles, defaultType, "", now)
+}
+
+// stubOperation applies one stub operation: the request from stubRequest, committed in
+// dest. via names the project the session came through, and ends the summary.
+func stubOperation(source, dest *vault.Vault, titles []StubTitle, defaultType, via string, now time.Time) (StubResult, error) {
+	req, stubbed, err := stubRequest(source, dest, titles, defaultType, now)
 	if err != nil {
 		return StubResult{}, err
 	}
@@ -45,11 +51,14 @@ func StubPages(v *vault.Vault, titles []StubTitle, defaultType string, now time.
 	if len(req.Writes) == 0 {
 		return out, nil
 	}
-	plan, err := Prepare(v, req, now)
+	if via != "" {
+		req.Summary += " (via " + via + ")"
+	}
+	plan, err := Prepare(dest, req, now)
 	if err != nil {
 		return StubResult{}, err
 	}
-	res, err := Apply(v, plan, now)
+	res, err := Apply(dest, plan, now)
 	if err != nil {
 		return StubResult{}, err
 	}
@@ -132,17 +141,29 @@ func (set *stubSet) find(v *vault.Vault, title string) (candidate, error) {
 // StubRequest builds the request StubPages applies. A title must name a wanted page or an
 // empty page a link points to; the type defaults to defaultType, then to the mode's.
 func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now time.Time) (Request, []Stubbed, error) {
-	set, err := stubCandidates(v, true, now)
+	return stubRequest(v, v, titles, defaultType, now)
+}
+
+// stubRequest builds one stub operation's request: the candidates come from source's lint
+// report and the pages are routed in dest. A stub that stays in one vault also files the
+// empty pages a link points to, and with no titles it stubs every candidate; a stub that
+// crosses vaults names its titles.
+func stubRequest(source, dest *vault.Vault, titles []StubTitle, defaultType string, now time.Time) (Request, []Stubbed, error) {
+	home := source == dest
+	set, err := stubCandidates(source, home, now)
 	if err != nil {
 		return Request{}, nil, err
 	}
 	if len(titles) == 0 {
+		if !home {
+			return Request{}, nil, fmt.Errorf("name the titles to stub in %s", dest.Name())
+		}
 		titles = set.all()
 	}
 	if defaultType == "" {
-		defaultType = defaultStubType(v.Config.Mode)
+		defaultType = defaultStubType(dest.Config.Mode)
 	}
-	writes, stubbed, err := set.writes(v, v, titles, defaultType, now)
+	writes, stubbed, err := set.writes(source, dest, titles, defaultType, now)
 	if err != nil {
 		return Request{}, nil, err
 	}
@@ -201,45 +222,16 @@ func (set *stubSet) writes(source, dest *vault.Vault, titles []StubTitle, defaul
 	return writes, stubbed, nil
 }
 
-// StubInto creates, in kb, seed pages for titles the project's wiki links to but nobody
-// has written, so the links resolve through the project's mount of kb. via names the
-// project in the operation's summary. One operation, in kb.
-func StubInto(project, kb *vault.Vault, titles []StubTitle, defaultType string, via string, now time.Time) (StubResult, error) {
-	if kb.Config.Kind != vault.Knowledge {
-		return StubResult{}, fmt.Errorf("%s is not a knowledge base", kb.Name())
+// StubInto creates, in the knowledge base dest, seed pages for titles source's wiki links
+// to but nobody has written, so the links resolve through the project's mount of dest.
+// via names the project in the operation's summary. One operation, in dest. Pass the same
+// knowledge base as source and dest for its own wanted pages, which is what a project
+// session stubs when it names the knowledge base as the vault.
+func StubInto(source, dest *vault.Vault, titles []StubTitle, defaultType string, via string, now time.Time) (StubResult, error) {
+	if dest.Config.Kind != vault.Knowledge {
+		return StubResult{}, fmt.Errorf("%s is not a knowledge base", dest.Name())
 	}
-	if len(titles) == 0 {
-		return StubResult{}, fmt.Errorf("name the titles to stub in %s", kb.Name())
-	}
-	set, err := stubCandidates(project, false, now)
-	if err != nil {
-		return StubResult{}, err
-	}
-	if defaultType == "" {
-		defaultType = defaultStubType(kb.Config.Mode)
-	}
-	writes, stubbed, err := set.writes(project, kb, titles, defaultType, now)
-	if err != nil {
-		return StubResult{}, err
-	}
-	out := StubResult{Stubs: []Stubbed{}}
-	if len(writes) == 0 {
-		return out, nil
-	}
-	req := Request{Kind: Stub, Writes: writes, Summary: stubSummary(stubbed)}
-	if via != "" {
-		req.Summary += " (via " + via + ")"
-	}
-	plan, err := Prepare(kb, req, now)
-	if err != nil {
-		return StubResult{}, err
-	}
-	res, err := Apply(kb, plan, now)
-	if err != nil {
-		return StubResult{}, err
-	}
-	out.Stubs, out.OperationID, out.Commit = stubbed, res.OperationID, res.Commit
-	return out, nil
+	return stubOperation(source, dest, titles, defaultType, via, now)
 }
 
 func defaultStubType(mode vault.Mode) string {

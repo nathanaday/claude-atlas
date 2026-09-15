@@ -196,4 +196,15 @@ func TestStubIntoCreatesInTheKnowledgeBase(t *testing.T) {
 	if _, err := StubInto(p, kb, []StubTitle{{Title: "Nowhere"}}, "", "cs566", now); err == nil || !strings.Contains(err.Error(), "nothing in the wiki links to") {
 		t.Fatalf("a title nothing links to: %v", err)
 	}
+
+	// One knowledge base as source and destination stubs its own wanted pages, and the
+	// summary still names the project the session came through.
+	writeFile(t, kb, "wiki/concepts/Seed.md", string(mkpage("Seed", "# Seed\n\nSee [[Attention]].\n")))
+	res, err = StubInto(kb, kb, nil, "", "cs566", now)
+	if err != nil || len(res.Stubs) != 1 || res.Stubs[0].Path != "wiki/concepts/Attention.md" {
+		t.Fatalf("the knowledge base's own wanted pages: %+v %v", res, err)
+	}
+	if ops, err := History(kb, 1, false); err != nil || ops[0].Summary != "stub Attention (via cs566)" {
+		t.Fatalf("summary: %+v %v", ops, err)
+	}
 }

@@ -751,18 +751,22 @@ func TestStubNamesWhatCommittedWhenALaterOperationFails(t *testing.T) {
 
 func TestStubDirectlyIntoAKnowledgeBaseRecordsTheProject(t *testing.T) {
 	h, _, p, kb := mounted(t)
-	linkPage(t, p, "Training", "See [[Backprop]].")
+	linkPage(t, p, "Training", "See [[Backprop]].") // only the project links Backprop
+	linkPage(t, kb, "Seed", "See [[Something]].")   // the knowledge base wants Something
 	c := connectIn(t, h, p.Root)
 
 	var out StubOut
-	if msg := c.call("stub", map[string]any{"vault": kb.Root, "titles": []map[string]any{{"title": "Backprop"}}}, &out); msg != "" {
+	if msg := c.call("stub", map[string]any{"vault": kb.Root}, &out); msg != "" {
 		t.Fatal(msg)
 	}
-	if len(out.Stubs) != 1 || out.Stubs[0].Path != "wiki/concepts/Backprop.md" || out.OperationID == "" {
-		t.Fatalf("stub in the knowledge base %+v", out)
+	if len(out.Stubs) != 1 || out.Stubs[0].Path != "wiki/concepts/Something.md" || out.OperationID == "" {
+		t.Fatalf("the knowledge base's own wanted pages %+v", out)
 	}
 	ops, err := txn.History(kb, 1, false)
-	if err != nil || len(ops) == 0 || ops[0].Summary != "stub Backprop (via p)" {
+	if err != nil || len(ops) == 0 || ops[0].Summary != "stub Something (via p)" {
 		t.Fatalf("the knowledge base's log names the project: %+v %v", ops, err)
+	}
+	if msg := c.call("stub", map[string]any{"vault": kb.Root, "titles": []map[string]any{{"title": "Backprop"}}}, nil); !strings.Contains(msg, "nothing in the wiki links to") {
+		t.Errorf("a title only the project links needs the mount as its target: %q", msg)
 	}
 }

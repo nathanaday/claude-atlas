@@ -645,15 +645,13 @@ func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs)
 	return nil, out, nil
 }
 
-// stubHere stubs into the session's own vault. A project session that reaches a mounted
-// knowledge base records the project it came through, as capture does.
+// stubHere stubs the target vault's own wanted pages. A project session that reaches a
+// mounted knowledge base records the project it came through, as capture does; the pages
+// are still the knowledge base's own. A title that only the project links goes to a
+// mount through its target, not here.
 func (sess *session) stubHere(titles []txn.StubTitle, defaultType string, now time.Time) (txn.StubResult, error) {
 	if sess.target.Config.Kind == vault.Knowledge && sess.project != nil {
-		project, err := vault.Open(sess.project.Path)
-		if err != nil {
-			return txn.StubResult{}, err
-		}
-		return txn.StubInto(project, sess.target, titles, defaultType, sess.project.Name, now)
+		return txn.StubInto(sess.target, sess.target, titles, defaultType, sess.project.Name, now)
 	}
 	return txn.StubPages(sess.target, titles, defaultType, now)
 }
