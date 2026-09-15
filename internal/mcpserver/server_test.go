@@ -686,6 +686,16 @@ func TestRouteAcrossMounts(t *testing.T) {
 		t.Fatalf("a question is not filed in a knowledge base: %+v", out.Mounts[0])
 	}
 
+	// A type the knowledge base never files reports no Match either, even when the
+	// title is one an alias there would otherwise match.
+	out = RouteOut{}
+	if msg := c.call("route", map[string]any{"type": "question", "title": "backprop"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Mounts[0].Match != nil || out.Mounts[0].Path != "" {
+		t.Fatalf("an unfiled type reports neither: %+v", out.Mounts[0])
+	}
+
 	guarded := vault.AccessGuarded
 	_, ke := rescan(t, cfg, p, kb)
 	if err := vaults.EditIdentity(ke, vaults.Edit{Access: &guarded}, now); err != nil {

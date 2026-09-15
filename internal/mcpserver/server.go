@@ -586,6 +586,16 @@ func mountRoute(m registry.Mount, pageType, title string, now time.Time) MountRo
 		return mr
 	}
 	mr.Vault = kb.Root
+	filed := false
+	for _, t := range vault.RoutableTypes(vault.Knowledge, kb.Config.Mode) {
+		if t == pageType {
+			filed = true
+			break
+		}
+	}
+	if !filed {
+		return mr
+	}
 	match, err := vault.FindPage(kb.Root, title)
 	if err != nil {
 		mr.Error = err.Error()
@@ -595,14 +605,8 @@ func mountRoute(m registry.Mount, pageType, title string, now time.Time) MountRo
 	if m.Effective != vault.AccessWrite {
 		return mr
 	}
-	for _, t := range vault.RoutableTypes(vault.Knowledge, kb.Config.Mode) {
-		if t != pageType {
-			continue
-		}
-		if r, err := kb.RouteFor(pageType, title, now); err == nil {
-			mr.Path = r.Path
-		}
-		break
+	if r, err := kb.RouteFor(pageType, title, now); err == nil {
+		mr.Path = r.Path
 	}
 	return mr
 }

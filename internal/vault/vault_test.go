@@ -492,9 +492,14 @@ func TestFindPageByStemAndAlias(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "wiki/concepts/Backpropagation.md"), []byte(page), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// This name sorts before Backpropagation.md, so the walk reaches it first; a
+	// dangling symlink must not stop FindPage from reaching the real page.
+	if err := os.Symlink("does-not-exist.md", filepath.Join(root, "wiki/concepts/0gone.md")); err != nil {
+		t.Fatal(err)
+	}
 	m, err := FindPage(root, "backpropagation")
 	if err != nil || m == nil || m.Path != "wiki/concepts/Backpropagation.md" || m.ByAlias != "" {
-		t.Fatalf("stem match: %+v %v", m, err)
+		t.Fatalf("stem match past an unreadable file: %+v %v", m, err)
 	}
 	m, err = FindPage(root, "Back propagation")
 	if err != nil || m == nil || m.Path != "wiki/concepts/Backpropagation.md" || m.ByAlias != "Back Propagation" {
@@ -503,6 +508,18 @@ func TestFindPageByStemAndAlias(t *testing.T) {
 	m, err = FindPage(root, "nope")
 	if err != nil || m != nil {
 		t.Fatalf("no match: %+v %v", m, err)
+	}
+
+	// A title with characters SanitizeTitle changes still stem-matches the sanitized
+	// file name RouteFor would have created for it.
+	stem := SanitizeTitle("A/B: C")
+	sanitizedPage := "---\ntitle: " + stem + "\ntype: concept\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# " + stem + "\n"
+	if err := os.WriteFile(filepath.Join(root, "wiki/concepts", stem+".md"), []byte(sanitizedPage), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err = FindPage(root, "A/B: C")
+	if err != nil || m == nil || m.Path != "wiki/concepts/"+stem+".md" {
+		t.Fatalf("sanitized stem match: %+v %v", m, err)
 	}
 }
 

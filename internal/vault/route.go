@@ -186,6 +186,7 @@ func FindPage(root, title string) (*Match, error) {
 	if _, err := os.Stat(wikiRoot); err != nil {
 		return nil, nil
 	}
+	sanitized := SanitizeTitle(title)
 	var stemMatch, aliasMatch *Match
 	err := filepath.WalkDir(wikiRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -206,7 +207,7 @@ func FindPage(root, title string) (*Match, error) {
 		}
 		rel = filepath.ToSlash(rel)
 		stem := strings.TrimSuffix(d.Name(), ".md")
-		if strings.EqualFold(stem, title) {
+		if strings.EqualFold(stem, title) || strings.EqualFold(stem, sanitized) {
 			stemMatch = &Match{Path: rel}
 			return fs.SkipAll
 		}
@@ -215,7 +216,9 @@ func FindPage(root, title string) (*Match, error) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			// The page cannot be read (a broken symlink, permissions); skip it and
+			// keep looking rather than fail the whole search.
+			return nil
 		}
 		fields, _, err := Frontmatter(string(data))
 		if err != nil || fields == nil {
