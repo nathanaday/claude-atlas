@@ -23,7 +23,8 @@ import (
 // reposDir is where a project's repositories sit by default, relative to its root.
 const reposDir = "repos"
 
-// maxDepth is how many directory levels below the vaults directory Scan descends.
+// maxDepth is the deepest directory level Scan searches below the vaults directory: a
+// vault root at this level is found, one past it is not.
 const maxDepth = 5
 
 // Ref names a vault another entry refers to.
@@ -237,8 +238,10 @@ func Scan(cfg *home.Config) (*Index, error) {
 		scanRoot(ix, abs)
 	}
 
-	resolve(ix, cfg)
+	// Sort before resolving, so a knowledge base's MountedBy is built by walking the
+	// entries in their final order and comes out in that order too.
 	sortEntries(ix.Entries)
+	resolve(ix, cfg)
 	return ix, nil
 }
 
@@ -459,14 +462,25 @@ func (ix *Index) Find(arg string) (*Entry, error) {
 		}
 		return nil, fmt.Errorf("%w: %s is the name of %d vaults (%s); use the path or the id", ErrAmbiguous, arg, len(byName), strings.Join(paths, ", "))
 	}
+	var byID []*Entry
 	for i := range ix.Entries {
 		e := &ix.Entries[i]
 		if e.Error != "" {
 			continue
 		}
 		if e.ID == arg || (len(arg) >= 8 && strings.HasPrefix(e.ID, arg)) {
-			return e, nil
+			byID = append(byID, e)
 		}
+	}
+	if len(byID) == 1 {
+		return byID[0], nil
+	}
+	if len(byID) > 1 {
+		var paths []string
+		for _, e := range byID {
+			paths = append(paths, e.Path)
+		}
+		return nil, fmt.Errorf("%w: %s is the id of %d vaults (%s); use the full id", ErrAmbiguous, arg, len(byID), strings.Join(paths, ", "))
 	}
 	return nil, fmt.Errorf("%w: %s", ErrNotFound, arg)
 }

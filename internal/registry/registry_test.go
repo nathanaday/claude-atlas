@@ -200,3 +200,81 @@ func TestStateFileRoundTrips(t *testing.T) {
 		t.Fatalf("file:\n%s", data)
 	}
 }
+
+// TestScanMountedByFollowsSortedOrder proves MountedBy comes out in the entries' final
+// sorted order, not the order the walk happened to visit them in. "z/apple" and
+// "a/zebra" put the walk in the opposite order of the projects' names.
+func TestScanMountedByFollowsSortedOrder(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
+	mk := func(rel string, opts vault.Options) *vault.Vault {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if _, err := vault.Init(path, opts, now); err != nil {
+			t.Fatal(err)
+		}
+		v, _ := vault.Open(path)
+		return v
+	}
+	kb := mk("Vaults/knowledge/kb", vault.Options{Kind: vault.Knowledge, Name: "kb"})
+	apple := mk("Vaults/z/apple", vault.Options{Kind: vault.Project, Name: "apple"})
+	zebra := mk("Vaults/a/zebra", vault.Options{Kind: vault.Project, Name: "zebra"})
+	for _, p := range []*vault.Vault{apple, zebra} {
+		if err := vault.UpdateConfig(p.Root, "mount", now, func(c *vault.Config) error {
+			c.Mounts = []vault.Mount{{ID: kb.Config.ID, Name: "kb", Access: vault.AccessRead}}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := ix.ByID(kb.Config.ID)
+	if len(k.MountedBy) != 2 || k.MountedBy[0].Name != "apple" || k.MountedBy[1].Name != "zebra" {
+		t.Fatalf("mounted by order %+v", k.MountedBy)
+	}
+}
+
+// TestScanDepthLimit proves the boundary: a vault root five directory levels below the
+// vaults directory is found, one six levels down is not.
+func TestScanDepthLimit(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
+	five := filepath.Join(cfg.VaultsDir, "d1", "d2", "d3", "d4", "d5")
+	if _, err := vault.Init(five, vault.Options{Kind: vault.Knowledge, Name: "five"}, now); err != nil {
+		t.Fatal(err)
+	}
+	six := filepath.Join(cfg.VaultsDir, "e1", "e2", "e3", "e4", "e5", "d6")
+	if _, err := vault.Init(six, vault.Options{Kind: vault.Knowledge, Name: "six"}, now); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := ix.ByPath(five); e == nil {
+		t.Fatalf("a vault root five levels down was not found")
+	}
+	if e := ix.ByPath(six); e != nil {
+		t.Fatalf("a vault root six levels down was found: %+v", e)
+	}
+}
+
+// TestFindAmbiguousIDPrefix proves Find reports every entry an id prefix matches,
+// not just the first.
+func TestFindAmbiguousIDPrefix(t *testing.T) {
+	ix := &Index{Entries: []Entry{
+		{ID: "abcdefgh1111", Kind: vault.Project, Name: "one", Path: "/vaults/one"},
+		{ID: "abcdefgh2222", Kind: vault.Project, Name: "two", Path: "/vaults/two"},
+	}}
+	if _, err := ix.Find("abcdefgh"); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("find ambiguous id prefix: %v", err)
+	}
+}
