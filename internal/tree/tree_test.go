@@ -266,3 +266,17 @@ func TestWalkResolvesLinkPagesAndRelated(t *testing.T) {
 		t.Fatalf("Load resolves links too: %+v %v", loaded.Linked, err)
 	}
 }
+
+func TestUnfinishedTextAndTotal(t *testing.T) {
+	one, two := 1, 2
+	u := Unfinished{EmptySections: &one, WantedPages: &two}
+	if got := u.Text(); got != "1 empty sections · 2 wanted pages" {
+		t.Fatalf("text %q", got)
+	}
+	if got := u.Total(); got == nil || *got != 3 {
+		t.Fatalf("total %v", got)
+	}
+	if (Unfinished{}).Total() != nil || (Unfinished{}).Text() != "" {
+		t.Fatal("unknown counts show nothing")
+	}
+}

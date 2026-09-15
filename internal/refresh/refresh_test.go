@@ -97,18 +97,6 @@ func TestActiveThreadsJoinsContinuationLines(t *testing.T) {
 	}
 }
 
-func TestSeedPagesCountsFrontmatterStatus(t *testing.T) {
-	vault := fakeVault(t, "", "", map[string]string{
-		"a.md": "---\ntitle: A\nstatus: seed\n---\n# A\n",
-		"b.md": "---\nstatus: \"seed\"\n---\n",
-		"c.md": "---\nstatus: evergreen\n---\n",
-		"d.md": "no frontmatter\nstatus: seed\n",
-	})
-	if got := SeedPages(vault); got != 2 {
-		t.Fatalf("got %d", got)
-	}
-}
-
 func TestPlainTextStripsWikilinks(t *testing.T) {
 	if got := PlainText("See [[Spec]] and [[Long Name|alias]]."); got != "See Spec and alias." {
 		t.Fatalf("got %q", got)
@@ -169,7 +157,7 @@ func TestSignals(t *testing.T) {
 func TestRenderListsRowsAndSignals(t *testing.T) {
 	node := leaf("/Users/me/v")
 	node.Rel, node.Purpose = "work/v", "Why."
-	state := &tree.State{VaultOK: true, LastTouched: "2026-08-01", DaysIdle: p(41), Heat: "cold", Pages: p(3), OpenThreads: []string{"thread [[one]]"}, Unfinished: tree.Unfinished{EmptySections: p(1), SeedPages: p(2), DeadLinks: p(0)}}
+	state := &tree.State{VaultOK: true, LastTouched: "2026-08-01", DaysIdle: p(41), Heat: "cold", Pages: p(3), OpenThreads: []string{"thread [[one]]"}, Unfinished: tree.Unfinished{EmptySections: p(1), Stubs: p(2), WantedPages: p(0), DeadLinks: p(0)}}
 	res := &Result{Rows: []Row{{node, state}}, Problems: []tree.Problem{{Rel: "stray", Reason: "missing frontmatter"}}}
 	page := Render(res, "2026-09-11T20:00:00Z", today)
 	for _, want := range []string{
@@ -177,7 +165,7 @@ func TestRenderListsRowsAndSignals(t *testing.T) {
 		"| Vault | `/Users/me/v` |",
 		"## Signals", "> [!failure] tree/stray.md\n> Not a project: missing frontmatter.", "> [!warning] work/v", "cold for 41 days",
 		"## work\n\n### x\n\n> [!abstract] Purpose\n> Why.", "> - thread one",
-		"| Unfinished | 1 empty sections · 2 seed pages · 0 dead links |",
+		"| Unfinished | 1 empty sections · 2 stubs · 0 wanted pages · 0 dead links |",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("missing %q in:\n%s", want, page)

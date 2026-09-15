@@ -429,8 +429,44 @@ func Create(root string, opts ProjectOptions) (string, error) {
 // Unfinished counts work the vault still owes. nil means unknown.
 type Unfinished struct {
 	EmptySections *int `json:"empty_sections"`
-	SeedPages     *int `json:"seed_pages"`
+	Stubs         *int `json:"stubs"`
+	WantedPages   *int `json:"wanted_pages"`
 	DeadLinks     *int `json:"dead_links"`
+}
+
+func (u Unfinished) counts() []struct {
+	label string
+	n     *int
+} {
+	return []struct {
+		label string
+		n     *int
+	}{{"empty sections", u.EmptySections}, {"stubs", u.Stubs}, {"wanted pages", u.WantedPages}, {"dead links", u.DeadLinks}}
+}
+
+// Text lists the known counts with their labels, such as "1 empty sections · 2 stubs".
+func (u Unfinished) Text() string {
+	var bits []string
+	for _, c := range u.counts() {
+		if c.n != nil {
+			bits = append(bits, fmt.Sprintf("%d %s", *c.n, c.label))
+		}
+	}
+	return strings.Join(bits, " · ")
+}
+
+// Total adds the known counts; nil when none is known.
+func (u Unfinished) Total() *int {
+	var total *int
+	for _, c := range u.counts() {
+		if c.n != nil {
+			if total == nil {
+				total = new(int)
+			}
+			*total += *c.n
+		}
+	}
+	return total
 }
 
 // TaskLine is one open task as the atlas shows it.

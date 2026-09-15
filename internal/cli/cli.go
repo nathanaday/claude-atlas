@@ -1028,17 +1028,7 @@ func (e *env) show(args []string) (int, error) {
 	if state.Pages != nil {
 		row("Pages", fmt.Sprint(*state.Pages))
 	}
-	u := state.Unfinished
-	var bits []string
-	for _, kv := range []struct {
-		k string
-		v *int
-	}{{"empty sections", u.EmptySections}, {"seed pages", u.SeedPages}, {"dead links", u.DeadLinks}} {
-		if kv.v != nil {
-			bits = append(bits, fmt.Sprintf("%d %s", *kv.v, kv.k))
-		}
-	}
-	row("Unfinished", strings.Join(bits, " · "))
+	row("Unfinished", state.Unfinished.Text())
 	for i, t := range state.OpenThreads {
 		label := "Open threads"
 		if i > 0 {

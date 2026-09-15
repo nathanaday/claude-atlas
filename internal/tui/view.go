@@ -258,16 +258,10 @@ func unfinishedCount(state *tree.State) string {
 	if state == nil {
 		return "—"
 	}
-	total, known := 0, false
-	for _, v := range []*int{state.Unfinished.EmptySections, state.Unfinished.SeedPages, state.Unfinished.DeadLinks} {
-		if v != nil {
-			total, known = total+*v, true
-		}
+	if total := state.Unfinished.Total(); total != nil {
+		return fmt.Sprint(*total)
 	}
-	if !known {
-		return "—"
-	}
-	return fmt.Sprint(total)
+	return "—"
 }
 
 func idleText(state *tree.State) string {
@@ -1087,17 +1081,7 @@ func (v view) viewDetail() string {
 	}
 	if s != nil {
 		row("Pages", pagesText(s))
-		u := s.Unfinished
-		var bits []string
-		for _, kv := range []struct {
-			k string
-			v *int
-		}{{"empty sections", u.EmptySections}, {"seed pages", u.SeedPages}, {"dead links", u.DeadLinks}} {
-			if kv.v != nil {
-				bits = append(bits, fmt.Sprintf("%d %s", *kv.v, kv.k))
-			}
-		}
-		row("Unfinished", dash(strings.Join(bits, " · ")))
+		row("Unfinished", dash(s.Unfinished.Text()))
 		row("Last operation", dash(s.LastOperation))
 		check := okSt.Render("ok")
 		if !s.VaultOK {

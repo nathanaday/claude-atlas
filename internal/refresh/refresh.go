@@ -32,7 +32,6 @@ const (
 
 var (
 	logHeading  = regexp.MustCompile(`(?m)^##\s+(\d{4}-\d{2}-\d{2})\b`)
-	statusLine  = regexp.MustCompile(`(?m)^status:\s*(.+?)\s*$`)
 	createdLine = regexp.MustCompile(`(?m)^created:\s*(\d{4}-\d{2}-\d{2})`)
 	wikiLink    = regexp.MustCompile(`\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
 )
@@ -159,29 +158,6 @@ func ActiveThreads(vault string) []string {
 	return threads
 }
 
-// SeedPages counts wiki pages whose frontmatter says `status: seed`.
-func SeedPages(vault string) int {
-	count := 0
-	filepath.WalkDir(filepath.Join(vault, "wiki"), func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		front, _, ok := tree.SplitFrontmatter(string(data))
-		if !ok {
-			return nil
-		}
-		if m := statusLine.FindStringSubmatch(front); m != nil && strings.Trim(m[1], `"'`) == "seed" {
-			count++
-		}
-		return nil
-	})
-	return count
-}
-
 // PlainText strips wikilinks; a link copied from another vault resolves to nothing in the atlas.
 func PlainText(s string) string {
 	return wikiLink.ReplaceAllStringFunc(s, func(m string) string {
@@ -250,7 +226,6 @@ func derive(project *tree.Project, today time.Time, generatedAt string, facts ma
 	if state.OpenThreads == nil {
 		state.OpenThreads = []string{}
 	}
-	state.Unfinished.SeedPages = ptr(SeedPages(root))
 	if info, err := os.Stat(filepath.Join(root, "wiki")); err != nil || !info.IsDir() {
 		state.VaultError = "no wiki/ directory"
 		return state
@@ -271,6 +246,8 @@ func derive(project *tree.Project, today time.Time, generatedAt string, facts ma
 	state.VaultOK = true
 	state.Pages = ptr(report.Summary.PagesScanned)
 	state.Unfinished.EmptySections = ptr(report.Summary.CategoryCounts["empty_sections"])
+	state.Unfinished.Stubs = ptr(report.Summary.Stubs)
+	state.Unfinished.WantedPages = ptr(report.Summary.WantedPages)
 	state.Unfinished.DeadLinks = ptr(report.Summary.CategoryCounts["dead_links"])
 	return state
 }
@@ -370,19 +347,6 @@ func LinkSummary(l links.Link) string {
 	return strings.Join(bits, " · ")
 }
 
-func sumPtr(values []*int) *int {
-	total, any := 0, false
-	for _, v := range values {
-		if v != nil {
-			total, any = total+*v, true
-		}
-	}
-	if !any {
-		return nil
-	}
-	return ptr(total)
-}
-
 // Row pairs a project with its derived state.
 type Row struct {
 	Project *tree.Project
@@ -467,7 +431,7 @@ func intOr(v *int, def string) string {
 }
 
 func unfinishedTotal(u tree.Unfinished) string {
-	return intOr(sumPtr([]*int{u.EmptySections, u.SeedPages, u.DeadLinks}), "—")
+	return intOr(u.Total(), "—")
 }
 
 // Signals crosses authored intent with derived state; these lines are the point of the page.
@@ -707,18 +671,8 @@ func Render(res *Result, generatedAt string, today time.Time) string {
 		if r.State.Pages != nil {
 			fmt.Fprintf(&b, "| Pages | %d |\n", *r.State.Pages)
 		}
-		u := r.State.Unfinished
-		if u.EmptySections != nil || u.SeedPages != nil || u.DeadLinks != nil {
-			var bits []string
-			for _, kv := range []struct {
-				k string
-				v *int
-			}{{"empty sections", u.EmptySections}, {"seed pages", u.SeedPages}, {"dead links", u.DeadLinks}} {
-				if kv.v != nil {
-					bits = append(bits, fmt.Sprintf("%d %s", *kv.v, kv.k))
-				}
-			}
-			fmt.Fprintf(&b, "| Unfinished | %s |\n", strings.Join(bits, " · "))
+		if text := r.State.Unfinished.Text(); text != "" {
+			fmt.Fprintf(&b, "| Unfinished | %s |\n", text)
 		}
 		if r.Project.ReviewAfter != "" {
 			fmt.Fprintf(&b, "| Review after | %s |\n", r.Project.ReviewAfter)
