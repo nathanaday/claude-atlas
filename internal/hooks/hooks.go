@@ -4,6 +4,7 @@ package hooks
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -65,6 +66,14 @@ func findVault(in input, env Env) (*vault.Vault, error) {
 func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now time.Time) error {
 	in := readInput(r)
 	v, err := findVault(in, env)
+	if errors.Is(err, vault.ErrV1) {
+		root := env(vault.EnvVault)
+		if root == "" {
+			root = vault.FindAbove(in.Cwd)
+		}
+		_, err := fmt.Fprintf(w, "claude-atlas: %s is a v1 vault; run `claude-atlas adopt %s --as knowledge` or `--as project` before working in it.\n", root, root)
+		return err
+	}
 	via := ""
 	policy := ""
 	// A mounted repository may sit inside the vault's folder or anywhere else; the atlas

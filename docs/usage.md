@@ -34,7 +34,11 @@ claude-atlas new-vault
 claude-atlas new-vault sensor-triage --category work --purpose "Sort field sensor faults."
 claude-atlas new-vault reading --mode lyt
 claude-atlas new-vault ~/Desktop/scratch-vault --category work
+claude-atlas new-vault ai-ml --kind knowledge
 ```
+
+A knowledge base holds sources, entities, and concepts. It has no inbox and no
+tasks; those belong to a project.
 
 A new vault goes in the vaults directory, in the folder of its category, so
 the folders on disk match the tree: `sensor-triage` in `work` goes to
@@ -426,7 +430,12 @@ nothing in it is replaced.
 claude-atlas adopt                                   # step by step
 claude-atlas adopt ~/Documents/MyKnowledgeVault --category personal
 claude-atlas adopt ~/Documents/OldVault --name "Old Vault" --priority someday --mode lyt
+claude-atlas adopt ~/Documents/OldVault --as knowledge
 ```
+
+Adopting as a knowledge base removes the inbox, the ideas folder, the tasks,
+and the task ledger. It commits a baseline of the vault as it is first, so git
+holds everything it removes.
 
 ## Setup and health
 

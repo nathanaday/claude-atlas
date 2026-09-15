@@ -208,3 +208,26 @@ func TestSessionStartInAKnowledgeBase(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionStartNamesAV1Vault(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "wiki"), 0o755)
+	os.WriteFile(filepath.Join(root, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
+	var out bytes.Buffer
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+filepath.Join(root, "wiki")+`"}`), &out, env(nil), true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"v1 vault", "adopt", root} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+t.TempDir()+`"}`), &out, env(nil), true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("silent without a vault:\n%s", out.String())
+	}
+}

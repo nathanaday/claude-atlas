@@ -61,7 +61,10 @@ func Create(path string, opts vault.Options, c *console.Console, confirm bool) (
 	}
 	if confirm {
 		files := append(vault.TemplateFiles(opts.Kind), vault.Marker, vault.LedgerPath)
-		c.Say("claude-atlas will create the %s %s (%s mode) with %d files and a git repository:", opts.Kind, home.Display(path), opts.Mode, len(files))
+		if opts.Kind == vault.Project {
+			files = append(files, vault.TaskLedgerPath)
+		}
+		c.Say("claude-atlas will create the %s %s (%s mode) with %d files and a git repository:", opts.Kind.Noun(), home.Display(path), opts.Mode, len(files))
 		for _, item := range files {
 			c.Say("    %s", item)
 		}

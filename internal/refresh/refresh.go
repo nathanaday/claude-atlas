@@ -4,6 +4,7 @@ package refresh
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -192,6 +193,10 @@ func derive(project *tree.Project, today time.Time, generatedAt string, facts ma
 		} else {
 			state.VaultError = "not a claude-atlas vault"
 		}
+		return state
+	}
+	if _, err := vault.Open(root); errors.Is(err, vault.ErrV1) {
+		state.VaultError = "v1 vault; run claude-atlas adopt"
 		return state
 	}
 	state.Legacy = vault.IsLegacy(root)

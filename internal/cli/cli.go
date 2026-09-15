@@ -381,7 +381,7 @@ func (e *env) adopt(args []string) (int, error) {
 		if choice == nil {
 			return 1, vaults.ErrCancelled
 		}
-		return e.adoptPath(choice.Path, vaults.RegisterOptions{Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose, Priority: opts.Priority}, vault.Options{Kind: vault.Project, Mode: vault.Mode(choice.Mode), Name: choice.Name})
+		return e.adoptPath(choice.Path, vaults.RegisterOptions{Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose, Priority: opts.Priority}, vault.Options{Kind: k, Mode: vault.Mode(choice.Mode), Name: choice.Name})
 	}
 	return e.adoptPath(positional[0], *opts, vault.Options{Kind: k, Mode: m, Name: opts.Name})
 }
@@ -1963,6 +1963,10 @@ func (e *env) upgrade(args []string) (int, error) {
 	for _, root := range roots {
 		res, err := vault.Upgrade(root, time.Now())
 		if err != nil {
+			if *all && errors.Is(err, vault.ErrV1) {
+				e.console.Step(console.Skip, home.Display(root), "v1 vault; adopt it")
+				continue
+			}
 			return 1, err
 		}
 		if len(res.Added)+len(res.Moved) == 0 {
@@ -2343,7 +2347,11 @@ func (e *env) doctor(args []string) (int, error) {
 		switch {
 		case vault.IsVault(root):
 			status = "ok"
-			if v, err := vault.Open(root); err == nil {
+			switch v, err := vault.Open(root); {
+			case errors.Is(err, vault.ErrV1):
+				status = "v1"
+				ok = false
+			case err == nil:
 				if pending, _ := txn.Pending(v); pending != nil {
 					status = "recover"
 					ok = false

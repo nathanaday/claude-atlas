@@ -311,8 +311,9 @@ findings come from its own lint.
   the title names a writable mount as its `target`. Then the page lands in
   the knowledge base, the operation's summary names the project, and the
   link resolves through the mount. A stub never lands in a read-only mount.
-- A knowledge base with `wiki/tasks/` or `inbox/` is a finding. A project with
-  `grants` or `scope` is a finding.
+- A knowledge base with `inbox/`, `ideas/`, `wiki/tasks/`, the task ledger,
+  `wiki/questions/`, or `wiki/sessions/` is a finding. A project with `grants`
+  or `scope` is a finding.
 
 ## A project inside a repository
 
@@ -429,8 +430,11 @@ The `wiki-ingest` agent's brief carries the mounts' real paths.
 
 No code migrates a v1 vault. `adopt PATH --as knowledge` writes the v2
 identity file and removes `inbox/`, `ideas/`, `wiki/tasks/`, and the task
-ledger, in one `setup` commit. `adopt PATH --as project` writes the identity
-file and keeps everything. On this machine:
+ledger, in one `setup` commit. Question and session pages stay, and lint
+reports them until they are moved to a project or deleted. Adopt commits a
+baseline first when the tree is dirty or has no history, so nothing it removes
+is lost. `adopt PATH --as project` writes the identity file and keeps
+everything. On this machine:
 
 1. `new-knowledge ai-ml`. Copy the source, entity, and concept pages of
    `personal-kb` and `cs566-course` into it. Merge the two `.raw/captured/`

@@ -520,6 +520,21 @@ func TestTaskCommands(t *testing.T) {
 	}
 }
 
+func TestAV1VaultIsNamedByDoctorAndUpgrade(t *testing.T) {
+	h, vaults := setup(t)
+	welcome := filepath.Join(vaults, "welcome")
+	os.WriteFile(filepath.Join(welcome, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "v1      welcome") {
+		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
+	}
+	if code := h.run("upgrade", "--all"); code != 0 || !strings.Contains(h.out.String(), "v1 vault; adopt it") {
+		t.Fatalf("upgrade --all exit %d:\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("upgrade", "welcome"); code != 1 || !strings.Contains(h.err.String(), "adopt") {
+		t.Fatalf("one v1 vault still fails: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+}
+
 func TestBareCommandOpensTheTreeOrExplains(t *testing.T) {
 	// Piped: the usage, as before.
 	var out, errOut bytes.Buffer

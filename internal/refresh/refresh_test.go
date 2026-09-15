@@ -122,6 +122,13 @@ func TestDeriveMarksMissingVault(t *testing.T) {
 	if notes := strings.Join(Signals(leaf(legacy), state, today), "\n"); !strings.Contains(notes, "claude-obsidian vault; adopt it") {
 		t.Fatalf("signals %q", notes)
 	}
+	v1 := t.TempDir()
+	os.MkdirAll(filepath.Join(v1, "wiki"), 0o755)
+	os.WriteFile(filepath.Join(v1, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
+	state = Derive(leaf(v1), today, "t")
+	if state.VaultOK || state.VaultError != "v1 vault; run claude-atlas adopt" {
+		t.Fatalf("v1 vault %+v", state)
+	}
 }
 
 func TestDeriveTakesLaterOfLogAndMtime(t *testing.T) {

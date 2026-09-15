@@ -260,7 +260,7 @@ func (s *Server) capture(ctx context.Context, req *mcp.CallToolRequest, a Captur
 
 type RouteArgs struct {
 	VaultArg
-	Type  string `json:"type" jsonschema:"page type: source, entity, concept, question, session; in lyt mode also note or moc"`
+	Type  string `json:"type" jsonschema:"page type: source, entity, concept; in a project also question, session; in lyt mode also note or moc"`
 	Title string `json:"title" jsonschema:"the page title; it becomes the file name"`
 }
 
