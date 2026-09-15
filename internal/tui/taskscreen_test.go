@@ -134,3 +134,33 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 		t.Fatalf("t on a knowledge base: tasks=%v err=%q", kb.tasks, kb.errMsg)
 	}
 }
+
+// The same for the plant prompt on the board: the project it would plant into can go
+// away while the user is typing.
+func TestPlantSurvivesAReloadThatDroppedTheProject(t *testing.T) {
+	ledgers := map[string]*tasks.Ledger{
+		"/v/p3": {Tasks: []tasks.Record{{Task: tasks.Task{ID: "task-20260901-aaaa", Path: "wiki/tasks/x.md", Title: "Fix it", Status: "active", Priority: "high"}}}},
+	}
+	var planted []string
+	entries := entriesOf(sample())
+	hooks := taskHooks(ledgers, &planted)
+	hooks.Load = func() ([]registry.Entry, error) { return entries, nil }
+	v := keyV(newView(sample(), Opener{}, hooks), "T")
+	if v.tasks == nil || len(v.tasks.rows) != 1 {
+		t.Fatalf("one task to start: %+v", v.tasks)
+	}
+	v = keyV(v, "p")
+	v = typeV(v, "Later")
+	entries = nil
+	next, _ := v.Update(refreshedMsg{})
+	v = next.(view)
+	if v.tasks == nil || v.tasks.plantTarget() != nil {
+		t.Fatalf("the refresh takes the project away: %+v", v.tasks)
+	}
+	_ = v.View() // the prompt has no project to name and must still render
+	next, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	v = next.(view)
+	if v.tasks == nil || v.tasks.mode != tasksList || len(planted) != 0 || !strings.Contains(v.tasks.err, "the list changed") {
+		t.Fatalf("enter after the project is gone: mode=%d planted=%v err=%q", v.tasks.mode, planted, v.tasks.err)
+	}
+}

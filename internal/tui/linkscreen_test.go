@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -192,5 +193,41 @@ func TestReposScreenNeedsHooksAndAProject(t *testing.T) {
 	kb = keyV(kb, "l")
 	if kb.links != nil || !strings.Contains(kb.errMsg, "knowledge base") {
 		t.Fatalf("a knowledge base has no repositories: links=%v err=%q", kb.links, kb.errMsg)
+	}
+}
+
+// A refresh can land while a confirmation is up and take the row away with it.
+func TestUnlinkSurvivesAReloadThatDroppedTheRepository(t *testing.T) {
+	entries := entriesOf(sample())
+	removed := 0
+	hooks := Hooks{
+		Load:       func() ([]registry.Entry, error) { return entries, nil },
+		Refresh:    func() error { return nil },
+		AddRepo:    func(registry.Entry, string, bool) (vault.Repo, string, error) { return vault.Repo{}, "", nil },
+		RemoveRepo: func(registry.Entry, string) error { removed++; return nil },
+	}
+	v := pressV(newView(sample(), Opener{}, hooks), tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
+	v = keyV(v, "l")
+	if v.links == nil || len(v.links.rows) != 1 {
+		t.Fatalf("one repository to start: %+v", v.links)
+	}
+	v = keyV(v, "u")
+	if v.links.mode != linksConfirmUnlink {
+		t.Fatalf("mode %d", v.links.mode)
+	}
+	for i := range entries {
+		if entries[i].Path == "/v/p3" {
+			entries[i].Repos = nil
+		}
+	}
+	next, _ := v.Update(refreshedMsg{})
+	v = next.(view)
+	if v.links == nil || len(v.links.rows) != 0 {
+		t.Fatalf("the refresh takes the row away: %+v", v.links)
+	}
+	_ = v.View() // the prompt has no row to name and must still render
+	v = keyV(v, "y")
+	if v.links == nil || v.links.mode != linksList || removed != 0 || !strings.Contains(v.links.status, "the list changed") {
+		t.Fatalf("y after the row is gone: mode=%d removed=%d status=%q", v.links.mode, removed, v.links.status)
 	}
 }

@@ -36,6 +36,9 @@ const (
 	linksConfirmUnlink
 )
 
+// listChanged answers a confirmation whose row a background reload took away.
+const listChanged = "the list changed; try again"
+
 // linkRow is one box: the repository as the identity file holds it, and what the last
 // refresh found in its folder.
 type linkRow struct {
@@ -398,6 +401,7 @@ func (s linksScreen) unlink() linksScreen {
 	row := s.current()
 	s.mode = linksList
 	if row == nil {
+		s.status = listChanged
 		return s
 	}
 	if s.hooks.RemoveRepo == nil {
@@ -495,8 +499,13 @@ func (s linksScreen) view() string {
 		b.WriteString("  " + activeL.Width(9).Render("Where") + s.where.view("           ") + "\n")
 		b.WriteString("  " + dim.Render("the default sits under repos/ in the vault, ignored by the vault's git; any folder outside the vault works too · "+pathHint()+" · Enter create · Esc back") + "\n")
 	case linksConfirmUnlink:
+		row := s.current()
+		if row == nil {
+			b.WriteString("  " + dim.Render(listChanged) + "\n")
+			break
+		}
 		fmt.Fprintf(&b, "  %s Unlink %s from %s? The folder and its history stay.  %s\n",
-			errSt.Render("▲"), s.current().repo.Name, s.entry.Name, title.Render("y")+" / "+title.Render("n"))
+			errSt.Render("▲"), row.repo.Name, s.entry.Name, title.Render("y")+" / "+title.Render("n"))
 	default:
 		hints := "n new repository · a mount one that exists"
 		if len(s.rows) > 0 {

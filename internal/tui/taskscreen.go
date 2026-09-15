@@ -190,6 +190,11 @@ func (s tasksScreen) plant() tasksScreen {
 		return s
 	}
 	target := s.plantTarget()
+	if target == nil {
+		s.mode = tasksList
+		s.err = listChanged
+		return s
+	}
 	planted, err := s.hooks.Plant(target.Entry, tasks.Plant{Text: text})
 	if err != nil {
 		s.err = err.Error()
@@ -299,9 +304,12 @@ func (s tasksScreen) view() string {
 	b.WriteString("\n")
 	switch s.mode {
 	case tasksPlant:
-		target := s.plantTarget()
+		into := listChanged
+		if target := s.plantTarget(); target != nil {
+			into = "plants into " + target.Entry.Name + " with status planted · Enter plant · Esc cancel"
+		}
 		b.WriteString("  " + activeL.Width(9).Render("Idea") + s.idea.View() + "\n")
-		b.WriteString("  " + dim.Render("plants into "+target.Entry.Name+" with status planted · Enter plant · Esc cancel") + "\n")
+		b.WriteString("  " + dim.Render(into) + "\n")
 	default:
 		hints := "p plant"
 		if len(s.rows) > 0 {

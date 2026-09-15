@@ -13,6 +13,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -41,7 +42,29 @@ func sample() []Item {
 	// p3 mounts a knowledge base and works in one repository.
 	items[1].Entry.Mounts = []registry.Mount{{ID: "id-ai-ml", Name: "ai-ml", Access: vault.AccessWrite, Effective: vault.AccessWrite, Path: "/v/ai-ml/wiki"}}
 	items[1].Entry.Repos = []registry.Repo{{Name: "atlas", Path: "/code/atlas", Remote: "git@example.com:atlas.git", Changes: "pr"}}
+	// One vault the scan found but could not read.
+	items = append(items, Item{Entry: registry.Entry{Path: "/v/old-notes", Error: v1Error}})
 	return items
+}
+
+// v1Error is what the scan says about a vault from version 1; a box wraps it, so the
+// tree is checked for its first words only.
+const (
+	v1Error = "v1 vault; run claude-atlas adopt /v/old-notes --as knowledge|project"
+	v1Start = "v1 vault; run claude-atlas adopt"
+)
+
+// findVault moves the cursor to the box of the vault with that name.
+func findVault(t *testing.T, v view, name string) view {
+	t.Helper()
+	for i, r := range v.rows {
+		if r.kind == rowVault && entryName(r.item.Entry) == name {
+			v.cursor = i
+			return v
+		}
+	}
+	t.Fatalf("no box for %s in\n%s", name, v.View())
+	return v
 }
 
 func entriesOf(items []Item) []registry.Entry {
@@ -108,7 +131,7 @@ func TestTreeShowsProjectsThenKnowledge(t *testing.T) {
 	if strings.Index(out, "▾ projects") > strings.Index(out, "▾ knowledge") {
 		t.Error("projects should come before knowledge")
 	}
-	if got := kinds(v); got != "CPCPCPCPP" {
+	if got := kinds(v); got != "CPCPCPCPPCP" {
 		t.Fatalf("rows %s", got)
 	}
 	if !strings.HasSuffix(v.lines[len(v.lines)-1], "(end)") {
@@ -201,18 +224,18 @@ func TestFoldBranchAndFoldAll(t *testing.T) {
 		t.Fatal("enter should expand the category")
 	}
 	v = keyV(v, "-")
-	if got := kinds(v); got != "CC" || !strings.Contains(v.View(), "▸ projects") {
+	if got := kinds(v); got != "CCC" || !strings.Contains(v.View(), "▸ projects") {
 		t.Fatalf("collapse all: rows %s\n%s", got, v.View())
 	}
 	if r := v.current(); r == nil || r.path != "projects" {
 		t.Fatalf("collapse all should leave the cursor on the visible ancestor: %+v", r)
 	}
 	v = keyV(v, "+")
-	if got := kinds(v); got != "CPCPCPCPP" || v.current().path != "projects" {
+	if got := kinds(v); got != "CPCPCPCPPCP" || v.current().path != "projects" {
 		t.Fatalf("expand all: rows %s cursor %+v", got, v.current())
 	}
 	v = pressV(v, tea.KeyLeft) // left on a category folds it
-	if r := v.current(); r.path != "projects" || !v.collapsed["projects"] || kinds(v) != "CCPP" {
+	if r := v.current(); r.path != "projects" || !v.collapsed["projects"] || kinds(v) != "CCPPCP" {
 		t.Fatalf("left on category: %+v rows %s", r, kinds(v))
 	}
 }
@@ -615,5 +638,45 @@ func TestIngestFromTheTree(t *testing.T) {
 	kb := keyV(pressV(newView(sample(), op, hooks), tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown), "i")
 	if kb.ingest != nil || !strings.Contains(kb.errMsg, "knowledge base") {
 		t.Fatalf("i on a knowledge base: ingest=%v err=%q", kb.ingest, kb.errMsg)
+	}
+}
+
+func TestAVaultTheScanCouldNotReadSitsUnderProblems(t *testing.T) {
+	var asked []string
+	hooks := Hooks{
+		Load: func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
+		Tasks: func(e registry.Entry) (tasks.Ledger, []string, error) {
+			asked = append(asked, e.Name)
+			return tasks.Empty(), nil, nil
+		},
+	}
+	v := newView(sample(), Opener{}, hooks)
+	out := v.View()
+	t.Logf("\n%s", out)
+	if !strings.Contains(out, "▾ problems") || !strings.Contains(out, "old-notes") || !strings.Contains(out, v1Start) {
+		t.Fatalf("the folder, the vault, and its reason belong in the tree:\n%s", out)
+	}
+	if strings.Index(out, "▾ problems") < strings.Index(out, "▾ knowledge") {
+		t.Errorf("problems comes after projects and knowledge:\n%s", out)
+	}
+	v = findVault(t, v, "old-notes")
+	if hints := v.treeHints(); strings.Contains(hints, "i ingest") || strings.Contains(hints, "t tasks") || strings.Contains(hints, "l repos") {
+		t.Errorf("nothing but opening and editing works on it: %q", hints)
+	}
+	v = pressV(v, tea.KeyEnter)
+	detail := v.View()
+	if v.detail == nil || !strings.Contains(detail, v1Error) || !strings.Contains(detail, "/v/old-notes") {
+		t.Fatalf("the detail page says what is wrong:\n%s", detail)
+	}
+	if strings.Contains(detail, "i ingest") || strings.Contains(detail, "t tasks") || strings.Contains(detail, "l repos") {
+		t.Errorf("detail footer:\n%s", detail)
+	}
+	v = pressV(v, tea.KeyEsc)
+	v = keyV(v, "T")
+	if v.tasks == nil || len(v.tasks.rows) != 0 {
+		t.Fatalf("the board opens with no tasks: %+v", v.tasks)
+	}
+	if strings.Join(asked, ",") != "welcome,p3,course" {
+		t.Fatalf("the board asks the projects only: %v", asked)
 	}
 }
