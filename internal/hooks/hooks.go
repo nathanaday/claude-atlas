@@ -63,23 +63,25 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	v, err := findVault(in, env)
 	via := ""
 	policy := ""
+	// A mounted repository may sit inside the vault's folder or anywhere else; the atlas
+	// knows either way, and a session inside one is told how changes land there.
+	match, candidates, _ := discover.Vault(home.Resolve(env(home.EnvHome)), in.Cwd)
 	if err != nil {
-		match, candidates, _ := discover.Vault(home.Resolve(env(home.EnvHome)), in.Cwd)
 		switch {
 		case match != nil:
 			if v, err = vault.Open(match.Vault); err != nil {
 				return nil
 			}
 			via = match.Project.Name
-			if match.Page != nil {
-				policy = fmt.Sprintf("In %s, %s. The repos tool says the same.", match.Page.Name, links.PolicyText(match.Page.Policy()))
-			}
 		case len(candidates) > 1:
 			_, err := fmt.Fprintf(w, "claude-atlas: this folder is linked by several atlas projects: %s. Pass vault to the atlas tools, or set %s.\n", discover.Describe(candidates), vault.EnvVault)
 			return err
 		default:
 			return nil
 		}
+	}
+	if match != nil && match.Page != nil && match.Vault == v.Root {
+		policy = fmt.Sprintf("This folder is the mounted repository %s. In it, %s. The repos tool says the same.", match.Page.Name, links.PolicyText(match.Page.Policy()))
 	}
 	switch env("CLAUDE_ATLAS_SESSION_CONTEXT") {
 	case "0":

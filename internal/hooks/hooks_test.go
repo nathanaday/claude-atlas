@@ -147,7 +147,7 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 		t.Fatal(err)
 	}
 	text = out.String()
-	for _, want := range []string{"linked to the project V", "Open tasks: 1", "<vault-context>", "In code, changes land as commits on the current branch. The repos tool says the same."} {
+	for _, want := range []string{"linked to the project V", "Open tasks: 1", "<vault-context>", "mounted repository code. In it, changes land as commits on the current branch. The repos tool says the same."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in repo session:\n%s", want, text)
 		}
@@ -169,5 +169,17 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 	SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, e, true, now)
 	if out.Len() != 0 {
 		t.Fatalf("silent outside linked folders:\n%s", out.String())
+	}
+	// A repository mounted inside the vault's own folder: the vault is found directly,
+	// and the session is still told it sits in a mounted repository.
+	inside := filepath.Join(v.Root, "paper")
+	os.MkdirAll(inside, 0o755)
+	if _, err := vaults.AddLink(cfg, p, inside, true); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	SessionStart(strings.NewReader(`{"cwd":"`+inside+`"}`), &out, e, false, now)
+	if !strings.Contains(out.String(), "claude-atlas vault: v") || !strings.Contains(out.String(), "mounted repository paper. In it, changes land as commits") {
+		t.Fatalf("repo inside the vault:\n%s", out.String())
 	}
 }

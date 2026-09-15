@@ -152,6 +152,11 @@ the vaults directory (default `~/Documents/Vaults`).
 - The repository's `main` branch is a marketplace named
   `nathanaday-claude-atlas`; a local checkout works as a marketplace source
   for development (`claude-atlas setup --plugin-source /path/to/checkout`).
+- A session started inside a checkout of this repository reports that a
+  project MCP server `${CLAUDE_PLUGIN_ROOT}/scripts/atlas` failed to start:
+  Claude Code reads the checkout's own `.mcp.json` as a project server, and
+  that variable is set only for plugins. The installed plugin's copy works;
+  the message is noise.
 
 ## Obsidian facts
 
