@@ -53,7 +53,6 @@ func TestLinksOrphansAndIndex(t *testing.T) {
 	}
 	want := []string{
 		"wiki/concepts/Alpha.md→Alpha#Missing:heading-not-found",
-		"wiki/concepts/Beta.md→Al:target-not-found",
 		"wiki/index.md→Gone:target-not-found",
 	}
 	if strings.Join(dead, "|") != strings.Join(want, "|") {
@@ -89,11 +88,14 @@ func TestLinksOrphansAndIndex(t *testing.T) {
 	if len(r.EmptySections) != 1 || r.EmptySections[0].Heading != "Empty" || r.EmptySections[0].Path != "wiki/concepts/Alpha.md" {
 		t.Fatalf("empty %+v", r.EmptySections)
 	}
-	if r.Summary.IssuesFound != 3+1+1+3+4+1+1+2 {
+	if len(r.WantedPages) != 1 || r.WantedPages[0].Title != "Al" || r.WantedPages[0].Links[0].Source != "wiki/concepts/Beta.md" {
+		t.Fatalf("wanted %+v", r.WantedPages)
+	}
+	if r.Summary.IssuesFound != 2+1+1+3+4+1+1+2 {
 		t.Fatalf("issues %d: %s", r.Summary.IssuesFound, r.Markdown())
 	}
 	md := r.Markdown()
-	if !strings.Contains(md, "## Dead links (3)") || !strings.Contains(md, "`wiki/index.md:") {
+	if !strings.Contains(md, "## Dead links (2)") || !strings.Contains(md, "`wiki/index.md:") {
 		t.Fatalf("markdown:\n%s", md)
 	}
 }
@@ -123,6 +125,71 @@ func TestOverlayAndProblems(t *testing.T) {
 	}
 	if strings.Contains(joined, "index.md") {
 		t.Fatal("problems must be limited to the given paths")
+	}
+}
+
+func TestWantedPagesAndNearMatches(t *testing.T) {
+	root := fixture(t, map[string]string{
+		"wiki/index.md":                mkpage("Index", "# Index\n\n- [[Atlas]]\n- [[Gradient Clipping]]\n"),
+		"wiki/log.md":                  mkpage("Log", "## 2026-01-01 — op\n\n- [[Deleted Page]]\n"),
+		"wiki/folds/Fold.md":           mkpage("Fold", "# Fold\n\n[[Deleted Page]]\n"),
+		"wiki/concepts/CNN.md":         mkpage("CNN", "# CNN\n\ntext\n"),
+		"wiki/concepts/Transformer.md": mkpage("Transformer", "# T\n\n[[Chapter 1]] [[Atlas]] [[CNN]]\n"),
+		"wiki/concepts/Chapter 1.md":   mkpage("Chapter 1", "# Chapter 1\n\n[[vanishing gradient problem|VGP]] [[Transformers]]\n"),
+		"wiki/entities/Atlas.md":       mkpage("Atlas", "# Atlas\n\n[[vanishing gradient problem]] and [[Vanishing Gradient Problem#Causes]].\n\n[[Atals]] [[Chapter 2]] [[RNN]] ![[missing.png]] [[notes/Elsewhere]] [[What? Why]]\n"),
+	})
+	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dead []string
+	for _, f := range r.DeadLinks {
+		dead = append(dead, f.Source+"→"+f.Target+":"+f.Suggestion)
+	}
+	wantDead := []string{
+		"wiki/concepts/Chapter 1.md→Transformers:Transformer",
+		"wiki/entities/Atlas.md→Atals:Atlas",
+		"wiki/entities/Atlas.md→missing.png:",
+		"wiki/entities/Atlas.md→notes/Elsewhere:",
+		"wiki/entities/Atlas.md→What? Why:",
+		"wiki/folds/Fold.md→Deleted Page:",
+		"wiki/index.md→Gradient Clipping:",
+		"wiki/log.md→Deleted Page:",
+	}
+	if strings.Join(dead, "|") != strings.Join(wantDead, "|") {
+		t.Fatalf("dead links\n got %v\nwant %v", dead, wantDead)
+	}
+	var wanted []string
+	for _, w := range r.WantedPages {
+		wanted = append(wanted, w.Title)
+	}
+	// Short names match only when equal, and names with different digits never match.
+	if strings.Join(wanted, "|") != "Chapter 2|RNN|vanishing gradient problem" {
+		t.Fatalf("wanted %v", wanted)
+	}
+	if len(r.WantedPages[2].Links) != 3 {
+		t.Fatalf("every link to a wanted page is kept: %+v", r.WantedPages[2])
+	}
+	if r.Summary.WantedPages != 3 || r.Summary.CategoryCounts["dead_links"] != 8 {
+		t.Fatalf("summary %+v", r.Summary)
+	}
+	if _, counted := r.Summary.CategoryCounts["wanted_pages"]; counted {
+		t.Fatal("wanted pages are not findings")
+	}
+	md := r.Markdown()
+	for _, want := range []string{"## Wanted pages (3)", "- vanishing gradient problem ← `wiki/concepts/Chapter 1.md:12`", `did you mean "Atlas"?`} {
+		if !strings.Contains(md, want) {
+			t.Errorf("missing %q in markdown:\n%s", want, md)
+		}
+	}
+	if !strings.Contains(string(r.JSON()), `"suggestion": "Atlas"`) {
+		t.Fatal("the suggestion is in the JSON report")
+	}
+	problems := strings.Join(r.Problems([]string{"wiki/entities/Atlas.md"}), "\n")
+	for _, want := range []string{`links to "vanishing gradient problem", which has no page yet`, `did you mean "Atlas"?`} {
+		if !strings.Contains(problems, want) {
+			t.Errorf("missing %q in problems:\n%s", want, problems)
+		}
 	}
 }
 
@@ -158,7 +225,7 @@ func TestNewVaultHasNoFindings(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r.Summary.IssuesFound != 0 {
+		if r.Summary.IssuesFound != 0 || r.Summary.WantedPages != 0 {
 			t.Errorf("%s vault:\n%s", mode, r.Markdown())
 		}
 	}

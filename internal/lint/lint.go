@@ -15,13 +15,14 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nathanaday/claude-atlas/internal/ledger"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-const ReportVersion = 1
+const ReportVersion = 2
 
 // Options tune one run.
 type Options struct {
@@ -41,6 +42,7 @@ type LinkFinding struct {
 	Syntax       string `json:"syntax"`
 	Reason       string `json:"reason"`
 	ResolvedPath string `json:"resolved_path,omitempty"`
+	Suggestion   string `json:"suggestion,omitempty"`
 }
 
 // Ambiguous is a link with more than one candidate.
@@ -50,6 +52,18 @@ type Ambiguous struct {
 	Target     string   `json:"target"`
 	Syntax     string   `json:"syntax"`
 	Candidates []string `json:"candidates"`
+}
+
+// LinkRef is one place a link appears.
+type LinkRef struct {
+	Source string `json:"source"`
+	Line   int    `json:"line"`
+}
+
+// WantedPage is a page the wiki links to that nobody has written yet.
+type WantedPage struct {
+	Title string    `json:"title"`
+	Links []LinkRef `json:"links"`
 }
 
 type Duplicate struct {
@@ -78,6 +92,7 @@ type Summary struct {
 	PagesScanned   int            `json:"pages_scanned"`
 	LinksScanned   int            `json:"links_scanned"`
 	IssuesFound    int            `json:"issues_found"`
+	WantedPages    int            `json:"wanted_pages"`
 	CategoryCounts map[string]int `json:"category_counts"`
 }
 
@@ -97,6 +112,7 @@ type Report struct {
 	ReadErrors         []PathFinding        `json:"read_errors"`
 	LedgerErrors       []PathFinding        `json:"ledger_errors"`
 	TaskErrors         []PathFinding        `json:"task_errors"`
+	WantedPages        []WantedPage         `json:"wanted_pages"`
 }
 
 type page struct {
@@ -239,6 +255,8 @@ func Run(root string, opts Options) (*Report, error) {
 	}
 
 	resolver := newResolver(targets)
+	near := newNearIndex(targets)
+	wanted := map[string]*WantedPage{}
 	incoming := map[string]map[string]bool{}
 	for _, pg := range pages {
 		incoming[pg.path] = map[string]bool{}
@@ -262,6 +280,16 @@ func Run(root string, opts Options) (*Report, error) {
 			}
 			if len(candidates) == 0 {
 				entry := LinkFinding{Source: l.source, Line: l.line, Target: l.target, Syntax: l.syntax, Reason: "target-not-found"}
+				if title, ok := wantedTitle(l, pg); ok {
+					if entry.Suggestion = near.match(title); entry.Suggestion == "" {
+						key := strings.ToLower(title)
+						if wanted[key] == nil {
+							wanted[key] = &WantedPage{Title: title}
+						}
+						wanted[key].Links = append(wanted[key].Links, LinkRef{Source: l.source, Line: l.line})
+						continue
+					}
+				}
 				report.DeadLinks = append(report.DeadLinks, entry)
 				if pg.isIndex {
 					report.StaleIndexEntries = append(report.StaleIndexEntries, entry)
@@ -280,6 +308,10 @@ func Run(root string, opts Options) (*Report, error) {
 				}
 			}
 		}
+	}
+
+	for _, w := range wanted {
+		report.WantedPages = append(report.WantedPages, *w)
 	}
 
 	byStem := map[string][]*page{}
@@ -343,7 +375,7 @@ func Run(root string, opts Options) (*Report, error) {
 	}
 
 	sortFindings(report)
-	report.Summary = Summary{PagesScanned: len(pages), LinksScanned: links, CategoryCounts: map[string]int{
+	report.Summary = Summary{PagesScanned: len(pages), LinksScanned: links, WantedPages: len(report.WantedPages), CategoryCounts: map[string]int{
 		"dead_links":          len(report.DeadLinks),
 		"ambiguous_targets":   len(report.AmbiguousTargets),
 		"duplicate_basenames": len(report.DuplicateBasenames),
@@ -702,6 +734,127 @@ func fragmentError(l link, t target) string {
 	return ""
 }
 
+// wantedTitle returns the page a link names when the link is a placeholder: a bare
+// wikilink from an ordinary page whose name is already a valid file name.
+func wantedTitle(l link, pg *page) (string, bool) {
+	title := strings.TrimSpace(l.filePart)
+	if l.syntax != "wikilink" || pg.isIndex || title == "" || strings.Contains(title, "/") || vault.SanitizeTitle(title) != title {
+		return "", false
+	}
+	switch strings.ToLower(path.Ext(title)) {
+	case ".md", ".canvas", ".base":
+		return "", false
+	}
+	if pg.path == vault.LogPage || strings.HasPrefix(strings.ToLower(pg.path), "wiki/folds/") {
+		return "", false
+	}
+	return title, true
+}
+
+// nearIndex holds every page name and alias, to tell a typo from a new page.
+type nearIndex struct {
+	names []nearName
+}
+
+type nearName struct {
+	name string
+	key  []rune
+}
+
+func newNearIndex(targets []target) *nearIndex {
+	n := &nearIndex{}
+	add := func(name string) {
+		if key := nameKey(name); len(key) > 0 {
+			n.names = append(n.names, nearName{name: name, key: key})
+		}
+	}
+	for _, t := range targets {
+		if strings.EqualFold(path.Ext(t.path), ".md") {
+			add(strings.TrimSuffix(path.Base(t.path), path.Ext(t.path)))
+		}
+		if t.page != nil {
+			for _, alias := range t.page.aliases {
+				add(alias)
+			}
+		}
+	}
+	return n
+}
+
+// match returns the closest page name or alias to title, or "" when none is near: equal
+// once normalized, or with the same digits and one edit for 5 to 8 letters and digits,
+// two for more.
+func (n *nearIndex) match(title string) string {
+	key := nameKey(title)
+	if len(key) == 0 {
+		return ""
+	}
+	limit := 0
+	switch {
+	case len(key) > 8:
+		limit = 2
+	case len(key) > 4:
+		limit = 1
+	}
+	best, bestDist := "", limit+1
+	for _, c := range n.names {
+		if diff := len(c.key) - len(key); diff > limit || -diff > limit || digits(c.key) != digits(key) {
+			continue
+		}
+		if d := editDistance(key, c.key); d < bestDist || (d == bestDist && pathLess(c.name, best)) {
+			best, bestDist = c.name, d
+		}
+	}
+	return best
+}
+
+// nameKey lowercases a name and keeps its letters and digits.
+func nameKey(name string) []rune {
+	var key []rune
+	for _, r := range strings.ToLower(name) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			key = append(key, r)
+		}
+	}
+	return key
+}
+
+func digits(key []rune) string {
+	var b strings.Builder
+	for _, r := range key {
+		if unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// editDistance counts the insertions, deletions, substitutions, and swaps of adjacent
+// characters that turn a into b.
+func editDistance(a, b []rune) int {
+	d := make([][]int, len(a)+1)
+	for i := range d {
+		d[i] = make([]int, len(b)+1)
+		d[i][0] = i
+	}
+	for j := range d[0] {
+		d[0][j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			d[i][j] = min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+cost)
+			if i > 1 && j > 1 && a[i-1] == b[j-2] && a[i-2] == b[j-1] {
+				d[i][j] = min(d[i][j], d[i-2][j-2]+1)
+			}
+		}
+	}
+	return d[len(a)][len(b)]
+}
+
 func orphanCandidate(rel string) bool {
 	if orphanExcluded[strings.ToLower(path.Base(rel))] || folderIndexes[rel] {
 		return false
@@ -809,6 +962,7 @@ func sortFindings(r *Report) {
 		return a.Line < b.Line
 	})
 	sort.SliceStable(r.ReadErrors, func(i, j int) bool { return pathLess(r.ReadErrors[i].Path, r.ReadErrors[j].Path) })
+	sort.Slice(r.WantedPages, func(i, j int) bool { return pathLess(r.WantedPages[i].Title, r.WantedPages[j].Title) })
 }
 
 func linkLess(a, b LinkFinding) bool {
@@ -853,6 +1007,9 @@ func (r *Report) fillEmpty() {
 	if r.LedgerErrors == nil {
 		r.LedgerErrors = []PathFinding{}
 	}
+	if r.WantedPages == nil {
+		r.WantedPages = []WantedPage{}
+	}
 }
 
 // JSON renders the report.
@@ -873,7 +1030,7 @@ func (r *Report) Markdown() string {
 	}
 	section("Dead links", len(r.DeadLinks))
 	for _, f := range r.DeadLinks {
-		fmt.Fprintf(&b, "- `%s:%d` → `%s` (%s)\n", f.Source, f.Line, f.Target, f.Reason)
+		fmt.Fprintf(&b, "- `%s:%d` → `%s` (%s%s)\n", f.Source, f.Line, f.Target, f.Reason, suggestionHint(f))
 	}
 	section("Ambiguous targets", len(r.AmbiguousTargets))
 	for _, f := range r.AmbiguousTargets {
@@ -915,7 +1072,25 @@ func (r *Report) Markdown() string {
 	for _, f := range r.LedgerErrors {
 		fmt.Fprintf(&b, "- %s\n", f.Message)
 	}
+	section("Wanted pages", len(r.WantedPages))
+	if len(r.WantedPages) > 0 {
+		b.WriteString("Pages the wiki links to that nobody has written yet. Not findings; the stub tool creates them.\n\n")
+	}
+	for _, w := range r.WantedPages {
+		var refs []string
+		for _, l := range w.Links {
+			refs = append(refs, fmt.Sprintf("`%s:%d`", l.Source, l.Line))
+		}
+		fmt.Fprintf(&b, "- %s ← %s\n", w.Title, strings.Join(refs, ", "))
+	}
 	return b.String()
+}
+
+func suggestionHint(f LinkFinding) string {
+	if f.Suggestion == "" {
+		return ""
+	}
+	return fmt.Sprintf("; did you mean %q?", f.Suggestion)
 }
 
 // Problems lists every finding whose source or path is one of the given files, as short
@@ -928,7 +1103,14 @@ func (r *Report) Problems(paths []string) []string {
 	var out []string
 	for _, f := range r.DeadLinks {
 		if set[f.Source] {
-			out = append(out, fmt.Sprintf("%s:%d links to %q, which does not resolve (%s)", f.Source, f.Line, f.Target, f.Reason))
+			out = append(out, fmt.Sprintf("%s:%d links to %q, which does not resolve (%s%s)", f.Source, f.Line, f.Target, f.Reason, suggestionHint(f)))
+		}
+	}
+	for _, w := range r.WantedPages {
+		for _, l := range w.Links {
+			if set[l.Source] {
+				out = append(out, fmt.Sprintf("%s:%d links to %q, which has no page yet", l.Source, l.Line, w.Title))
+			}
 		}
 	}
 	for _, f := range r.AmbiguousTargets {

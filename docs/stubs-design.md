@@ -41,10 +41,14 @@ wanted page when all of these hold:
 5. No page stem or alias is a near match.
 
 Near match: lowercase both names and drop every character that is not a
-letter or a digit. The names match when the results are equal, or when the
-Levenshtein distance is at most 1 for a name of up to 8 characters and at
-most 2 for a longer one. The link stays in `dead_links` with `suggestion` set
-to the matching stem or alias, so `[[Atals]]` suggests `Atlas`.
+letter or a digit. The names match when the results are equal. Otherwise
+they must hold the same digits, and the edit distance (insertions,
+deletions, substitutions, and swaps of two adjacent characters) must be at
+most 1 for a name of 5 to 8 characters and at most 2 for a longer one. A name
+of 4 characters or fewer matches only when equal, so `[[RNN]]` is not a typo
+of `CNN`, and `[[Chapter 2]]` is not a typo of `Chapter 1`. The link stays in
+`dead_links` with `suggestion` set to the matching stem or alias, so
+`[[Atals]]` suggests `Atlas`.
 
 Entries group by file part without regard to case, since links resolve that
 way. Each entry holds `title`, the file part as first written in path and
