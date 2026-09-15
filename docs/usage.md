@@ -81,7 +81,9 @@ claude-atlas remove cs566
 ```
 
 `remove` drops a vault from the config. A vault inside the vaults directory
-cannot be forgotten: the scan finds it there, so move or delete the folder.
+cannot be forgotten: the scan finds it there, so move or delete the folder. A
+registered vault whose folder is gone is still listed, as `missing`, and
+`remove` takes its path or its folder's name to forget it.
 
 ## Work in a vault with Claude Code
 
@@ -171,7 +173,7 @@ claude-atlas upgrade --all
 
 The snippet, `.obsidian/snippets/claude-atlas.css`, colors the file explorer
 by kind of place: the wiki and each of its folders, `inbox/`, `ideas/`, and
-every mounted repository beside the wiki in its own color, so the split
+every linked repository beside the wiki in its own color, so the split
 between memory and deliverables shows at a glance. Upgrade enables it in the
 vault's appearance settings; reload Obsidian to see it.
 
@@ -191,7 +193,7 @@ bytes the vault already holds, ingested earlier or still waiting in the inbox,
 is skipped, so a folder that grows over time can be ingested again and only its
 new files cost anything. The vault remembers the folders it staged from, and an
 `ingest` with no path stages what is new in every one of them. A source folder
-is not a mounted repository; the atlas records nothing about it.
+is not a linked repository; the atlas records nothing about it.
 
 ```bash
 claude-atlas ingest sensor-triage ~/Papers
@@ -333,19 +335,19 @@ A command names a vault by its name, by its id or an id prefix of eight
 characters or more, or by its path. Two vaults with one name make the command
 ask for the path or the id instead.
 
-### Mount repositories
+### Link repositories
 
 A project has two kinds of place. The vault is memory: the wiki, the hot
 cache, the tasks. A repository is where the deliverables are made: the code,
 the paper, the slides, the report, in whatever structure the work needs.
-Mounting a repository on a project copies nothing. The project's identity file
+Linking a repository to a project copies nothing. The project's identity file
 records the repository's name, its remote, and how changes land there; the
 atlas config holds the path of a repository that sits outside the project's
 own `repos/` folder. `refresh` reports the branch, uncommitted changes, and
 last commit, and a commit counts as touching the project. A session started
-inside a mounted repository uses the project's vault.
+inside a linked repository uses the project's vault.
 
-Create a repository for a project, clone one from GitHub, or mount one that
+Create a repository for a project, clone one from GitHub, or link one that
 exists:
 
 ```bash
@@ -360,7 +362,7 @@ claude-atlas repos                                             # every project's
 claude-atlas unlink sensor-triage sensor-app
 ```
 
-A repository takes the name of its folder, and a project cannot mount two of
+A repository takes the name of its folder, and a project cannot link two of
 one name. It goes under the project's `repos/` folder or outside the vault;
 anywhere else inside the vault is refused, because the vault's git would take
 it in.
@@ -368,7 +370,7 @@ it in.
 **How changes land.** A repository with a remote gets a change policy, kept in
 the project's identity file as `changes`: `pr` means a session works on a
 branch and opens a pull request, never pushing to the default branch;
-`commit` means it commits on the current branch. `link` asks when it mounts
+`commit` means it commits on the current branch. `link` asks when it links
 or clones a repository with a remote, or takes `--changes pr|commit`; with
 no answer the default is `pr` when there is a remote and `commit` when there
 is none. A session started inside the repository is told the policy at its
@@ -390,7 +392,7 @@ leaves the folder alone.
 In `view`, `l` on a project shows its repositories, one box each with the
 name, the path, how changes land, and what the last refresh found. `n` creates
 one: a name, then a location that defaults to the project's `repos/` folder.
-`a` mounts one that exists, by path with Tab completion, or by a URL, which is
+`a` links one that exists, by path with Tab completion, or by a URL, which is
 cloned to a location you confirm; it asks before initializing git in a plain
 folder, and asks how changes should land when the repository has a remote. `e`
 edits the remote, the folder, and the change policy. `u` unlinks after asking.

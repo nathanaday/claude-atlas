@@ -12,7 +12,7 @@ import (
 type NotRepoError struct{ Path string }
 
 func (e *NotRepoError) Error() string {
-	return home.Display(e.Path) + " is not a git repository; a link is a mounted repository (initialize one there, or pass --init)"
+	return home.Display(e.Path) + " is not a git repository; a link is a git repository (initialize one there, or pass --init)"
 }
 
 // under gives path relative to root when path is root or inside it.

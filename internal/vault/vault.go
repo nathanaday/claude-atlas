@@ -1077,7 +1077,7 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 		return nil, fmt.Errorf("%s is not a directory", abs)
 	}
 	if !IsAdoptable(abs) {
-		return nil, fmt.Errorf("%s is not a vault: it has no .obsidian/, wiki/, or vault identity file; create one with `claude-atlas new-vault`", abs)
+		return nil, fmt.Errorf("%s is not a vault: it has no .obsidian/, wiki/, or vault identity file; create one with `claude-atlas new-project` or `new-knowledge`", abs)
 	}
 	existing, parsed := ReadConfig(abs)
 	res := &AdoptResult{Root: abs, WasLegacy: IsLegacy(abs)}

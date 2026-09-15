@@ -88,8 +88,27 @@ func TestSetupCreatesHomeAndFirstProject(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(h.home), "Atlas")); err == nil {
 		t.Fatal("setup must not create an atlas vault")
 	}
-	if code := h.run("setup", "--no-plugin"); code != 0 || !strings.Contains(h.out.String(), "keep       1 registered") {
+	if code := h.run("setup", "--no-plugin"); code != 0 || !strings.Contains(h.out.String(), "keep       1 found") {
 		t.Fatalf("rerun exit %d:\n%s", code, h.out.String())
+	}
+}
+
+// setup names a vault it cannot read instead of counting it as one that works.
+func TestSetupNamesAV1Vault(t *testing.T) {
+	h, vaults := setup(t)
+	legacy := project(vaults, "legacy")
+	os.MkdirAll(legacy, 0o755)
+	os.WriteFile(filepath.Join(legacy, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
+	code := h.run("setup", "--no-plugin")
+	out := h.out.String()
+	if code != 0 || !strings.Contains(out, "keep       1 found, 1 need adopting") {
+		t.Fatalf("setup exit %d:\n%s%s", code, out, h.err.String())
+	}
+	if !strings.Contains(out, "✗ vault") || !strings.Contains(out, legacy) || !strings.Contains(out, "v1 vault") {
+		t.Fatalf("setup should name the v1 vault:\n%s", out)
+	}
+	if !strings.Contains(out, "refreshed        1 vault\n") {
+		t.Fatalf("the count is of the vaults that work:\n%s", out)
 	}
 }
 
@@ -111,6 +130,9 @@ func TestNewProjectNewKnowledgeAndAdoptAs(t *testing.T) {
 	}
 	if code := h.run("new-knowledge", "x", "--access", "sometimes"); code != 2 {
 		t.Fatalf("bad access exit %d %s", code, h.err.String())
+	}
+	if code := h.run("repos", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "a knowledge base has no repositories; mount it in a project instead") || strings.Contains(h.out.String(), "claude-atlas link") {
+		t.Fatalf("repos on a knowledge base: exit %d\n%s", code, h.out.String())
 	}
 	outside := filepath.Join(t.TempDir(), "scratch")
 	if code := h.run("new-project", outside); code != 0 {

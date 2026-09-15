@@ -212,7 +212,7 @@ func recordRepo(h home.Home, cfg *home.Config, e registry.Entry, name, path, rem
 	return repo, path, nil
 }
 
-// AddRepo mounts a folder on a project: under <project>/repos/ it needs no config entry;
+// AddRepo links a folder to a project: under <project>/repos/ it needs no config entry;
 // elsewhere the config records its path. A folder that is not a git repository is
 // refused with NotRepoError unless initGit is set. It returns the identity entry and the
 // path.
@@ -246,7 +246,7 @@ func AddRepo(h home.Home, cfg *home.Config, e registry.Entry, target string, ini
 	return recordRepo(h, cfg, e, name, path, links.RemoteURL(path), now)
 }
 
-// CreateRepo makes a repository at <project>/repos/<name>, or at `at`, and mounts it.
+// CreateRepo makes a repository at <project>/repos/<name>, or at `at`, and links it.
 func CreateRepo(h home.Home, cfg *home.Config, e registry.Entry, name, at string, now time.Time) (vault.Repo, string, error) {
 	if err := requireProject(e); err != nil {
 		return vault.Repo{}, "", err
@@ -272,7 +272,7 @@ func CreateRepo(h home.Home, cfg *home.Config, e registry.Entry, name, at string
 	return recordRepo(h, cfg, e, name, dir, links.RemoteURL(dir), now)
 }
 
-// CloneRepo clones url into <project>/repos/<name>, or at `at`, and mounts it with the
+// CloneRepo clones url into <project>/repos/<name>, or at `at`, and links it with the
 // remote recorded.
 func CloneRepo(h home.Home, cfg *home.Config, e registry.Entry, url, at string, now time.Time) (vault.Repo, string, error) {
 	if err := requireProject(e); err != nil {
@@ -337,7 +337,7 @@ type RepoEdit struct {
 	Path    string  // point the entry at another folder
 }
 
-// EditRepo changes a repository's remote, change policy, or the folder it mounts.
+// EditRepo changes a repository's remote, change policy, or the folder it links.
 func EditRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, edit RepoEdit, now time.Time) (vault.Repo, error) {
 	if err := requireProject(e); err != nil {
 		return vault.Repo{}, err

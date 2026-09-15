@@ -23,7 +23,8 @@ If `status` fails because no vault is selected, stop and tell the user to run on
 of these in a terminal, then start a session inside the vault:
 
 ```bash
-claude-atlas new-vault                 # create a vault, step by step
+claude-atlas new-project               # create a project, step by step
+claude-atlas new-knowledge             # create a knowledge base, step by step
 claude-atlas adopt /path/to/vault      # an existing Obsidian or claude-obsidian vault
 ```
 

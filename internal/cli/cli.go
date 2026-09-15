@@ -62,8 +62,8 @@ Across the vaults:
   refresh                   read every vault again and rewrite the registry
 
 Repositories (a project's deliverables; memory stays in the vault):
-  link NAME PATH|URL        mount a repository on a project, or clone one from a URL; --init makes a plain folder one first
-  new-repo NAME REPO        create a repository for a project and mount it; --at DIR places it
+  link NAME PATH|URL        link a repository to a project, or clone one from a URL; --init makes a plain folder one first
+  new-repo NAME REPO        create a repository for a project and link it; --at DIR places it
   unlink NAME REPO          drop that repository from the project; the folder stays
   repos [NAME]              one project's repositories, or every project's
   edit-repo NAME REPO       set a repository's remote, folder, or how changes land: --changes pr|commit
@@ -436,21 +436,23 @@ func (e *env) newProject(args []string) (int, error) {
 	if len(positional) > 1 {
 		return 2, errors.New("usage: claude-atlas new-project NAME|PATH [--name N] [--tags a,b] [--mode generic|lyt]")
 	}
-	m, err := parseMode(*mode)
-	if err != nil {
-		return 2, err
-	}
-	if len(positional) == 0 {
-		if !e.console.Interactive() {
-			return 2, errors.New("usage: claude-atlas new-project NAME|PATH (the interactive screen needs a terminal)")
+	opts := vault.Options{Kind: vault.Project, Name: *name}
+	if *mode != "" {
+		if opts.Mode, err = vault.ParseMode(*mode); err != nil {
+			return 2, err
 		}
-		return e.newVaultInteractive(vault.Project)
 	}
 	var edit vaults.Edit
 	if list := splitTags(*tags); len(list) > 0 {
 		edit.Tags = &list
 	}
-	return e.createVault(positional[0], vault.Options{Kind: vault.Project, Mode: m, Name: *name}, edit)
+	if len(positional) == 0 {
+		if !e.console.Interactive() {
+			return 2, errors.New("usage: claude-atlas new-project NAME|PATH (the interactive screen needs a terminal)")
+		}
+		return e.newVaultInteractive(opts, edit)
+	}
+	return e.createVault(positional[0], opts, edit)
 }
 
 func (e *env) newKnowledge(args []string) (int, error) {
@@ -466,15 +468,11 @@ func (e *env) newKnowledge(args []string) (int, error) {
 	if len(positional) > 1 {
 		return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH [--name N] [--scope TEXT] [--access open|guarded] [--mode generic|lyt]")
 	}
-	m, err := parseMode(*mode)
-	if err != nil {
-		return 2, err
-	}
-	if len(positional) == 0 {
-		if !e.console.Interactive() {
-			return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH (the interactive screen needs a terminal)")
+	opts := vault.Options{Kind: vault.Knowledge, Name: *name}
+	if *mode != "" {
+		if opts.Mode, err = vault.ParseMode(*mode); err != nil {
+			return 2, err
 		}
-		return e.newVaultInteractive(vault.Knowledge)
 	}
 	set := setFlags(fs)
 	if set["access"] {
@@ -489,7 +487,13 @@ func (e *env) newKnowledge(args []string) (int, error) {
 	if set["access"] {
 		edit.Access = access
 	}
-	return e.createVault(positional[0], vault.Options{Kind: vault.Knowledge, Mode: m, Name: *name}, edit)
+	if len(positional) == 0 {
+		if !e.console.Interactive() {
+			return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH (the interactive screen needs a terminal)")
+		}
+		return e.newVaultInteractive(opts, edit)
+	}
+	return e.createVault(positional[0], opts, edit)
 }
 
 // createVault makes a vault at arg, records the identity fields the template does not
@@ -542,28 +546,39 @@ func (e *env) finishVault(cfg *home.Config, path string) (int, error) {
 	return 0, nil
 }
 
-// newVaultInteractive asks the add screen for a vault of a kind, then creates it.
-func (e *env) newVaultInteractive(kind vault.Kind) (int, error) {
+// newVaultInteractive asks the add screen for a vault of opts.Kind, then creates it. A
+// flag the user gave wins over the screen's answer, as it does on adopt.
+func (e *env) newVaultInteractive(opts vault.Options, edit vaults.Edit) (int, error) {
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
-	choice, err := tui.RunAddVault(cfg.VaultsDir, kind)
+	choice, err := tui.RunAddVault(cfg.VaultsDir, opts.Kind)
 	if err != nil {
 		return 1, err
 	}
 	if choice == nil {
 		return 1, vaults.ErrCancelled
 	}
-	mode, err := parseMode(choice.Mode)
-	if err != nil {
-		return 1, err
+	opts.Kind = choice.Kind
+	if opts.Name == "" {
+		opts.Name = choice.Name
 	}
-	opts := vault.Options{Kind: choice.Kind, Mode: mode, Name: choice.Name}
+	if opts.Mode == "" {
+		if opts.Mode, err = parseMode(choice.Mode); err != nil {
+			return 1, err
+		}
+	}
+	if edit.Tags == nil && len(choice.Tags) > 0 {
+		edit.Tags = &choice.Tags
+	}
+	if edit.Scope == nil && choice.Scope != "" {
+		edit.Scope = &choice.Scope
+	}
 	if _, err := vaults.Create(choice.Path, opts, e.console, false); err != nil {
 		return 1, err
 	}
-	if err := recordFacts(*choice); err != nil {
+	if err := vaults.EditIdentity(registry.Entry{Path: choice.Path, Kind: opts.Kind}, edit, time.Now()); err != nil {
 		return 1, err
 	}
 	return e.finishVault(cfg, choice.Path)
@@ -993,8 +1008,14 @@ func (e *env) openVault(args []string) (int, error) {
 	return 0, nil
 }
 
-// skillHint is printed before handing the terminal to Claude Code.
-const skillHint = "skills: " + hooks.Skills
+// skillHint is printed before handing the terminal to Claude Code. A knowledge base takes
+// no sources and has no tasks, so it lists fewer skills.
+func skillHint(kind vault.Kind) string {
+	if kind == vault.Knowledge {
+		return "skills: " + hooks.KnowledgeSkills
+	}
+	return "skills: " + hooks.Skills
+}
 
 // trustNote explains Claude Code's own first-run dialog, whose default answer quits.
 const trustNote = "The first time in a vault, Claude Code asks whether you trust the folder; choose Yes."
@@ -1038,7 +1059,7 @@ func (e *env) openClaude(args []string) (int, error) {
 		return 1, err
 	}
 	e.console.Say("  %s", home.Display(cmd.Dir))
-	e.console.Say("  %s", skillHint)
+	e.console.Say("  %s", skillHint(entry.Kind))
 	e.console.Say("  %s", trustNote)
 	e.console.Say("")
 	if err := cmd.Run(); err != nil {
@@ -1610,8 +1631,12 @@ func (e *env) repos(args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
+		if entry.Kind == vault.Knowledge {
+			c.Say("a knowledge base has no repositories; mount it in a project instead")
+			return 0, nil
+		}
 		if len(entry.Repos) == 0 {
-			c.Say("%s has no repositories; mount one with `claude-atlas link %s PATH` or create one with `claude-atlas new-repo %s NAME`", entry.Name, entry.Name, entry.Name)
+			c.Say("%s has no repositories; link one with `claude-atlas link %s PATH` or create one with `claude-atlas new-repo %s NAME`", entry.Name, entry.Name, entry.Name)
 			return 0, nil
 		}
 		for _, r := range entry.Repos {
@@ -1631,7 +1656,7 @@ func (e *env) repos(args []string) (int, error) {
 		}
 	}
 	if shown == 0 {
-		c.Say("no repositories yet; mount one with `claude-atlas link NAME PATH` or create one with `claude-atlas new-repo NAME REPO`")
+		c.Say("no repositories yet; link one with `claude-atlas link NAME PATH` or create one with `claude-atlas new-repo NAME REPO`")
 	}
 	return 0, nil
 }
@@ -1640,7 +1665,7 @@ func (e *env) editRepo(args []string) (int, error) {
 	fs := newFlags("edit-repo", e.stderr)
 	remote := fs.String("remote", "", "the repository's remote URL; \"\" clears it")
 	changes := fs.String("changes", "", "how changes land: pr or commit; \"\" returns to the default")
-	path := fs.String("path", "", "the folder the project mounts under that name")
+	path := fs.String("path", "", "the folder the project reaches under that name")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil

@@ -97,7 +97,20 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	if firstPath != "" {
 		plan(c, "first project", "create", home.Display(firstPath))
 	} else {
-		plan(c, "vaults", "keep", fmt.Sprintf("%d registered", len(ix.Entries)))
+		found, needAdopting := 0, 0
+		for _, e := range ix.Entries {
+			switch {
+			case e.Reason == registry.ReasonV1:
+				needAdopting++
+			case e.Error == "":
+				found++
+			}
+		}
+		note := fmt.Sprintf("%d found", found)
+		if needAdopting > 0 {
+			note += fmt.Sprintf(", %d need adopting", needAdopting)
+		}
+		plan(c, "vaults", "keep", note)
 	}
 	c.Say("")
 	ok, err := c.Confirm("Proceed?", true)
@@ -152,14 +165,22 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	c.Step(console.OK, "refreshed", fmt.Sprintf("%d vault%s", len(entries), plural(len(entries))))
+	read := 0
+	for _, e := range entries {
+		if e.Error != "" {
+			c.Step(console.Fail, "vault", home.Display(e.Path)+": "+e.Error)
+			continue
+		}
+		read++
+	}
+	c.Step(console.OK, "refreshed", fmt.Sprintf("%d vault%s", read, plural(read)))
 
 	c.Say("")
 	c.Say("Setup complete.")
 	c.Say("")
-	c.Say("  Vaults       %s", home.Display(cfg.VaultsDir))
+	c.Say("  Vaults         %s", home.Display(cfg.VaultsDir))
 	if firstPath != "" {
-		c.Say("  First one    %s", home.Display(firstPath))
+		c.Say("  First project  %s", home.Display(firstPath))
 	}
 	c.Say("")
 	c.Say("Open a vault in Obsidian with `claude-atlas open-vault NAME`.")

@@ -85,7 +85,7 @@ internal/hooks/         session-start (a vault or a project's repository, open t
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
 internal/registry/      the scan for identity files, the resolved entries, the registry state file
 internal/refresh/       derive one vault's state, rewrite the registry, list a vault's signals
-internal/vaults/        create, adopt, register, edit identity files, mount and create repositories
+internal/vaults/        create, adopt, register, edit identity files, link and create repositories
 internal/links/         git init, create and clone, change policies, the facts git reports
 internal/tui/           Bubble Tea screens: the view, the vault editor, the repositories screen, tasks, ingest, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
@@ -152,10 +152,12 @@ never goes inside another vault (`vaults.CheckNewPath`).
 - The scan is the truth. `registry.Scan` walks the vaults directory at most
   five levels deep for identity files, skips dot-directories and
   `node_modules`, never descends into a vault it has found, and adds the paths
-  in `config.vaults`. A vault it finds but cannot read (a v1 identity file,
-  one that is not JSON) becomes an entry with a `Path` and an `Error`, which
-  the view files under `problems`. Every command that acts on a vault scans
-  afresh; `registry.json` is for display only.
+  in `config.vaults`. A vault the atlas knows but cannot read (a v1 identity
+  file, one that is not JSON, a registered folder that is gone) becomes an
+  entry with a `Path`, an `Error`, and a `Reason` code; `list` and `doctor`
+  decide on the code, `remove` forgets such an entry, and the view files it
+  under `problems`. Every command that acts on a vault scans afresh;
+  `registry.json` is for display only.
 - Lint and refresh are read-only toward every vault, offline, and idempotent.
 - TUI models keep all logic in `Update`; tests drive them with `tea.KeyMsg`.
 - Tests never touch a real `~/.claude-atlas`, never install a plugin, and skip

@@ -5,7 +5,7 @@ Knowledge vaults for Claude Code, and one view across all of them.
 [![License: MIT](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](.claude-plugin/plugin.json)
-[![Version](https://img.shields.io/badge/version-0.6.1-d97745.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.7.0-d97745.svg)](.claude-plugin/plugin.json)
 
 ## About
 
@@ -21,8 +21,8 @@ commit you can undo. `claude-atlas` on its own shows every vault on one screen.
   Obsidian edits are committed first and never touched.
 - **Tasks that outlive a session.** Plant an idea in a word, plan it when
   ready, and every session starts knowing what is open.
-- **Deliverables in a repository, memory in the vault.** Mount a git
-  repository on a project, or create one, for the code, papers, and decks;
+- **Deliverables in a repository, memory in the vault.** Link a git
+  repository to a project, or create one, for the code, papers, and decks;
   a session started inside it reaches the vault and its tasks with no file
   added to the repo.
 - **One view across vaults.** Every vault on one screen: heat, open threads,
@@ -88,7 +88,7 @@ a folder, `R` refreshes:
 claude-atlas
 ```
 
-Every command, the slash menu, mounting repositories, adopting an existing
+Every command, the slash menu, linking repositories, adopting an existing
 vault, and configuration: [docs/usage.md](docs/usage.md).
 
 ## The wiki and the repository
@@ -103,17 +103,17 @@ the wiki's layout.
 A **repository** is where the deliverables go: the code, the paper, the
 slides, the homework, the report. It is a plain git repository with its own
 history and whatever structure the work needs, and it owes nothing to the
-wiki's layout. Mounting it on a project connects the two: a session started
+wiki's layout. Linking it to a project connects the two: a session started
 inside it reaches the vault and its tasks, the atlas reports its branch and
 last commit, and a task's work happens there. A course project keeps its
 papers and decks in one; a codebase is one, with the wiki as the knowledge
 behind it.
 
-Every mount is a git repository. Create one in the project's `repos/` folder,
+Every link is a git repository. Create one in the project's `repos/` folder,
 ignored by the vault's own git, or anywhere on the machine; clone one from
-GitHub; or mount one that exists. A repository with a remote carries a choice
+GitHub; or link one that exists. A repository with a remote carries a choice
 of how a session lands its changes, pull requests or commits, and the session
-is told at its start. Folders of sources you ingest from are not mounted; the
+is told at its start. Folders of sources you ingest from are not linked; the
 vault remembers where it staged from.
 
 ## Inside a vault
@@ -125,7 +125,7 @@ sensor-triage/
 ├── inbox/                    sources waiting to be ingested
 │   └── tasks/                task notes waiting to be planted
 ├── ideas/                    your scratch notes, outside the wiki
-├── repos/                    mounted repositories, each with its own git
+├── repos/                    linked repositories, each with its own git
 ├── .raw/captured/            immutable copies of ingested sources
 ├── .git/                     one commit per operation
 └── wiki/

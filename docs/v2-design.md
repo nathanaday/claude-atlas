@@ -11,7 +11,7 @@ superseded by this document.
 
 Atlas gives a project a knowledge base. The knowledge base is the wiki as it
 is today: sources, entities, concepts, ingest, query, lint. The project is
-where the work is: tasks, questions, ideas, notes, and mounted repositories. A
+where the work is: tasks, questions, ideas, notes, and linked repositories. A
 project mounts one or many knowledge bases, and several projects share one.
 
 Today every vault is both, so knowledge that two projects need is written
