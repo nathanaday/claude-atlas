@@ -11,8 +11,9 @@ Read `README.md` first. This file holds what the code and README do not say.
 
 | Thing | Location |
 |---|---|
+| v2: knowledge bases, projects, mounts, access (designed, not built) | `docs/v2-design.md` |
 | Core design and the reasons behind it | `docs/core-design.md` |
-| The atlas side: tree, link pages, graph | `docs/atlas-design.md` |
+| The atlas side: tree, link pages, graph (superseded by v2) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
 | Original brainstorm (not a contract) | `docs/spec.md` |
 | The skills' contracts | `skills/<name>/SKILL.md` and `skills/wiki/references/` |

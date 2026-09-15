@@ -1,6 +1,10 @@
 # Stubs
 
-Status: designed 2026-09-14, not implemented.
+Status: lint, the stub operation, the tool, and the command are built as of
+2026-09-14 (`superpowers/plans/2026-09-14-stubs-status.md`). The session-start
+line, the skills, and the docs are folded into `v2-design.md`, which adds two
+rules: a link that resolves in a mounted knowledge base is not wanted, and in
+a project a stub may target a writable mount.
 
 A user writes `[[vanishing gradient problem]]` in a page to mark a topic they
 will write up later. This document sets out how lint, the core, the session
@@ -85,7 +89,7 @@ and keeps its `missing_frontmatter` and `orphans` findings.
 
 ## The stub operation
 
-`txn.StubRequest(v, titles, now)` builds the request. The `stub` tool and
+`txn.StubRequest(v, titles, defaultType, now)` builds the request. The `stub` tool and
 `claude-atlas stub` pass it to `txn.Prepare` and `txn.Apply` at once, as
 `plant` does: no preview, one commit, and `undo` reverts it.
 
@@ -120,7 +124,7 @@ commit.
 
 | Surface | Form |
 |---|---|
-| MCP tool `stub` | `titles` (optional list of `{title, type}`), `vault` |
+| MCP tool `stub` | `titles` (optional list of `{title, type}`), `type` (the default for titles that name none), `vault` |
 | CLI | `claude-atlas stub VAULT [TITLE...] [--type T]` |
 | TUI | none; the TUI is a subset of the CLI |
 

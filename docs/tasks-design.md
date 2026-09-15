@@ -1,6 +1,8 @@
 # Tasks
 
-Status: implemented in 0.4.0. This document sets out how tasks fit the vault,
+Status: implemented in 0.4.0. In v2 (`v2-design.md`) tasks exist only in a
+vault of kind `project`; the sections "Repos and the vault" and "The atlas
+side" are superseded there. This document sets out how tasks fit the vault,
 the plugin, and the atlas. It takes the brainstorm in the personal-projects
 vault ("Atlas ideas") as its starting point and says where and why it departs
 from it. Two details differ from the first proposal: cross-vault planting

@@ -1,5 +1,9 @@
 # The atlas as a graph
 
+Status: superseded by `v2-design.md` on 2026-09-14. v2 removes the atlas
+vault, the tree, the link pages, and `related`. This document describes what
+is built today.
+
 The atlas vault holds one page per project under `tree/`. This document
 records how the tree became a graph and why the pieces sit where they do.
 

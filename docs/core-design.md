@@ -1,6 +1,8 @@
 # The atlas core: a self-contained plugin
 
-Status: implemented, 2026-09-12. Decisions taken after the proposal: no claim ledger, hand edits are auto-committed, the binary is installed first and the plugin finds it, Go stays at 1.24 with the SDK pinned to v1.4.0.
+Status: implemented, 2026-09-12. The engine described here stays in v2
+(`v2-design.md`); v2 changes the identity file, gives a vault a kind, and
+removes the atlas vault. Decisions taken after the proposal: no claim ledger, hand edits are auto-committed, the binary is installed first and the plugin finds it, Go stays at 1.24 with the SDK pinned to v1.4.0.
 
 claude-atlas stops wrapping the claude-obsidian plugin and ships its own
 core. The core is Go, exposed to Claude Code as an MCP server, and packaged
