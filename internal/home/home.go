@@ -184,16 +184,14 @@ func defaultLaunch() LaunchConfig {
 	return LaunchConfig{Command: "claude", SessionContext: true}
 }
 
-// Default is the config a fresh setup starts from. An empty vaultsDir takes the default;
-// an empty atlasVault stays empty, for a vault-less setup.
-func (h Home) Default(vaultsDir, atlasVault string) *Config {
+// Default is the config a fresh setup starts from. An empty vaultsDir takes the default.
+func (h Home) Default(vaultsDir string) *Config {
 	if vaultsDir == "" {
 		vaultsDir = DefaultVaults
 	}
 	return &Config{
 		Schema:     ConfigSchema,
 		VaultsDir:  Expand(vaultsDir),
-		AtlasVault: Expand(atlasVault),
 		Plugin:     defaultPlugin(),
 		ClaudeCode: defaultLaunch(),
 		Heat:       &HeatConfig{NewDays: DefaultNewDays},

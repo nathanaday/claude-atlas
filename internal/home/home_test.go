@@ -29,7 +29,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if _, err := h.Load(); err == nil {
 		t.Fatal("load before setup should fail")
 	}
-	cfg := h.Default("~/Docs/Vaults", "~/Documents/Atlas")
+	cfg := h.Default("~/Docs/Vaults")
+	cfg.AtlasVault = "~/Documents/Atlas"
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +49,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 
 func TestConfigV2FieldsAndV1Upgrade(t *testing.T) {
 	h := Home{Root: t.TempDir()}
-	cfg := h.Default("~/Vaults", "")
+	cfg := h.Default("~/Vaults")
 	cfg.Schema = ConfigSchemaV1
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)

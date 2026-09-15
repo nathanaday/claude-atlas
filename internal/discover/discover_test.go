@@ -22,7 +22,7 @@ func TestVaultThroughARepository(t *testing.T) {
 	if m, c, err := Vault(h, root); m != nil || c != nil || err != nil {
 		t.Fatalf("no atlas: %v %v %v", m, c, err)
 	}
-	cfg := h.Default(filepath.Join(root, "Vaults"), filepath.Join(root, "Atlas"))
+	cfg := h.Default(filepath.Join(root, "Vaults"))
 	os.MkdirAll(h.Root, 0o755)
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)

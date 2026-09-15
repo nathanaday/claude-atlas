@@ -323,7 +323,7 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	v := newVault(t)
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
-	cfg := h.Default(filepath.Join(root, "Vaults"), filepath.Join(root, "Atlas"))
+	cfg := h.Default(filepath.Join(root, "Vaults"))
 	os.MkdirAll(h.Root, 0o755)
 	h.Save(cfg)
 	if _, err := vaults.Register(h, cfg, v.Root); err != nil {

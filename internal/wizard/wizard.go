@@ -2,7 +2,6 @@
 package wizard
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,9 +11,8 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/console"
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/pages"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
-	"github.com/nathanaday/claude-atlas/internal/tree"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
@@ -23,7 +21,6 @@ import (
 type Options struct {
 	Version      string
 	VaultsDir    string
-	AtlasVault   string
 	FirstVault   string
 	PluginSource string // marketplace source override, e.g. a local checkout
 	WithPlugin   bool
@@ -33,38 +30,16 @@ func plan(c *console.Console, label, action, target string) {
 	c.Say("  %-16s %-10s %s", label, action, target)
 }
 
-// EnsureAtlasVault creates the root Obsidian vault if missing; it reports whether it did.
-func EnsureAtlasVault(cfg *home.Config) (bool, error) {
-	obsidianDir := filepath.Join(cfg.AtlasVault, ".obsidian")
-	_, err := os.Stat(obsidianDir)
-	created := err != nil
-	if err := os.MkdirAll(obsidianDir, 0o755); err != nil {
-		return false, err
-	}
-	app := filepath.Join(obsidianDir, "app.json")
-	if _, err := os.Stat(app); err != nil {
-		data, _ := json.MarshalIndent(map[string]any{"newLinkFormat": "absolute"}, "", "  ")
-		if err := os.WriteFile(app, append(data, '\n'), 0o644); err != nil {
-			return false, err
-		}
-	}
-	return created, os.MkdirAll(cfg.TreeRoot(), 0o755)
-}
-
 // Run executes setup. It returns 1 when the user declines the plan.
 func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	fresh := !h.Exists()
 	var cfg *home.Config
 	if fresh {
-		atlas := opts.AtlasVault
-		if atlas == "" {
-			atlas = c.Ask("Where should the atlas vault live?", home.DefaultAtlas)
-		}
 		dir := opts.VaultsDir
 		if dir == "" {
-			dir = c.Ask("Where should new vaults live?", home.DefaultVaults)
+			dir = c.Ask("Where should your vaults live?", home.DefaultVaults)
 		}
-		cfg = h.Default(dir, atlas)
+		cfg = h.Default(dir)
 	} else {
 		loaded, err := h.Load()
 		if err != nil {
@@ -73,9 +48,6 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 		cfg = loaded
 		if opts.VaultsDir != "" {
 			cfg.VaultsDir = home.Expand(opts.VaultsDir)
-		}
-		if opts.AtlasVault != "" {
-			cfg.AtlasVault = home.Expand(opts.AtlasVault)
 		}
 	}
 	if opts.PluginSource != "" {
@@ -87,25 +59,17 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 
 	installed, _ := claudecode.InstalledPlugin(cfg.Plugin.ID)
 	claude := claudecode.CLI()
-	atlasReady := false
-	if _, err := os.Stat(filepath.Join(cfg.AtlasVault, ".obsidian")); err == nil {
-		atlasReady = true
-	}
-	var registered []*tree.Project
-	if atlasReady {
-		projects, _, err := tree.Walk(cfg.TreeRoot())
-		if err != nil {
-			return 1, err
-		}
-		registered = projects
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		return 1, err
 	}
 	firstPath := ""
-	if len(registered) == 0 {
+	if len(ix.Entries) == 0 {
 		name := opts.FirstVault
 		if name == "" {
-			name = c.Ask("Name for your first vault", "welcome")
+			name = c.Ask("Name for your first project", "welcome")
 		}
-		path, err := vaults.ResolveNewPath(name, cfg.VaultsDir, "")
+		path, err := vaults.ResolvePath(name, cfg.VaultsDir, vault.Project)
 		if err != nil {
 			return 1, err
 		}
@@ -129,12 +93,11 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	default:
 		plan(c, "plugin", "install", fmt.Sprintf("%s from %s via `claude plugin`", cfg.Plugin.ID, cfg.Plugin.Source))
 	}
-	plan(c, "atlas vault", ternary(atlasReady, "exists", "create"), home.Display(cfg.AtlasVault))
 	plan(c, "vaults dir", "use", home.Display(cfg.VaultsDir))
 	if firstPath != "" {
-		plan(c, "first vault", "create", home.Display(firstPath))
+		plan(c, "first project", "create", home.Display(firstPath))
 	} else {
-		plan(c, "projects", "keep", fmt.Sprintf("%d registered", len(registered)))
+		plan(c, "vaults", "keep", fmt.Sprintf("%d registered", len(ix.Entries)))
 	}
 	c.Say("")
 	ok, err := c.Confirm("Proceed?", true)
@@ -171,48 +134,41 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 		c.Step(console.Skip, "plugin", "not installed; Claude Code will not have the atlas tools until it is")
 	}
 
-	created, err := EnsureAtlasVault(cfg)
-	if err != nil {
-		return 1, err
-	}
-	c.Step(ternary(created, console.OK, console.Skip), "atlas vault", ternary(created, home.Display(cfg.AtlasVault), "already present"))
-
 	if firstPath != "" {
-		if _, err := vaults.Create(firstPath, vault.Options{Kind: vault.Project}, c, false); err != nil {
+		if _, err := vaults.Create(firstPath, vault.Options{Kind: vault.Project, Name: filepath.Base(firstPath)}, c, false); err != nil {
 			return 1, err
 		}
-		node, err := vaults.RegisterProject(cfg, firstPath, vaults.RegisterOptions{
-			Purpose: "Created by claude-atlas setup to verify the installation.",
-		})
+		registered, err := vaults.Register(h, cfg, firstPath)
 		if err != nil {
 			return 1, err
 		}
-		c.Step(console.OK, "first vault", fmt.Sprintf("%s → tree/%s.md", home.Display(firstPath), node.Rel))
+		note := home.Display(firstPath)
+		if registered {
+			note += "; recorded in the config, since it is outside " + home.Display(cfg.VaultsDir)
+		}
+		c.Step(console.OK, "first project", note)
 	}
-	if err := pages.Write(cfg, h.Root, opts.Version); err != nil {
-		return 1, err
-	}
-	c.Step(console.OK, "pages", "About.md, Reference.md")
-	page, _, err := refresh.Run(cfg, h.StateDir(), time.Now())
+	entries, _, err := refresh.Registry(cfg, h.StateDir(), time.Now())
 	if err != nil {
 		return 1, err
 	}
-	c.Step(console.OK, "refreshed", home.Display(page))
+	c.Step(console.OK, "refreshed", fmt.Sprintf("%d vault%s", len(entries), plural(len(entries))))
 
 	c.Say("")
 	c.Say("Setup complete.")
 	c.Say("")
-	c.Say("  Atlas        %s", home.Display(cfg.AtlasVault))
+	c.Say("  Vaults       %s", home.Display(cfg.VaultsDir))
 	if firstPath != "" {
-		c.Say("  First vault  %s", home.Display(firstPath))
+		c.Say("  First one    %s", home.Display(firstPath))
 	}
 	c.Say("")
-	c.Say("Open either one in Obsidian with \"Open folder as vault\", or `claude-atlas open-vault`.")
+	c.Say("Open a vault in Obsidian with `claude-atlas open-vault NAME`.")
 	c.Say("")
 	c.Say("Next:")
-	c.Say("  claude-atlas new-vault           create another vault, step by step")
+	c.Say("  claude-atlas new-project NAME    create another project")
+	c.Say("  claude-atlas new-knowledge NAME  create a knowledge base")
 	c.Say("  claude-atlas open-claude NAME    start Claude Code in a vault; try /claude-atlas:wiki")
-	c.Say("  claude-atlas refresh             rebuild Overview.md from every vault")
+	c.Say("  claude-atlas refresh             read every vault again")
 	if installed == nil {
 		c.Say("")
 		c.Say("The plugin is not installed. Install it, then run setup again:")
@@ -222,6 +178,13 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	}
 	c.Say("")
 	return 0, nil
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func ternary[T any](cond bool, a, b T) T {
