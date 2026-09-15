@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/nathanaday/claude-atlas/internal/gitx"
 )
 
 func TestDetectKind(t *testing.T) {
@@ -61,6 +63,26 @@ func TestInspectRepo(t *testing.T) {
 	plain := Inspect(Repo, t.TempDir())
 	if plain.OK || plain.Error != "not a git repository" {
 		t.Fatalf("got %+v", plain)
+	}
+}
+
+func TestPolicyAndRemoteURL(t *testing.T) {
+	if Policy("commit", "git@x:y") != "commit" || Policy("", "git@x:y") != "pr" || Policy("", "") != "commit" {
+		t.Fatal("Policy")
+	}
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	if err := CreateRepo(dir, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if RemoteURL(dir) != "" {
+		t.Fatal("no remote yet")
+	}
+	exec.Command("git", "-C", dir, "remote", "add", "origin", "git@example.com:a/x.git").Run()
+	if RemoteURL(dir) != "git@example.com:a/x.git" {
+		t.Fatalf("remote %q", RemoteURL(dir))
 	}
 }
 

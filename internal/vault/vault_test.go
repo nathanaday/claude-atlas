@@ -543,8 +543,8 @@ func TestInitLayoutByKind(t *testing.T) {
 		}
 	}
 	ignore, _ := os.ReadFile(filepath.Join(p, ".gitignore"))
-	if !strings.Contains(string(ignore), "/kb/") {
-		t.Fatalf("a project ignores its mounts:\n%s", ignore)
+	if !strings.Contains(string(ignore), "/kb/") || !strings.Contains(string(ignore), "/repos/") {
+		t.Fatalf("a project ignores its mounts and repositories:\n%s", ignore)
 	}
 	kbIgnore, _ := os.ReadFile(filepath.Join(kb, ".gitignore"))
 	if strings.Contains(string(kbIgnore), "/kb/") {
@@ -595,5 +595,44 @@ func TestNewNotesGoUnderTheWikiUnlessTheUserChose(t *testing.T) {
 	}
 	if s := settings(); s["newFileLocation"] != "current" || s["newFileFolderPath"] != nil {
 		t.Fatalf("settings %v", s)
+	}
+}
+
+func TestUpdateConfigCommitsOnceAndValidates(t *testing.T) {
+	needGit(t)
+	root := filepath.Join(t.TempDir(), "p")
+	if _, err := Init(root, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	err := UpdateConfig(root, "tag usc", now, func(c *Config) error { c.Tags = []string{"usc"}; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := Open(root)
+	if len(v.Config.Tags) != 1 || v.Config.Tags[0] != "usc" {
+		t.Fatalf("tags %+v", v.Config)
+	}
+	repo := v.Repo()
+	commits, _ := repo.Log(1)
+	if commits[0].Subject != "setup: tag usc" || commits[0].Trailers["atlas-operation"] == "" {
+		t.Fatalf("commit %+v", commits[0])
+	}
+	if dirty, _ := repo.Dirty(); dirty {
+		t.Fatal("tree should be clean")
+	}
+	if err := UpdateConfig(root, "tag usc", now, func(c *Config) error { c.Tags = []string{"usc"}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := repo.Log(1); again[0].SHA != commits[0].SHA {
+		t.Fatal("an unchanged file makes no commit")
+	}
+	if err := UpdateConfig(root, "bad", now, func(c *Config) error { c.Kind = "bogus"; return nil }); err == nil || !strings.Contains(err.Error(), "kind") {
+		t.Fatalf("validation: %v", err)
+	}
+	if err := UpdateConfig(root, "bad", now, func(c *Config) error { return errors.New("no") }); err == nil {
+		t.Fatal("change's error is returned")
+	}
+	if !ValidAccess("guarded", true) || ValidAccess("read", true) || !ValidAccess("read", false) || ValidAccess("open", false) {
+		t.Fatal("ValidAccess")
 	}
 }

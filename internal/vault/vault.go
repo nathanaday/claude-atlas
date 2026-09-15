@@ -707,6 +707,99 @@ func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 	return res, nil
 }
 
+// ValidAccess reports whether s is a knowledge base access level (open, guarded) when
+// forKB, or a mount and grant level (read, write) otherwise.
+func ValidAccess(s string, forKB bool) bool {
+	if forKB {
+		return s == AccessOpen || s == AccessGuarded
+	}
+	return s == AccessRead || s == AccessWrite
+}
+
+// changePolicies are the repository change policies a vault's own config may record.
+// vault does not import links, so the list is kept here too; links.Policies holds the
+// same values.
+var changePolicies = []string{"", "pr", "commit"}
+
+func validChanges(s string) bool {
+	for _, p := range changePolicies {
+		if s == p {
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateConfig rewrites the identity file through change and commits it as one setup
+// operation named by summary. An unchanged file makes no commit. It is the one way a
+// vault's own facts (name, tags, scope, access, grants, mounts, repos) change.
+func UpdateConfig(root, summary string, now time.Time, change func(*Config) error) error {
+	v, err := Open(root)
+	if err != nil {
+		return err
+	}
+	cfg := v.Config
+	if err := change(&cfg); err != nil {
+		return err
+	}
+	if _, err := ParseKind(string(cfg.Kind)); err != nil {
+		return err
+	}
+	if _, err := ParseMode(string(cfg.Mode)); err != nil {
+		return err
+	}
+	if cfg.Kind != v.Config.Kind {
+		return fmt.Errorf("a vault's kind does not change")
+	}
+	if cfg.ID != v.Config.ID {
+		return fmt.Errorf("a vault's id does not change")
+	}
+	if strings.TrimSpace(cfg.Name) == "" {
+		return fmt.Errorf("name must not be blank")
+	}
+	if cfg.Access != "" && !ValidAccess(cfg.Access, true) {
+		return fmt.Errorf("access must be %s or %s, not %q", AccessOpen, AccessGuarded, cfg.Access)
+	}
+	for _, g := range cfg.Grants {
+		if !ValidAccess(g.Access, false) {
+			return fmt.Errorf("grant %s: access must be %s or %s, not %q", g.Name, AccessRead, AccessWrite, g.Access)
+		}
+	}
+	for _, m := range cfg.Mounts {
+		if !ValidAccess(m.Access, false) {
+			return fmt.Errorf("mount %s: access must be %s or %s, not %q", m.Name, AccessRead, AccessWrite, m.Access)
+		}
+	}
+	for _, r := range cfg.Repos {
+		if !validChanges(r.Changes) {
+			return fmt.Errorf("repo %s: changes must be pr or commit, not %q", r.Name, r.Changes)
+		}
+	}
+	switch cfg.Kind {
+	case Project:
+		if cfg.Scope != "" || cfg.Access != "" || len(cfg.Grants) > 0 {
+			return fmt.Errorf("a project carries no scope, access, or grants; those are a knowledge base's fields")
+		}
+	case Knowledge:
+		if len(cfg.Tags) > 0 || len(cfg.Mounts) > 0 || len(cfg.Repos) > 0 {
+			return fmt.Errorf("a knowledge base carries no tags, mounts, or repos; those are a project's fields")
+		}
+	}
+	existing, err := os.ReadFile(filepath.Join(v.Root, Marker))
+	if err == nil && bytes.Equal(cfg.Encode(), existing) {
+		return nil
+	}
+	if err := writeFile(v.Root, Marker, cfg.Encode()); err != nil {
+		return err
+	}
+	repo := v.Repo()
+	if err := repo.Add(Marker); err != nil {
+		return err
+	}
+	_, err = repo.Commit(CommitMessage("setup", summary, NewOperationID("setup", now)))
+	return err
+}
+
 // Ignore adds a pattern to the vault's .gitignore and commits it, so a repository
 // mounted inside the vault keeps its own history apart from the vault's. It reports
 // whether the file changed.

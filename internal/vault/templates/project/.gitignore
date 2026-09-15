@@ -10,3 +10,6 @@ Thumbs.db
 
 # a project's mounted knowledge bases: symlinks the atlas recreates
 /kb/
+
+# a project's repositories: each keeps its own history
+/repos/
