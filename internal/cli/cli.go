@@ -631,9 +631,26 @@ func treeProjects(cfg *home.Config) ([]*tree.Project, error) {
 	return projects, err
 }
 
+// errTreeGone answers a screen that would write a project or a repository page while
+// there is no tree to write it into. Without it those writes would land at a relative
+// path in the working directory.
+var errTreeGone = errors.New("the tree view is being replaced; use the claude-atlas commands until then")
+
+// writableTree refuses every bridge write once the atlas vault, and with it the tree, is
+// gone. Reading stays allowed: it finds nothing and the screen opens empty.
+func writableTree(cfg *home.Config) error {
+	if cfg.TreeRoot() == "" {
+		return errTreeGone
+	}
+	return nil
+}
+
 // createOrAdopt is what the interactive screens call: it makes or adopts the vault and
 // registers it, returning the project's rel.
 func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, error) {
+	if err := writableTree(cfg); err != nil {
+		return "", err
+	}
 	mode, err := parseMode(choice.Mode)
 	if err != nil {
 		return "", err
@@ -672,8 +689,18 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 			}
 			return state
 		},
-		Update:  func(p *tree.Project, edit vaults.TreeEdit) error { return vaults.Update(cfg, p, edit) },
-		Unlink:  vaults.Unlink,
+		Update: func(p *tree.Project, edit vaults.TreeEdit) error {
+			if err := writableTree(cfg); err != nil {
+				return err
+			}
+			return vaults.Update(cfg, p, edit)
+		},
+		Unlink: func(p *tree.Project) error {
+			if err := writableTree(cfg); err != nil {
+				return err
+			}
+			return vaults.Unlink(p)
+		},
 		Create:  func(choice tui.AddVault) (string, error) { return e.createOrAdopt(cfg, choice) },
 		Refresh: func() error { _, _, err := e.refreshAll(cfg); return err },
 		StagePlan: func(p *tree.Project, source string) (*capture.StagePlan, error) {
@@ -690,14 +717,35 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 			return pages
 		},
 		AddLink: func(p *tree.Project, target string, initGit bool) (links.Page, error) {
+			if err := writableTree(cfg); err != nil {
+				return links.Page{}, err
+			}
 			return vaults.AddLink(cfg, p, target, initGit)
 		},
-		NewRepo: func(p *tree.Project, name, at string) (links.Page, error) { return vaults.NewRepo(cfg, p, name, at) },
+		NewRepo: func(p *tree.Project, name, at string) (links.Page, error) {
+			if err := writableTree(cfg); err != nil {
+				return links.Page{}, err
+			}
+			return vaults.NewRepo(cfg, p, name, at)
+		},
 		CloneRepo: func(p *tree.Project, url, at string) (links.Page, error) {
+			if err := writableTree(cfg); err != nil {
+				return links.Page{}, err
+			}
 			return vaults.CloneRepoPage(cfg, p, url, at)
 		},
-		SetChanges: func(page links.Page, policy string) (links.Page, error) { return vaults.SetChanges(cfg, page, policy) },
-		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
+		SetChanges: func(page links.Page, policy string) (links.Page, error) {
+			if err := writableTree(cfg); err != nil {
+				return links.Page{}, err
+			}
+			return vaults.SetChanges(cfg, page, policy)
+		},
+		RemoveLink: func(p *tree.Project, target string) error {
+			if err := writableTree(cfg); err != nil {
+				return err
+			}
+			return vaults.RemoveLink(cfg, p, target)
+		},
 		Sources: func(p *tree.Project) []string {
 			v, err := vault.Open(p.VaultPath())
 			if err != nil {
@@ -706,6 +754,9 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 			return capture.Sources(v)
 		},
 		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
+			if err := writableTree(cfg); err != nil {
+				return links.Page{}, err
+			}
 			return vaults.UpdateLink(cfg, page, edit)
 		},
 		Tasks: func(p *tree.Project) (tasks.Ledger, []string, error) {

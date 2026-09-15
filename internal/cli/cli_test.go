@@ -13,6 +13,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/tui"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -296,6 +297,35 @@ func TestOpenVaultResolvesNamesAndPaths(t *testing.T) {
 	}
 	if _, _, err := resolveVault(ix, "nope"); err == nil {
 		t.Fatal("unknown name should fail")
+	}
+}
+
+// The view still reads the old tree. On a v2 atlas there is none, so every screen that
+// would write a project or a repository page must refuse instead of writing at a
+// relative path in the working directory. Task 8 replaces the screen.
+func TestTreeBridgeRefusesToWriteWhileTheTreeIsGone(t *testing.T) {
+	h, vaults := setup(t)
+	cfg := h.config(t)
+	if cfg.TreeRoot() != "" {
+		t.Fatalf("a v2 atlas has no tree, got %q", cfg.TreeRoot())
+	}
+	e := &env{
+		home:    home.Home{Root: h.home},
+		console: console.NewWith(true, strings.NewReader(""), &h.out, false),
+		stdin:   strings.NewReader(""),
+		stdout:  &h.out,
+		stderr:  &h.err,
+	}
+	ghost := filepath.Join(vaults, "projects", "ghost")
+	_, err := e.hooks(cfg).Create(tui.AddVault{Name: "ghost", Slug: "ghost", Path: ghost, Mode: "generic"})
+	if err == nil || !strings.Contains(err.Error(), "the tree view is being replaced") {
+		t.Fatalf("Create should refuse, got %v", err)
+	}
+	if _, err := os.Stat(ghost); err == nil {
+		t.Fatal("a refused Create must leave nothing behind")
+	}
+	if _, err := os.Stat(filepath.Join("tree", "ghost.md")); err == nil {
+		t.Fatal("nothing may be written relative to the working directory")
 	}
 }
 
