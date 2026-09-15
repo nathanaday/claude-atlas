@@ -22,7 +22,7 @@ func fakeVault(t *testing.T, log, hot string, pages map[string]string) string {
 	t.Helper()
 	vault := filepath.Join(t.TempDir(), "vault")
 	os.MkdirAll(filepath.Join(vault, "wiki"), 0o755)
-	os.WriteFile(filepath.Join(vault, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
+	os.WriteFile(filepath.Join(vault, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v2","id":"00000000-0000-4000-8000-000000000001","kind":"project","name":"v","mode":"generic"}`), 0o644)
 	os.WriteFile(filepath.Join(vault, "wiki", "log.md"), []byte(log), 0o644)
 	os.WriteFile(filepath.Join(vault, "wiki", "hot.md"), []byte(hot), 0o644)
 	for name, text := range pages {
@@ -181,7 +181,7 @@ func TestRunAgainstARealVault(t *testing.T) {
 	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults"), AtlasVault: filepath.Join(root, "atlas")}
 	os.MkdirAll(cfg.TreeRoot(), 0o755)
 	fresh := filepath.Join(cfg.VaultsDir, "fresh")
-	if _, err := vault.Init(fresh, vault.Generic, time.Now()); err != nil {
+	if _, err := vault.Init(fresh, vault.Options{Kind: vault.Project, Mode: vault.Generic}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	project, err := vaults.Register(cfg, fresh, vaults.RegisterOptions{Category: "area"})

@@ -22,7 +22,7 @@ func fakeAtlas(t *testing.T) (*home.Config, Hooks) {
 	for _, spec := range []struct{ name, cat string }{{"capstone", "university/cs566"}, {"reading", "personal"}, {"welcome", ""}} {
 		vault := filepath.Join(cfg.VaultsDir, spec.name)
 		os.MkdirAll(vault, 0o755)
-		os.WriteFile(filepath.Join(vault, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
+		os.WriteFile(filepath.Join(vault, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v2","id":"00000000-0000-4000-8000-000000000001","kind":"project","name":"v","mode":"generic","created":"2026-09-12"}`), 0o644)
 		if _, err := vaults.Register(cfg, vault, vaults.RegisterOptions{Name: spec.name, Category: spec.cat}); err != nil {
 			t.Fatal(err)
 		}

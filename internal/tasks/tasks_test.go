@@ -105,7 +105,7 @@ func TestLedgerBuildIndexAndFreshness(t *testing.T) {
 		t.Skip("git is not installed")
 	}
 	root := filepath.Join(t.TempDir(), "v")
-	if _, err := vault.Init(root, vault.Generic, now); err != nil {
+	if _, err := vault.Init(root, vault.Options{Kind: vault.Project, Mode: vault.Generic}, now); err != nil {
 		t.Fatal(err)
 	}
 	v, _ := vault.Open(root)

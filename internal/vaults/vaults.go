@@ -52,16 +52,16 @@ func CheckNewPath(path string) error {
 }
 
 // Create makes a new vault at path after showing what it will contain.
-func Create(path string, mode vault.Mode, c *console.Console, confirm bool) (*vault.InitResult, error) {
+func Create(path string, opts vault.Options, c *console.Console, confirm bool) (*vault.InitResult, error) {
 	if err := CheckNewPath(path); err != nil {
 		return nil, err
 	}
-	if mode == "" {
-		mode = vault.Generic
+	if opts.Mode == "" {
+		opts.Mode = vault.Generic
 	}
 	if confirm {
 		files := append(vault.TemplateFiles(), vault.Marker, vault.LedgerPath)
-		c.Say("claude-atlas will create %s (%s mode) with %d files and a git repository:", home.Display(path), mode, len(files))
+		c.Say("claude-atlas will create the %s %s (%s mode) with %d files and a git repository:", opts.Kind, home.Display(path), opts.Mode, len(files))
 		for _, item := range files {
 			c.Say("    %s", item)
 		}
@@ -74,7 +74,7 @@ func Create(path string, mode vault.Mode, c *console.Console, confirm bool) (*va
 			return nil, ErrCancelled
 		}
 	}
-	return vault.Init(path, mode, time.Now())
+	return vault.Init(path, opts, time.Now())
 }
 
 // RegisterOptions are the authored fields for a new project.

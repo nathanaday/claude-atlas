@@ -24,7 +24,7 @@ func TestVaultThroughALinkedFolder(t *testing.T) {
 	mk := func(name string) string {
 		v := filepath.Join(cfg.VaultsDir, name)
 		os.MkdirAll(v, 0o755)
-		os.WriteFile(filepath.Join(v, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
+		os.WriteFile(filepath.Join(v, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v2","id":"00000000-0000-4000-8000-000000000001","kind":"project","name":"v","mode":"generic","created":"2026-09-12"}`), 0o644)
 		return v
 	}
 	a, _ := vaults.Register(cfg, mk("a"), vaults.RegisterOptions{Name: "A"})

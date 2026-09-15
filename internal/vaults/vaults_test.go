@@ -34,14 +34,14 @@ func TestCreateRefusesATakenPathAndAVaultInsideAVault(t *testing.T) {
 		t.Skip("git is not installed")
 	}
 	outer := filepath.Join(t.TempDir(), "work")
-	if _, err := Create(outer, vault.Generic, nil, false); err != nil {
+	if _, err := Create(outer, vault.Options{Kind: vault.Project}, nil, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(outer, vault.Generic, nil, false); err == nil || !strings.Contains(err.Error(), "already exists") {
+	if _, err := Create(outer, vault.Options{Kind: vault.Project}, nil, false); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("taken path: %v", err)
 	}
 	inner := filepath.Join(outer, "notes")
-	if _, err := Create(inner, vault.Generic, nil, false); err == nil || !strings.Contains(err.Error(), "inside the vault") {
+	if _, err := Create(inner, vault.Options{Kind: vault.Project}, nil, false); err == nil || !strings.Contains(err.Error(), "inside the vault") {
 		t.Fatalf("nested vault: %v", err)
 	}
 	if _, err := os.Stat(inner); err == nil {

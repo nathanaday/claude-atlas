@@ -373,7 +373,7 @@ func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, erro
 	}
 	opts := vaults.RegisterOptions{Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose}
 	if choice.Adopt {
-		if _, err := vault.Adopt(choice.Path, mode, time.Now()); err != nil {
+		if _, err := vault.Adopt(choice.Path, vault.Options{Mode: mode, Name: choice.Name}, time.Now()); err != nil {
 			return "", err
 		}
 		projects, _, err := tree.Walk(cfg.TreeRoot())
@@ -383,7 +383,7 @@ func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, erro
 		if existing := tree.FindByVault(projects, choice.Path); existing != nil {
 			return existing.Rel, nil
 		}
-	} else if _, err := vaults.Create(choice.Path, mode, e.console, false); err != nil {
+	} else if _, err := vaults.Create(choice.Path, vault.Options{Kind: vault.Project, Mode: mode, Name: choice.Name}, e.console, false); err != nil {
 		return "", err
 	}
 	project, err := vaults.Register(cfg, choice.Path, opts)
@@ -527,7 +527,7 @@ func (e *env) adoptPath(path string, opts vaults.RegisterOptions, mode vault.Mod
 	if err != nil {
 		return 1, err
 	}
-	res, err := vault.Adopt(abs, mode, time.Now())
+	res, err := vault.Adopt(abs, vault.Options{Mode: mode, Name: opts.Name}, time.Now())
 	if err != nil {
 		return 1, err
 	}
@@ -576,7 +576,7 @@ func (e *env) createVault(arg string, opts vaults.RegisterOptions, mode vault.Mo
 	if err != nil {
 		return 1, err
 	}
-	if _, err := vaults.Create(path, mode, e.console, true); err != nil {
+	if _, err := vaults.Create(path, vault.Options{Kind: vault.Project, Mode: mode, Name: opts.Name}, e.console, true); err != nil {
 		return 1, err
 	}
 	return e.finishVault(cfg, path, opts)
@@ -624,7 +624,7 @@ func (e *env) newVaultInteractive() (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if _, err := vaults.Create(choice.Path, mode, e.console, false); err != nil {
+	if _, err := vaults.Create(choice.Path, vault.Options{Kind: vault.Project, Mode: mode, Name: choice.Name}, e.console, false); err != nil {
 		return 1, err
 	}
 	return e.finishVault(cfg, choice.Path, vaults.RegisterOptions{

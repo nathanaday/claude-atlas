@@ -283,7 +283,7 @@ func TestNewVaultHasNoFindings(t *testing.T) {
 	asOf := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
 	for _, mode := range vault.Modes {
 		root := filepath.Join(t.TempDir(), string(mode))
-		if _, err := vault.Init(root, mode, asOf); err != nil {
+		if _, err := vault.Init(root, vault.Options{Kind: vault.Project, Mode: mode}, asOf); err != nil {
 			t.Fatal(err)
 		}
 		r, err := Run(root, Options{AsOf: asOf})

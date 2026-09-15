@@ -26,7 +26,9 @@ const (
 	Marker = ".claude-atlas.json"
 	// LegacyMarker is claude-obsidian's identity file; adopt converts such vaults.
 	LegacyMarker = ".claude-obsidian.json"
-	Schema       = "claude-atlas.vault.v1"
+	Schema       = "claude-atlas.vault.v2"
+	// SchemaV1 is the identity file older versions wrote; adopt rewrites it.
+	SchemaV1 = "claude-atlas.vault.v1"
 	// EnvVault names the vault explicitly for the MCP server and hooks.
 	EnvVault = "CLAUDE_ATLAS_VAULT"
 
@@ -76,11 +78,73 @@ func ParseMode(s string) (Mode, error) {
 	return "", fmt.Errorf("mode must be generic or lyt, not %q", s)
 }
 
-// Config is the content of the identity file.
+// Kind says what a vault is for. A knowledge base holds sources, entities, and concepts.
+// A project holds tasks, questions, and notes, and mounts knowledge bases.
+type Kind string
+
+const (
+	Knowledge Kind = "knowledge"
+	Project   Kind = "project"
+)
+
+var Kinds = []Kind{Knowledge, Project}
+
+// ParseKind validates a kind name.
+func ParseKind(s string) (Kind, error) {
+	for _, k := range Kinds {
+		if string(k) == s {
+			return k, nil
+		}
+	}
+	return "", fmt.Errorf("kind must be knowledge or project, not %q", s)
+}
+
+// Access levels. A knowledge base is open or guarded; a mount and a grant are read or write.
+const (
+	AccessOpen    = "open"
+	AccessGuarded = "guarded"
+	AccessRead    = "read"
+	AccessWrite   = "write"
+)
+
+// Grant is a knowledge base's word on one project.
+type Grant struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Access string `json:"access"`
+}
+
+// Mount is a project's use of one knowledge base.
+type Mount struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Access string `json:"access"`
+}
+
+// Repo is a repository a project works in.
+type Repo struct {
+	Name    string `json:"name"`
+	Remote  string `json:"remote,omitempty"`
+	Changes string `json:"changes,omitempty"`
+}
+
+// Config is the content of the identity file: the facts that travel with the vault. It
+// never holds a path; paths are facts about one machine and live in the atlas config.
 type Config struct {
 	Schema  string `json:"schema"`
+	ID      string `json:"id"`
+	Kind    Kind   `json:"kind"`
+	Name    string `json:"name"`
 	Mode    Mode   `json:"mode"`
 	Created string `json:"created"`
+	// A knowledge base's fields.
+	Scope  string  `json:"scope,omitempty"`
+	Access string  `json:"access,omitempty"`
+	Grants []Grant `json:"grants,omitempty"`
+	// A project's fields.
+	Tags   []string `json:"tags,omitempty"`
+	Mounts []Mount  `json:"mounts,omitempty"`
+	Repos  []Repo   `json:"repos,omitempty"`
 }
 
 // Encode renders the identity file.
@@ -89,14 +153,23 @@ func (c Config) Encode() []byte {
 	return append(data, '\n')
 }
 
+// NewID mints a random UUID (version 4) for a vault.
+func NewID() string {
+	var b [16]byte
+	rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 // Vault is an opened claude-atlas vault.
 type Vault struct {
 	Root   string
 	Config Config
 }
 
-// Name is the directory name, which Obsidian shows as the vault name.
-func (v *Vault) Name() string { return filepath.Base(v.Root) }
+// Name is the vault's name from its identity file.
+func (v *Vault) Name() string { return v.Config.Name }
 
 // Path joins a vault-relative path onto the root.
 func (v *Vault) Path(rel string) string { return filepath.Join(v.Root, filepath.FromSlash(rel)) }
@@ -105,6 +178,23 @@ func (v *Vault) Path(rel string) string { return filepath.Join(v.Root, filepath.
 func (v *Vault) Repo() gitx.Repo { return gitx.Repo{Dir: v.Root} }
 
 var ErrNotVault = errors.New("not a claude-atlas vault")
+
+// ErrV1 means the identity file is from before v2; adopt rewrites it.
+var ErrV1 = errors.New("v1 vault")
+
+// ReadConfig parses the identity file without validating it. ok is false when there is
+// none or it is not JSON. Lint and adopt read a vault this way; everything else opens it.
+func ReadConfig(root string) (Config, bool) {
+	data, err := os.ReadFile(filepath.Join(root, Marker))
+	if err != nil {
+		return Config{}, false
+	}
+	var cfg Config
+	if json.Unmarshal(data, &cfg) != nil {
+		return Config{}, false
+	}
+	return cfg, true
+}
 
 // IsVault reports whether root carries the identity file.
 func IsVault(root string) bool {
@@ -155,14 +245,28 @@ func Open(root string) (*Vault, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("%s: %w", filepath.Join(abs, Marker), err)
 	}
-	if cfg.Schema != Schema {
-		return nil, fmt.Errorf("%s: unsupported schema %q", filepath.Join(abs, Marker), cfg.Schema)
+	marker := filepath.Join(abs, Marker)
+	switch cfg.Schema {
+	case Schema:
+	case SchemaV1:
+		return nil, fmt.Errorf("%w: %s was made by claude-atlas v1; run `claude-atlas adopt %s --as knowledge` or `--as project`", ErrV1, abs, abs)
+	default:
+		return nil, fmt.Errorf("%s: unsupported schema %q", marker, cfg.Schema)
+	}
+	if _, err := ParseKind(string(cfg.Kind)); err != nil {
+		return nil, fmt.Errorf("%s: %w", marker, err)
+	}
+	if cfg.ID == "" {
+		return nil, fmt.Errorf("%s has no id; run `claude-atlas adopt %s`", marker, abs)
+	}
+	if cfg.Name == "" {
+		cfg.Name = filepath.Base(abs)
 	}
 	if cfg.Mode == "" {
 		cfg.Mode = Generic
 	}
 	if _, err := ParseMode(string(cfg.Mode)); err != nil {
-		return nil, fmt.Errorf("%s: %w", filepath.Join(abs, Marker), err)
+		return nil, fmt.Errorf("%s: %w", marker, err)
 	}
 	return &Vault{Root: abs, Config: cfg}, nil
 }
@@ -263,13 +367,49 @@ func requireGit() error {
 	return nil
 }
 
+// Options say what to make: the kind (required), the mode (generic by default), and the
+// name (the directory's by default).
+type Options struct {
+	Kind Kind
+	Mode Mode
+	Name string
+}
+
+// newConfig is the identity file of a vault made now.
+func newConfig(root string, opts Options, now time.Time) (Config, error) {
+	kind, err := ParseKind(string(opts.Kind))
+	if err != nil {
+		return Config{}, fmt.Errorf("kind is required: %w", err)
+	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = Generic
+	}
+	if _, err := ParseMode(string(mode)); err != nil {
+		return Config{}, err
+	}
+	name := strings.TrimSpace(opts.Name)
+	if name == "" {
+		name = filepath.Base(root)
+	}
+	cfg := Config{Schema: Schema, ID: NewID(), Kind: kind, Name: name, Mode: mode, Created: now.Format("2006-01-02")}
+	if kind == Knowledge {
+		cfg.Access = AccessOpen
+	}
+	return cfg, nil
+}
+
 // Init creates a vault at root: the template, the identity file, an empty source ledger,
 // and a git repository with one commit. root must not exist or must be an empty directory.
-func Init(root string, mode Mode, now time.Time) (*InitResult, error) {
+func Init(root string, opts Options, now time.Time) (*InitResult, error) {
 	if err := requireGit(); err != nil {
 		return nil, err
 	}
 	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := newConfig(abs, opts, now)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +425,7 @@ func Init(root string, mode Mode, now time.Time) (*InitResult, error) {
 	if repo.InsideOtherRepo() {
 		return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
 	}
-	files, err := writeMissing(abs, mode, now, true)
+	files, err := writeMissing(abs, cfg, now, true)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +436,7 @@ func Init(root string, mode Mode, now time.Time) (*InitResult, error) {
 		return nil, err
 	}
 	id := NewOperationID("setup", now)
-	sha, err := repo.Commit(CommitMessage("setup", fmt.Sprintf("initialize vault (%s mode)", mode), id))
+	sha, err := repo.Commit(CommitMessage("setup", fmt.Sprintf("initialize %s %s (%s mode)", cfg.Kind, cfg.Name, cfg.Mode), id))
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +445,7 @@ func Init(root string, mode Mode, now time.Time) (*InitResult, error) {
 
 // writeMissing writes template, identity, and ledger files that do not exist yet.
 // With overwrite set (a fresh init) every file is written.
-func writeMissing(root string, mode Mode, now time.Time, overwrite bool) ([]string, error) {
+func writeMissing(root string, cfg Config, now time.Time, overwrite bool) ([]string, error) {
 	var written []string
 	put := func(rel string, data []byte) error {
 		if !overwrite {
@@ -344,7 +484,7 @@ func writeMissing(root string, mode Mode, now time.Time, overwrite bool) ([]stri
 			return nil, err
 		}
 	}
-	if err := put(Marker, Config{Schema: Schema, Mode: mode, Created: now.Format("2006-01-02")}.Encode()); err != nil {
+	if err := put(Marker, cfg.Encode()); err != nil {
 		return nil, err
 	}
 	if err := put(LedgerPath, ledger.Empty(now).Encode()); err != nil {
@@ -436,7 +576,7 @@ func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 	if res.Moved, err = moveLegacy(abs); err != nil {
 		return res, err
 	}
-	if res.Added, err = writeMissing(abs, v.Config.Mode, now, false); err != nil {
+	if res.Added, err = writeMissing(abs, v.Config, now, false); err != nil {
 		return res, err
 	}
 	if len(res.Added)+len(res.Moved) == 0 {
@@ -603,6 +743,7 @@ func mergeGitignore(root string, template []byte) error {
 // AdoptResult reports what Adopt changed.
 type AdoptResult struct {
 	Root           string
+	Kind           Kind
 	OperationID    string
 	Commit         string
 	Added          []string
@@ -610,13 +751,45 @@ type AdoptResult struct {
 	GitInitialized bool
 	WasLegacy      bool
 	AlreadyAdopted bool
+	// FromV1 is set when a v1 identity file was rewritten.
+	FromV1 bool
 }
 
-// Adopt turns an existing directory, an Obsidian vault, or a claude-obsidian vault into
-// a claude-atlas vault. It adds only what is missing and commits a baseline that includes
-// every file already there. It never replaces or removes a file, except that a vault an
-// older claude-atlas made has its files moved to their current paths.
-func Adopt(root string, mode Mode, now time.Time) (*AdoptResult, error) {
+// adoptConfig decides the identity file adopt writes: a current one is kept, a v1 one is
+// rewritten with its mode and creation date, and a vault without one gets a new one.
+// Without a kind, adopt keeps the vault's kind or makes it a project.
+func adoptConfig(root string, existing Config, hasMarker bool, opts Options, now time.Time) (Config, error) {
+	if hasMarker && existing.Schema == Schema {
+		if opts.Kind != "" && opts.Kind != existing.Kind {
+			return Config{}, fmt.Errorf("%s is already a %s; a vault's kind does not change", root, existing.Kind)
+		}
+		return existing, nil
+	}
+	if opts.Kind == "" {
+		opts.Kind = Project
+	}
+	if opts.Mode == "" {
+		opts.Mode = existing.Mode
+	}
+	if opts.Mode == "" && IsLegacy(root) {
+		opts.Mode = legacyMode(root)
+	}
+	cfg, err := newConfig(root, opts, now)
+	if err != nil {
+		return Config{}, err
+	}
+	if existing.Created != "" {
+		cfg.Created = existing.Created
+	}
+	return cfg, nil
+}
+
+// Adopt turns an existing directory, an Obsidian vault, a claude-obsidian vault, or a v1
+// vault into a claude-atlas vault of a kind. It adds only what is missing and commits a
+// baseline that includes every file already there. It never replaces or removes a file,
+// except that a v1 identity file is rewritten and files an older version put at other
+// paths are moved.
+func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	if err := requireGit(); err != nil {
 		return nil, err
 	}
@@ -634,13 +807,13 @@ func Adopt(root string, mode Mode, now time.Time) (*AdoptResult, error) {
 	if !IsAdoptable(abs) {
 		return nil, fmt.Errorf("%s is not a vault: it has no .obsidian/, wiki/, or vault identity file; create one with `claude-atlas new-vault`", abs)
 	}
-	res := &AdoptResult{Root: abs, WasLegacy: IsLegacy(abs), AlreadyAdopted: IsVault(abs)}
-	if res.WasLegacy && mode == "" {
-		mode = legacyMode(abs)
+	existing, hasMarker := ReadConfig(abs)
+	res := &AdoptResult{Root: abs, WasLegacy: IsLegacy(abs), AlreadyAdopted: hasMarker && existing.Schema == Schema, FromV1: hasMarker && existing.Schema != Schema}
+	cfg, err := adoptConfig(abs, existing, hasMarker, opts, now)
+	if err != nil {
+		return nil, err
 	}
-	if mode == "" {
-		mode = Generic
-	}
+	res.Kind = cfg.Kind
 	repo := gitx.Repo{Dir: abs}
 	if repo.InsideOtherRepo() {
 		return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
@@ -650,11 +823,18 @@ func Adopt(root string, mode Mode, now time.Time) (*AdoptResult, error) {
 			return nil, err
 		}
 	}
-	added, err := writeMissing(abs, mode, now, false)
+	if res.FromV1 {
+		if err := writeFile(abs, Marker, cfg.Encode()); err != nil {
+			return nil, err
+		}
+		res.Added = append(res.Added, Marker)
+	}
+	added, err := writeMissing(abs, cfg, now, false)
 	if err != nil {
 		return nil, err
 	}
-	res.Added = added
+	res.Added = append(res.Added, added...)
+	sort.Strings(res.Added)
 	if !repo.IsRepo() {
 		if err := repo.Init(); err != nil {
 			return nil, err
@@ -672,9 +852,12 @@ func Adopt(root string, mode Mode, now time.Time) (*AdoptResult, error) {
 		return nil, err
 	}
 	res.OperationID = NewOperationID("setup", now)
-	what := "adopt vault"
-	if res.WasLegacy {
-		what = "adopt claude-obsidian vault"
+	what := fmt.Sprintf("adopt %s %s", cfg.Kind, cfg.Name)
+	switch {
+	case res.WasLegacy:
+		what = fmt.Sprintf("adopt claude-obsidian vault as %s %s", cfg.Kind, cfg.Name)
+	case res.FromV1:
+		what = fmt.Sprintf("adopt v1 vault as %s %s", cfg.Kind, cfg.Name)
 	}
 	sha, err := repo.Commit(CommitMessage("setup", what, res.OperationID))
 	if err != nil {

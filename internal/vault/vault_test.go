@@ -2,8 +2,10 @@ package vault
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -20,10 +22,12 @@ func needGit(t *testing.T) {
 	}
 }
 
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
 func TestInitCreatesACompleteVaultWithOneCommit(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "vaults", "fresh")
-	res, err := Init(root, Generic, now)
+	res, err := Init(root, Options{Kind: Project, Mode: Generic}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +41,11 @@ func TestInitCreatesACompleteVaultWithOneCommit(t *testing.T) {
 		t.Fatalf("template not rendered:\n%s", index)
 	}
 	v, err := Open(root)
-	if err != nil || v.Config.Mode != Generic || v.Config.Created != "2026-09-12" {
+	if err != nil || v.Config.Schema != Schema || v.Config.Kind != Project || v.Config.Mode != Generic || v.Config.Created != "2026-09-12" {
 		t.Fatalf("open %+v %v", v, err)
+	}
+	if v.Name() != "fresh" || !uuidPattern.MatchString(v.Config.ID) {
+		t.Fatalf("name %q id %q", v.Name(), v.Config.ID)
 	}
 	repo := v.Repo()
 	if !repo.IsRepo() || !repo.HasHead() {
@@ -48,10 +55,10 @@ func TestInitCreatesACompleteVaultWithOneCommit(t *testing.T) {
 		t.Fatal("tree should be clean after init")
 	}
 	commits, _ := repo.Log(1)
-	if commits[0].SHA != res.Commit || commits[0].Trailers["atlas-operation"] != res.OperationID || !strings.HasPrefix(commits[0].Subject, "setup: initialize vault") {
+	if commits[0].SHA != res.Commit || commits[0].Trailers["atlas-operation"] != res.OperationID || !strings.HasPrefix(commits[0].Subject, "setup: initialize project fresh") {
 		t.Fatalf("commit %+v", commits[0])
 	}
-	if _, err := Init(root, Generic, now); err == nil || !strings.Contains(err.Error(), "not empty") {
+	if _, err := Init(root, Options{Kind: Project}, now); err == nil || !strings.Contains(err.Error(), "not empty") {
 		t.Fatalf("second init should refuse: %v", err)
 	}
 }
@@ -60,8 +67,54 @@ func TestInitRefusesInsideAnotherRepo(t *testing.T) {
 	needGit(t)
 	outer := gitx.Repo{Dir: t.TempDir()}
 	outer.Init()
-	if _, err := Init(filepath.Join(outer.Dir, "v"), Generic, now); err == nil || !strings.Contains(err.Error(), "inside another git repository") {
+	if _, err := Init(filepath.Join(outer.Dir, "v"), Options{Kind: Project, Mode: Generic}, now); err == nil || !strings.Contains(err.Error(), "inside another git repository") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestIdentityFile(t *testing.T) {
+	needGit(t)
+	kb := filepath.Join(t.TempDir(), "ai-ml")
+	if _, err := Init(kb, Options{Kind: Knowledge, Name: "AI and ML"}, now); err != nil {
+		t.Fatal(err)
+	}
+	v, err := Open(kb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Config.Kind != Knowledge || v.Config.Mode != Generic || v.Name() != "AI and ML" || v.Config.Access != AccessOpen {
+		t.Fatalf("knowledge base config %+v", v.Config)
+	}
+	proot := filepath.Join(t.TempDir(), "p")
+	if _, err := Init(proot, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := Open(proot)
+	if p.Config.ID == v.Config.ID || !uuidPattern.MatchString(p.Config.ID) {
+		t.Fatalf("ids %q %q", p.Config.ID, v.Config.ID)
+	}
+	if p.Config.Access != "" || p.Name() != "p" {
+		t.Fatalf("project config %+v", p.Config)
+	}
+	raw, _ := os.ReadFile(filepath.Join(proot, Marker))
+	for _, absent := range []string{"scope", "access", "grants", "tags", "mounts", "repos"} {
+		if strings.Contains(string(raw), `"`+absent+`"`) {
+			t.Errorf("a fresh identity file carries %q:\n%s", absent, raw)
+		}
+	}
+	if _, err := Init(filepath.Join(t.TempDir(), "x"), Options{}, now); err == nil || !strings.Contains(err.Error(), "kind") {
+		t.Fatalf("kind is required: %v", err)
+	}
+	old := t.TempDir()
+	os.WriteFile(filepath.Join(old, Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic","created":"2026-09-12"}`), 0o644)
+	if _, err := Open(old); !errors.Is(err, ErrV1) || !strings.Contains(err.Error(), "adopt") {
+		t.Fatalf("v1 open: %v", err)
+	}
+	if cfg, ok := ReadConfig(old); !ok || cfg.Schema != SchemaV1 || cfg.Mode != Generic {
+		t.Fatalf("ReadConfig %+v %v", cfg, ok)
+	}
+	if _, ok := ReadConfig(t.TempDir()); ok {
+		t.Fatal("no marker, no config")
 	}
 }
 
@@ -78,7 +131,7 @@ func TestAdoptKeepsExistingFilesAndFillsGaps(t *testing.T) {
 	if !IsLegacy(root) {
 		t.Fatal("should detect a claude-obsidian vault")
 	}
-	res, err := Adopt(root, "", now)
+	res, err := Adopt(root, Options{}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +156,7 @@ func TestAdoptKeepsExistingFilesAndFillsGaps(t *testing.T) {
 	if v.Repo().Tracked(".vault-meta/mode.json") {
 		t.Fatal("runtime state must not be committed")
 	}
-	again, err := Adopt(root, "", now)
+	again, err := Adopt(root, Options{}, now)
 	if err != nil || !again.AlreadyAdopted || again.Commit != "" || len(again.Added) != 0 {
 		t.Fatalf("second adopt should be a no-op: %+v %v", again, err)
 	}
@@ -112,7 +165,7 @@ func TestAdoptKeepsExistingFilesAndFillsGaps(t *testing.T) {
 func TestUpgradeAndAdoptMoveTheTaskIndexFromItsOldPath(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "older")
-	if _, err := Init(root, Generic, now); err != nil {
+	if _, err := Init(root, Options{Kind: Project, Mode: Generic}, now); err != nil {
 		t.Fatal(err)
 	}
 	repo := gitx.Repo{Dir: root}
@@ -152,7 +205,7 @@ func TestUpgradeAndAdoptMoveTheTaskIndexFromItsOldPath(t *testing.T) {
 	os.WriteFile(oldPath, []byte("stale\n"), 0o644)
 	repo.AddAll()
 	repo.Commit(CommitMessage("manual", "a stale copy", NewOperationID("manual", now)))
-	adopted, err := Adopt(root, "", now)
+	adopted, err := Adopt(root, Options{}, now)
 	if err != nil || len(adopted.Moved) != 1 || adopted.Commit == "" {
 		t.Fatalf("adopt %+v %v", adopted, err)
 	}
@@ -193,7 +246,7 @@ func TestUpgradeAndAdoptMoveTheTaskIndexFromItsOldPath(t *testing.T) {
 func TestResolveOrder(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "v")
-	Init(root, Generic, now)
+	Init(root, Options{Kind: Project, Mode: Generic}, now)
 	nested := filepath.Join(root, "wiki", "concepts")
 	os.MkdirAll(nested, 0o755)
 	if v, err := Resolve("", "", nested); err != nil || v.Root != root {
@@ -213,7 +266,7 @@ func TestResolveOrder(t *testing.T) {
 func TestRouteAndSkeleton(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "v")
-	Init(root, Generic, now)
+	Init(root, Options{Kind: Project, Mode: Generic}, now)
 	v, _ := Open(root)
 	r, err := v.RouteFor("concept", "Contextual Retrieval: a/b?", now)
 	if err != nil || r.Path != "wiki/concepts/Contextual Retrieval a b.md" || r.Exists {
@@ -264,7 +317,7 @@ func TestFrontmatter(t *testing.T) {
 func TestNewNotesGoUnderTheWikiUnlessTheUserChose(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "v")
-	if _, err := Init(root, Generic, now); err != nil {
+	if _, err := Init(root, Options{Kind: Project, Mode: Generic}, now); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(root, filepath.FromSlash(AppFile))
@@ -299,7 +352,7 @@ func TestNewNotesGoUnderTheWikiUnlessTheUserChose(t *testing.T) {
 	}
 	os.WriteFile(file, []byte(`{"newFileLocation": "current"}`), 0o644)
 	commit("the user's choice")
-	if res, err := Adopt(root, "", now); err != nil || len(res.Added) != 0 {
+	if res, err := Adopt(root, Options{}, now); err != nil || len(res.Added) != 0 {
 		t.Fatalf("adopt keeps a location the user chose: %+v %v", res, err)
 	}
 	if s := settings(); s["newFileLocation"] != "current" || s["newFileFolderPath"] != nil {

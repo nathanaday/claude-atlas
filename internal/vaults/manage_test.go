@@ -295,7 +295,7 @@ func TestAddAndRemoveLinksThroughPages(t *testing.T) {
 
 func TestNewRepoBesideTheWikiOrElsewhere(t *testing.T) {
 	cfg, p := setup(t)
-	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "real"), vault.Generic, time.Now()); err != nil {
+	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "real"), vault.Options{Kind: vault.Project, Mode: vault.Generic}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	p, err := Register(cfg, filepath.Join(cfg.VaultsDir, "real"), RegisterOptions{Name: "Real"})
@@ -552,7 +552,7 @@ func bareRepo(t *testing.T, name string) string {
 
 func TestCloneRepoAndChangePolicy(t *testing.T) {
 	cfg, _ := setup(t)
-	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "real"), vault.Generic, time.Now()); err != nil {
+	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "real"), vault.Options{Kind: vault.Project, Mode: vault.Generic}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	p, err := Register(cfg, filepath.Join(cfg.VaultsDir, "real"), RegisterOptions{Name: "Real"})

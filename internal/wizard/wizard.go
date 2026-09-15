@@ -178,7 +178,7 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	c.Step(ternary(created, console.OK, console.Skip), "atlas vault", ternary(created, home.Display(cfg.AtlasVault), "already present"))
 
 	if firstPath != "" {
-		if _, err := vaults.Create(firstPath, vault.Generic, c, false); err != nil {
+		if _, err := vaults.Create(firstPath, vault.Options{Kind: vault.Project}, c, false); err != nil {
 			return 1, err
 		}
 		node, err := vaults.Register(cfg, firstPath, vaults.RegisterOptions{
