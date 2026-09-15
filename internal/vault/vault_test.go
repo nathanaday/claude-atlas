@@ -598,6 +598,35 @@ func TestNewNotesGoUnderTheWikiUnlessTheUserChose(t *testing.T) {
 	}
 }
 
+func TestLockIsExclusiveAndUpdateConfigTakesIt(t *testing.T) {
+	needGit(t)
+	root := filepath.Join(t.TempDir(), "p")
+	if _, err := Init(root, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := Lock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- UpdateConfig(root, "tag", now, func(c *Config) error { c.Tags = []string{"x"}; return nil })
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("UpdateConfig ran while the vault was locked: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	v, _ := Open(root)
+	if len(v.Config.Tags) != 1 {
+		t.Fatalf("tags %+v", v.Config.Tags)
+	}
+}
+
 func TestUpdateConfigCommitsOnceAndValidates(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "p")

@@ -597,7 +597,7 @@ type RecoverResult struct {
 // Recover restores every path an interrupted apply touched from HEAD and removes the marker.
 // It returns nil, nil when nothing was pending.
 func Recover(v *vault.Vault) (*RecoverResult, error) {
-	unlock, err := lock(v)
+	unlock, err := vault.Lock(v.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -665,7 +665,7 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 	if plan.Vault != v.Root {
 		return nil, fmt.Errorf("plan belongs to %s, not %s", plan.Vault, v.Root)
 	}
-	unlock, err := lock(v)
+	unlock, err := vault.Lock(v.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -964,7 +964,7 @@ func Find(v *vault.Vault, id string) (*Operation, error) {
 
 // UndoOperation reverts one operation's commit as a new commit.
 func UndoOperation(v *vault.Vault, operationID string, now time.Time) (*Result, error) {
-	unlock, err := lock(v)
+	unlock, err := vault.Lock(v.Root)
 	if err != nil {
 		return nil, err
 	}

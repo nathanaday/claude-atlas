@@ -1,21 +1,20 @@
-package txn
+package vault
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
-
-	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-// lock takes the vault's advisory lock so two sessions cannot apply at once. It waits a
+// Lock takes the vault's advisory lock so two sessions cannot write at once. It waits a
 // few seconds for a busy vault, then fails closed.
-func lock(v *vault.Vault) (func(), error) {
-	if err := os.MkdirAll(v.Path(vault.MetaDir), 0o755); err != nil {
+func Lock(root string) (func(), error) {
+	if err := os.MkdirAll(filepath.Join(root, MetaDir), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(v.Path(vault.MetaDir+"/lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(filepath.Join(root, MetaDir, "lock"), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +29,7 @@ func lock(v *vault.Vault) (func(), error) {
 		}
 		if err != syscall.EWOULDBLOCK || time.Now().After(deadline) {
 			f.Close()
-			return nil, fmt.Errorf("the vault is locked by another atlas operation (%s)", v.Root)
+			return nil, fmt.Errorf("the vault is locked by another atlas operation (%s)", root)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

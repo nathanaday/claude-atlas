@@ -766,6 +766,11 @@ func checkUnique(cfg Config) error {
 // operation named by summary. An unchanged file makes no commit. It is the one way a
 // vault's own facts (name, tags, scope, access, grants, mounts, repos) change.
 func UpdateConfig(root, summary string, now time.Time, change func(*Config) error) error {
+	unlock, err := Lock(root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	v, err := Open(root)
 	if err != nil {
 		return err
