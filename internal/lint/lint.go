@@ -66,6 +66,14 @@ type WantedPage struct {
 	Links []LinkRef `json:"links"`
 }
 
+// Stub is a page that exists and holds nothing yet: a seed page with only headings, or an
+// empty file a page links to.
+type Stub struct {
+	Path       string   `json:"path"`
+	Empty      bool     `json:"empty"`
+	LinkedFrom []string `json:"linked_from"`
+}
+
 type Duplicate struct {
 	Basename string   `json:"basename"`
 	Paths    []string `json:"paths"`
@@ -93,6 +101,7 @@ type Summary struct {
 	LinksScanned   int            `json:"links_scanned"`
 	IssuesFound    int            `json:"issues_found"`
 	WantedPages    int            `json:"wanted_pages"`
+	Stubs          int            `json:"stubs"`
 	CategoryCounts map[string]int `json:"category_counts"`
 }
 
@@ -113,6 +122,7 @@ type Report struct {
 	LedgerErrors       []PathFinding        `json:"ledger_errors"`
 	TaskErrors         []PathFinding        `json:"task_errors"`
 	WantedPages        []WantedPage         `json:"wanted_pages"`
+	Stubs              []Stub               `json:"stubs"`
 }
 
 type page struct {
@@ -337,6 +347,13 @@ func Run(root string, opts Options) (*Report, error) {
 			indexPages[pg.path] = true
 		}
 	}
+	stubs := map[string]bool{}
+	for _, pg := range pages {
+		if s, ok := stubOf(pg, incoming[pg.path]); ok {
+			stubs[pg.path] = true
+			report.Stubs = append(report.Stubs, s)
+		}
+	}
 	for _, pg := range pages {
 		if !orphanCandidate(pg.path) {
 			continue
@@ -353,18 +370,21 @@ func Run(root string, opts Options) (*Report, error) {
 		if !navigational {
 			report.Orphans = append(report.Orphans, PathFinding{Path: pg.path})
 		}
-		if !catalogued {
+		if !catalogued && !stubs[pg.path] {
 			report.UnindexedPages = append(report.UnindexedPages, PathFinding{Path: pg.path})
 		}
 	}
 
 	for _, pg := range pages {
-		if pg.frontErr == nil {
+		emptyStub := stubs[pg.path] && strings.TrimSpace(pg.text) == ""
+		if pg.frontErr == nil && !emptyStub {
 			if missing := vault.MissingFrontmatter(pg.fields); len(missing) > 0 {
 				report.MissingFrontmatter = append(report.MissingFrontmatter, FrontmatterFinding{Path: pg.path, HasFrontmatter: pg.hasFront, MissingFields: missing})
 			}
 		}
-		report.EmptySections = append(report.EmptySections, emptySections(pg)...)
+		if !stubs[pg.path] {
+			report.EmptySections = append(report.EmptySections, emptySections(pg)...)
+		}
 	}
 
 	report.LedgerErrors = ledgerErrors(root, opts.Overlay, present, asOf)
@@ -375,7 +395,7 @@ func Run(root string, opts Options) (*Report, error) {
 	}
 
 	sortFindings(report)
-	report.Summary = Summary{PagesScanned: len(pages), LinksScanned: links, WantedPages: len(report.WantedPages), CategoryCounts: map[string]int{
+	report.Summary = Summary{PagesScanned: len(pages), LinksScanned: links, WantedPages: len(report.WantedPages), Stubs: len(report.Stubs), CategoryCounts: map[string]int{
 		"dead_links":          len(report.DeadLinks),
 		"ambiguous_targets":   len(report.AmbiguousTargets),
 		"duplicate_basenames": len(report.DuplicateBasenames),
@@ -863,6 +883,43 @@ func orphanCandidate(rel string) bool {
 	return !strings.HasPrefix(inner, "meta/") && !strings.HasPrefix(inner, "folds/")
 }
 
+// stubOf reports whether a page is a stub: a seed page with nothing under its headings, or
+// an empty file a page other than the log links to. The log, the hot cache, the overview,
+// index pages, task pages, meta pages, and folds are never stubs.
+func stubOf(pg *page, incoming map[string]bool) (Stub, bool) {
+	if !orphanCandidate(pg.path) || tasks.IsPage(pg.path) || pg.frontErr != nil {
+		return Stub{}, false
+	}
+	from := []string{}
+	for src := range incoming {
+		if path.Base(src) != "log.md" {
+			from = append(from, src)
+		}
+	}
+	sort.Slice(from, func(i, j int) bool { return pathLess(from[i], from[j]) })
+	empty := strings.TrimSpace(pg.text) == ""
+	switch {
+	case empty && len(from) > 0:
+	case !empty && vault.StringField(pg.fields, "status") == "seed" && bodyEmpty(pg.text):
+	default:
+		return Stub{}, false
+	}
+	return Stub{Path: pg.path, Empty: empty, LinkedFrom: from}, true
+}
+
+// bodyEmpty reports whether a page holds nothing below its frontmatter but headings, block
+// ids, comments, and whitespace.
+func bodyEmpty(text string) bool {
+	_, body, err := vault.Frontmatter(text)
+	if err != nil {
+		return false
+	}
+	body = htmlComment.ReplaceAllString(body, "")
+	body = atxHeading.ReplaceAllString(body, "")
+	body = blockIDLine.ReplaceAllString(body, "")
+	return strings.TrimSpace(body) == ""
+}
+
 func emptySections(pg *page) []SectionFinding {
 	type heading struct {
 		start, end, level int
@@ -963,6 +1020,7 @@ func sortFindings(r *Report) {
 	})
 	sort.SliceStable(r.ReadErrors, func(i, j int) bool { return pathLess(r.ReadErrors[i].Path, r.ReadErrors[j].Path) })
 	sort.Slice(r.WantedPages, func(i, j int) bool { return pathLess(r.WantedPages[i].Title, r.WantedPages[j].Title) })
+	sort.Slice(r.Stubs, func(i, j int) bool { return pathLess(r.Stubs[i].Path, r.Stubs[j].Path) })
 }
 
 func linkLess(a, b LinkFinding) bool {
@@ -1009,6 +1067,9 @@ func (r *Report) fillEmpty() {
 	}
 	if r.WantedPages == nil {
 		r.WantedPages = []WantedPage{}
+	}
+	if r.Stubs == nil {
+		r.Stubs = []Stub{}
 	}
 }
 
@@ -1082,6 +1143,20 @@ func (r *Report) Markdown() string {
 			refs = append(refs, fmt.Sprintf("`%s:%d`", l.Source, l.Line))
 		}
 		fmt.Fprintf(&b, "- %s ← %s\n", w.Title, strings.Join(refs, ", "))
+	}
+	section("Stubs to fill", len(r.Stubs))
+	if len(r.Stubs) > 0 {
+		b.WriteString("Pages that hold nothing yet. Not findings.\n\n")
+	}
+	for _, s := range r.Stubs {
+		fmt.Fprintf(&b, "- `%s`", s.Path)
+		if s.Empty {
+			b.WriteString(" (empty file)")
+		}
+		if len(s.LinkedFrom) > 0 {
+			fmt.Fprintf(&b, " ← %s", strings.Join(s.LinkedFrom, ", "))
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }

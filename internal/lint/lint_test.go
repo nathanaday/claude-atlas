@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,6 +194,70 @@ func TestWantedPagesAndNearMatches(t *testing.T) {
 	}
 }
 
+func TestStubs(t *testing.T) {
+	skeleton := "---\ntitle: Seed\ntype: concept\nstatus: seed\ncreated: 2026-01-01\nupdated: 2026-01-01\ntags:\n  - concept\n---\n\n# Seed\n\n## Definition\n\n<!-- later -->\n\n## Sources\n\n"
+	root := fixture(t, map[string]string{
+		"wiki/index.md":                mkpage("Index", "# Index\n\n- [[Written]]\n"),
+		"wiki/log.md":                  mkpage("Log", "## 2026-01-01 — op\n\n- [[Only Logged]]\n"),
+		"wiki/concepts/Written.md":     mkpage("Written", "# Written\n\n[[Seed]] [[Clicked]] [[Filled]]\n"),
+		"wiki/concepts/Seed.md":        skeleton,
+		"wiki/concepts/Filled.md":      strings.Replace(skeleton, "## Sources\n\n", "## Sources\n\nA paper.\n", 1),
+		"wiki/concepts/Lonely Seed.md": strings.ReplaceAll(skeleton, "Seed", "Lonely Seed"),
+		"wiki/Clicked.md":              "",
+		"wiki/Only Logged.md":          "\n",
+	})
+	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stubs []string
+	for _, s := range r.Stubs {
+		stubs = append(stubs, fmt.Sprintf("%s empty=%v from=%s", s.Path, s.Empty, strings.Join(s.LinkedFrom, ",")))
+	}
+	wantStubs := []string{
+		"wiki/Clicked.md empty=true from=wiki/concepts/Written.md",
+		"wiki/concepts/Lonely Seed.md empty=false from=",
+		"wiki/concepts/Seed.md empty=false from=wiki/concepts/Written.md",
+	}
+	if strings.Join(stubs, "|") != strings.Join(wantStubs, "|") {
+		t.Fatalf("stubs\n got %v\nwant %v", stubs, wantStubs)
+	}
+	paths := func(findings []PathFinding) string {
+		var out []string
+		for _, f := range findings {
+			out = append(out, f.Path)
+		}
+		return strings.Join(out, ",")
+	}
+	// A stub is not unindexed and has no empty sections; a filled page is and has.
+	if got := paths(r.UnindexedPages); got != "wiki/concepts/Filled.md,wiki/Only Logged.md" {
+		t.Fatalf("unindexed %s", got)
+	}
+	if len(r.EmptySections) != 1 || r.EmptySections[0].Path != "wiki/concepts/Filled.md" || r.EmptySections[0].Heading != "Definition" {
+		t.Fatalf("empty sections %+v", r.EmptySections)
+	}
+	// An empty file a page links to needs no frontmatter yet; one only the log links to does.
+	if len(r.MissingFrontmatter) != 1 || r.MissingFrontmatter[0].Path != "wiki/Only Logged.md" {
+		t.Fatalf("missing frontmatter %+v", r.MissingFrontmatter)
+	}
+	// A stub nothing links to is still an orphan.
+	if got := paths(r.Orphans); got != "wiki/concepts/Lonely Seed.md,wiki/Only Logged.md" {
+		t.Fatalf("orphans %s", got)
+	}
+	if r.Summary.Stubs != 3 || len(r.WantedPages) != 0 {
+		t.Fatalf("summary %+v wanted %+v", r.Summary, r.WantedPages)
+	}
+	if _, counted := r.Summary.CategoryCounts["stubs"]; counted {
+		t.Fatal("stubs are not findings")
+	}
+	md := r.Markdown()
+	for _, want := range []string{"## Stubs to fill (3)", "- `wiki/Clicked.md` (empty file) ← wiki/concepts/Written.md"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("missing %q in markdown:\n%s", want, md)
+		}
+	}
+}
+
 func TestLedgerErrors(t *testing.T) {
 	root := fixture(t, map[string]string{
 		"wiki/index.md": mkpage("Index", "# I\n"),
@@ -225,7 +290,7 @@ func TestNewVaultHasNoFindings(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r.Summary.IssuesFound != 0 || r.Summary.WantedPages != 0 {
+		if r.Summary.IssuesFound != 0 || r.Summary.WantedPages != 0 || r.Summary.Stubs != 0 {
 			t.Errorf("%s vault:\n%s", mode, r.Markdown())
 		}
 	}
