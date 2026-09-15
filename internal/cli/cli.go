@@ -75,6 +75,7 @@ Tasks (VAULT is a project name or a path; default: the current directory):
 
 Inside a vault (VAULT is a project name or a path; default: the current directory):
   lint [VAULT]           run the wiki health check
+  stub VAULT [TITLE...]  create seed pages for the pages your links name but nobody has written
   history [VAULT]        list operations, newest first
   undo VAULT OPERATION   revert one operation
   recover [VAULT]        restore a vault after an interrupted operation
@@ -190,6 +191,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.refresh(rest[1:])
 	case "lint":
 		code, err = e.lint(rest[1:])
+	case "stub":
+		code, err = e.stub(rest[1:])
 	case "history":
 		code, err = e.history(rest[1:])
 	case "undo":
@@ -1714,6 +1717,39 @@ func (e *env) plant(args []string) (int, error) {
 		return 1, err
 	}
 	e.console.Step(console.OK, "planted", fmt.Sprintf("%s (%s)", planted.Path, planted.ID))
+	e.console.Step(console.OK, "committed", res.OperationID)
+	return 0, nil
+}
+
+func (e *env) stub(args []string) (int, error) {
+	fs := newFlags("stub", e.stderr)
+	pageType := fs.String("type", "", "the type of every stub: concept, entity, question, or session (note or moc in lyt mode)")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) < 1 {
+		return 2, errors.New("usage: claude-atlas stub VAULT [TITLE...] [--type T]")
+	}
+	v, err := e.openVaultArg(positional[0])
+	if err != nil {
+		return 1, err
+	}
+	var titles []txn.StubTitle
+	for _, title := range positional[1:] {
+		titles = append(titles, txn.StubTitle{Title: title})
+	}
+	res, err := txn.StubPages(v, titles, *pageType, time.Now())
+	if err != nil {
+		return 1, err
+	}
+	if len(res.Stubs) == 0 {
+		e.console.Step(console.Skip, "nothing to stub", "every page the wiki links to exists")
+		return 0, nil
+	}
+	for _, s := range res.Stubs {
+		e.console.Step(console.OK, "stubbed", fmt.Sprintf("%s (%s)", s.Path, s.Type))
+	}
 	e.console.Step(console.OK, "committed", res.OperationID)
 	return 0, nil
 }

@@ -534,3 +534,33 @@ func TestLinkFromAURLAndChanges(t *testing.T) {
 		t.Fatalf("bad policy on edit exit %d", code)
 	}
 }
+
+func TestStubCommand(t *testing.T) {
+	h, vaults := setup(t)
+	welcome := filepath.Join(vaults, "welcome")
+	os.MkdirAll(filepath.Join(welcome, "wiki", "concepts"), 0o755)
+	os.WriteFile(filepath.Join(welcome, "wiki", "concepts", "Training.md"), []byte("---\ntitle: Training\ntype: concept\nstatus: developing\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Training\n\nSee [[vanishing gradient problem]] and [[Adam]].\n"), 0o644)
+	index, _ := os.ReadFile(filepath.Join(welcome, "wiki", "index.md"))
+	os.WriteFile(filepath.Join(welcome, "wiki", "index.md"), append(index, []byte("\n- [[Training]]\n")...), 0o644)
+	if code := h.run("lint", "welcome", "--strict"); code != 0 || !strings.Contains(h.out.String(), "## Wanted pages (2)") {
+		t.Fatalf("wanted pages are not findings: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("stub", "welcome", "Adam", "--type", "entity"); code != 0 || !strings.Contains(h.out.String(), "wiki/entities/Adam.md (entity)") {
+		t.Fatalf("stub Adam exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("stub", "welcome"); code != 0 || !strings.Contains(h.out.String(), "wiki/concepts/vanishing gradient problem.md (concept)") || !strings.Contains(h.out.String(), "committed") {
+		t.Fatalf("stub all exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("lint", "welcome", "--strict"); code != 0 || !strings.Contains(h.out.String(), "## Stubs to fill (2)") {
+		t.Fatalf("stubs are not findings: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("stub", "welcome"); code != 0 || !strings.Contains(h.out.String(), "nothing to stub") {
+		t.Fatalf("nothing left exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("stub", "welcome", "Nowhere"); code != 1 || !strings.Contains(h.err.String(), "nothing in the wiki links to") {
+		t.Fatalf("unlinked title exit %d\n%s", code, h.err.String())
+	}
+	if code := h.run("stub"); code != 2 {
+		t.Fatalf("usage exit %d", code)
+	}
+}
