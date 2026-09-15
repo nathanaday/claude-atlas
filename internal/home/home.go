@@ -11,11 +11,12 @@ import (
 )
 
 const (
-	ConfigSchema  = "claude-atlas.config.v1"
-	EnvHome       = "CLAUDE_ATLAS_HOME"
-	defaultHome   = "~/.claude-atlas"
-	DefaultVaults = "~/Documents/Vaults"
-	DefaultAtlas  = "~/Documents/Atlas"
+	ConfigSchema   = "claude-atlas.config.v2"
+	ConfigSchemaV1 = "claude-atlas.config.v1"
+	EnvHome        = "CLAUDE_ATLAS_HOME"
+	defaultHome    = "~/.claude-atlas"
+	DefaultVaults  = "~/Documents/Vaults"
+	DefaultAtlas   = "~/Documents/Atlas"
 
 	// DefaultPluginID is the claude-atlas plugin as Claude Code names it.
 	DefaultPluginID = "claude-atlas@nathanaday-claude-atlas"
@@ -50,17 +51,82 @@ type LaunchConfig struct {
 
 // Config is the contents of config.json. Paths are absolute.
 type Config struct {
-	Schema     string       `json:"schema"`
-	VaultsDir  string       `json:"vaults_dir"`
-	AtlasVault string       `json:"atlas_vault"`
+	Schema    string `json:"schema"`
+	VaultsDir string `json:"vaults_dir"`
+	// AtlasVault is the atlas vault's root. Optional; Task 9 removes it once the
+	// registry replaces the atlas vault.
+	AtlasVault string       `json:"atlas_vault,omitempty"`
 	Plugin     PluginConfig `json:"plugin"`
 	ClaudeCode LaunchConfig `json:"claude_code"`
 	// Heat is nil in a config written before the section existed; NewDays reads it.
 	Heat *HeatConfig `json:"heat,omitempty"`
+	// Vaults holds vault roots outside VaultsDir; the registry cannot discover them by scanning.
+	Vaults []string `json:"vaults,omitempty"`
+	// Repos holds repository paths outside their project's folder, keyed by RepoKey.
+	Repos map[string]string `json:"repos,omitempty"`
 }
 
-// TreeRoot is the directory of nodes inside the atlas vault.
-func (c *Config) TreeRoot() string { return filepath.Join(c.AtlasVault, "tree") }
+// TreeRoot is the directory of nodes inside the atlas vault, or "" when there is none.
+func (c *Config) TreeRoot() string {
+	if c.AtlasVault == "" {
+		return ""
+	}
+	return filepath.Join(c.AtlasVault, "tree")
+}
+
+// RepoKey is the Repos map key for a repository named name under project projectID.
+func RepoKey(projectID, name string) string { return projectID + "/" + name }
+
+// RepoPath is the recorded path for a project's repository, or "" if none is recorded.
+func (c *Config) RepoPath(projectID, name string) string {
+	return c.Repos[RepoKey(projectID, name)]
+}
+
+// SetRepoPath records path for a project's repository; an empty path deletes the entry.
+func (c *Config) SetRepoPath(projectID, name, path string) {
+	key := RepoKey(projectID, name)
+	if path == "" {
+		delete(c.Repos, key)
+		return
+	}
+	if c.Repos == nil {
+		c.Repos = map[string]string{}
+	}
+	c.Repos[key] = Expand(path)
+}
+
+// AddVault records root as a vault outside VaultsDir; it reports whether root was added.
+func (c *Config) AddVault(root string) bool {
+	root = Expand(root)
+	for _, v := range c.Vaults {
+		if v == root {
+			return false
+		}
+	}
+	c.Vaults = append(c.Vaults, root)
+	return true
+}
+
+// RemoveVault drops root from Vaults; it reports whether root was present.
+func (c *Config) RemoveVault(root string) bool {
+	root = Expand(root)
+	for i, v := range c.Vaults {
+		if v == root {
+			c.Vaults = append(c.Vaults[:i], c.Vaults[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// Inside reports whether root is VaultsDir or a descendant of it.
+func (c *Config) Inside(root string) bool {
+	rel, err := filepath.Rel(c.VaultsDir, root)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
 
 // NewDays is the configured age under which a vault is new, or the default.
 func (c *Config) NewDays() int {
@@ -118,13 +184,11 @@ func defaultLaunch() LaunchConfig {
 	return LaunchConfig{Command: "claude", SessionContext: true}
 }
 
-// Default is the config a fresh setup starts from. Empty arguments take the defaults.
+// Default is the config a fresh setup starts from. An empty vaultsDir takes the default;
+// an empty atlasVault stays empty, for a vault-less setup.
 func (h Home) Default(vaultsDir, atlasVault string) *Config {
 	if vaultsDir == "" {
 		vaultsDir = DefaultVaults
-	}
-	if atlasVault == "" {
-		atlasVault = DefaultAtlas
 	}
 	return &Config{
 		Schema:     ConfigSchema,
@@ -150,11 +214,21 @@ func (h Home) Load() (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("%s: %w", h.ConfigPath(), err)
 	}
-	if cfg.Schema != ConfigSchema {
+	switch cfg.Schema {
+	case ConfigSchema:
+	case ConfigSchemaV1:
+		cfg.Schema = ConfigSchema
+	default:
 		return nil, fmt.Errorf("%s: unsupported schema %q", h.ConfigPath(), cfg.Schema)
 	}
 	cfg.VaultsDir = Expand(cfg.VaultsDir)
 	cfg.AtlasVault = Expand(cfg.AtlasVault)
+	for i, v := range cfg.Vaults {
+		cfg.Vaults[i] = Expand(v)
+	}
+	for k, v := range cfg.Repos {
+		cfg.Repos[k] = Expand(v)
+	}
 	// Configs written before these sections existed keep working with the defaults.
 	if cfg.Plugin.ID == "" {
 		cfg.Plugin = defaultPlugin()
