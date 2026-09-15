@@ -243,6 +243,59 @@ func TestUpgradeAndAdoptMoveTheTaskIndexFromItsOldPath(t *testing.T) {
 	keeps("an ignored", "my ignored notes\n")
 }
 
+func TestAdoptAsKnowledgeRemovesTaskScaffolding(t *testing.T) {
+	needGit(t)
+	root := filepath.Join(t.TempDir(), "old")
+	if _, err := Init(root, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"lyt","created":"2026-09-01"}`), 0o644)
+	os.WriteFile(filepath.Join(root, "wiki", "tasks", "Do it.md"), []byte("---\ntype: task\ntitle: Do it\n---\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "inbox", "tasks", "note.md"), []byte("later\n"), 0o644)
+	repo := gitx.Repo{Dir: root}
+	repo.AddAll()
+	repo.Commit("old state")
+	res, err := Adopt(root, Options{Kind: Knowledge}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.FromV1 || res.Kind != Knowledge || strings.Join(res.Removed, ",") != "ideas,inbox,wiki/meta/ledgers/task-ledger.json,wiki/tasks" {
+		t.Fatalf("result %+v", res)
+	}
+	v, err := Open(root)
+	if err != nil || v.Config.Kind != Knowledge || v.Config.Mode != LYT || v.Config.Created != "2026-09-01" || v.Config.ID == "" {
+		t.Fatalf("open %+v %v", v, err)
+	}
+	for _, rel := range res.Removed {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+			t.Errorf("%s still exists", rel)
+		}
+	}
+	if dirty, _ := repo.Dirty(); dirty {
+		t.Fatal("adopt must leave the tree clean")
+	}
+	commits, _ := repo.Log(1)
+	if !strings.HasPrefix(commits[0].Subject, "setup: adopt v1 vault as knowledge old") {
+		t.Fatalf("commit %+v", commits[0])
+	}
+	if again, err := Adopt(root, Options{}, now); err != nil || again.Commit != "" || !again.AlreadyAdopted {
+		t.Fatalf("second adopt %+v %v", again, err)
+	}
+	if _, err := Adopt(root, Options{Kind: Project}, now); err == nil || !strings.Contains(err.Error(), "does not change") {
+		t.Fatalf("kind is fixed: %v", err)
+	}
+
+	withSources := filepath.Join(t.TempDir(), "busy")
+	if _, err := Init(withSources, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(withSources, Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic","created":"2026-09-01"}`), 0o644)
+	os.WriteFile(filepath.Join(withSources, "inbox", "paper.pdf"), []byte("%PDF"), 0o644)
+	if _, err := Adopt(withSources, Options{Kind: Knowledge}, now); err == nil || !strings.Contains(err.Error(), "inbox/ holds 1 file") {
+		t.Fatalf("an inbox with sources stops the removal: %v", err)
+	}
+}
+
 func TestResolveOrder(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "v")

@@ -559,6 +559,51 @@ func moveLegacy(root string) ([]Move, error) {
 	return moved, nil
 }
 
+// projectOnly are the paths a knowledge base does not have. Adopting as a knowledge base
+// removes them; the user agreed that tasks and ideas start fresh.
+var projectOnly = []string{IdeasDir, InboxDir, TaskLedgerPath, TasksDir}
+
+// inboxSources counts the files in inbox/ other than task notes and dotfiles: sources
+// nobody has ingested, which adopt must not delete.
+func inboxSources(root string) int {
+	n := 0
+	filepath.WalkDir(filepath.Join(root, InboxDir), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if p == filepath.Join(root, filepath.FromSlash(InboxTasksDir)) || strings.HasPrefix(d.Name(), ".") && p != filepath.Join(root, InboxDir) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasPrefix(d.Name(), ".") {
+			n++
+		}
+		return nil
+	})
+	return n
+}
+
+// removeProjectFiles deletes the project-only paths that exist and reports them.
+func removeProjectFiles(root string) ([]string, error) {
+	if n := inboxSources(root); n > 0 {
+		return nil, fmt.Errorf("inbox/ holds %d file%s; ingest them through a project or move them out before adopting as a knowledge base", n, map[bool]string{true: "", false: "s"}[n == 1])
+	}
+	var removed []string
+	for _, rel := range projectOnly {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if _, err := os.Lstat(p); err != nil {
+			continue
+		}
+		if err := os.RemoveAll(p); err != nil {
+			return removed, err
+		}
+		removed = append(removed, rel)
+	}
+	return removed, nil
+}
+
 // committed reports whether HEAD holds rel and the working tree has not changed it since.
 func committed(repo gitx.Repo, rel string) bool {
 	if !repo.Tracked(rel) {
@@ -594,8 +639,10 @@ func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 		return nil, err
 	}
 	res := &UpgradeResult{}
-	if res.Moved, err = moveLegacy(abs); err != nil {
-		return res, err
+	if v.Config.Kind == Project {
+		if res.Moved, err = moveLegacy(abs); err != nil {
+			return res, err
+		}
 	}
 	if res.Added, err = writeMissing(abs, v.Config, now, false); err != nil {
 		return res, err
@@ -769,6 +816,7 @@ type AdoptResult struct {
 	Commit         string
 	Added          []string
 	Moved          []Move
+	Removed        []string
 	GitInitialized bool
 	WasLegacy      bool
 	AlreadyAdopted bool
@@ -839,6 +887,11 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	if repo.InsideOtherRepo() {
 		return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
 	}
+	if cfg.Kind == Knowledge && !res.AlreadyAdopted {
+		if res.Removed, err = removeProjectFiles(abs); err != nil {
+			return nil, err
+		}
+	}
 	if res.AlreadyAdopted {
 		if res.Moved, err = moveLegacy(abs); err != nil {
 			return nil, err
@@ -879,6 +932,9 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 		what = fmt.Sprintf("adopt claude-obsidian vault as %s %s", cfg.Kind, cfg.Name)
 	case res.FromV1:
 		what = fmt.Sprintf("adopt v1 vault as %s %s", cfg.Kind, cfg.Name)
+	}
+	if len(res.Removed) > 0 {
+		what += "; removed " + strings.Join(res.Removed, ", ")
 	}
 	sha, err := repo.Commit(CommitMessage("setup", what, res.OperationID))
 	if err != nil {
