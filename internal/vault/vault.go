@@ -45,10 +45,15 @@ const (
 	// the inbox folder for task notes, and the user's scratch space.
 	TasksDir       = "wiki/tasks"
 	TaskArchiveDir = "wiki/tasks/archive"
-	TasksIndex     = "wiki/tasks/index.md"
+	TasksIndex     = "wiki/tasks/tasks.md"
 	TaskLedgerPath = "wiki/meta/ledgers/task-ledger.json"
 	InboxTasksDir  = "inbox/tasks"
 	IdeasDir       = "ideas"
+
+	// A folder's index page takes the folder's name, so no page shares the basename of
+	// wiki/index.md. LegacyTasksIndex is where older versions wrote the task index.
+	CanvasIndex      = "wiki/canvases/canvases.md"
+	LegacyTasksIndex = "wiki/tasks/index.md"
 )
 
 // Mode is the filing methodology for new pages.
@@ -356,9 +361,69 @@ func writeMissing(root string, mode Mode, now time.Time, overwrite bool) ([]stri
 // the full format.
 const EmptyTaskLedger = "{\n  \"schema\": \"claude-atlas.task-ledger.v1\",\n  \"tasks\": []\n}\n"
 
-// Upgrade adds the template files a vault made by an older version lacks, as one commit.
-// It returns what it wrote; nothing means the vault was current.
-func Upgrade(root string, now time.Time) ([]string, error) {
+// Move is a file an older version wrote at a path the layout has since changed.
+type Move struct {
+	From string
+	To   string
+}
+
+var legacyPaths = []Move{{From: LegacyTasksIndex, To: TasksIndex}}
+
+// moveLegacy puts the files an older version wrote at their current paths. When the
+// current path already exists, the file at the old path is a stale copy and goes, but
+// only if git holds it unchanged; otherwise it may be the user's and stays.
+func moveLegacy(root string) ([]Move, error) {
+	repo := gitx.Repo{Dir: root}
+	var moved []Move
+	for _, m := range legacyPaths {
+		from, to := filepath.Join(root, filepath.FromSlash(m.From)), filepath.Join(root, filepath.FromSlash(m.To))
+		if _, err := os.Stat(from); err != nil {
+			continue
+		}
+		if _, err := os.Stat(to); err != nil {
+			if err := os.Rename(from, to); err != nil {
+				return moved, err
+			}
+			moved = append(moved, m)
+			continue
+		}
+		if !committed(repo, m.From) {
+			continue
+		}
+		if err := os.Remove(from); err != nil {
+			return moved, err
+		}
+		moved = append(moved, m)
+	}
+	return moved, nil
+}
+
+// committed reports whether HEAD holds rel and the working tree has not changed it since.
+func committed(repo gitx.Repo, rel string) bool {
+	if !repo.Tracked(rel) {
+		return false
+	}
+	entries, err := repo.Status()
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Path == rel {
+			return false
+		}
+	}
+	return true
+}
+
+// UpgradeResult reports what Upgrade changed; an empty result means the vault was current.
+type UpgradeResult struct {
+	Added []string
+	Moved []Move
+}
+
+// Upgrade brings a vault made by an older version to the current layout, as one commit:
+// it moves the files whose path changed and adds the template files the vault lacks.
+func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -367,22 +432,36 @@ func Upgrade(root string, now time.Time) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	written, err := writeMissing(abs, v.Config.Mode, now, false)
-	if err != nil {
-		return nil, err
+	res := &UpgradeResult{}
+	if res.Moved, err = moveLegacy(abs); err != nil {
+		return res, err
 	}
-	if len(written) == 0 {
-		return nil, nil
+	if res.Added, err = writeMissing(abs, v.Config.Mode, now, false); err != nil {
+		return res, err
+	}
+	if len(res.Added)+len(res.Moved) == 0 {
+		return res, nil
 	}
 	repo := gitx.Repo{Dir: abs}
-	if err := repo.Add(written...); err != nil {
-		return written, err
+	stage := append([]string{}, res.Added...)
+	var what []string
+	if len(res.Added) > 0 {
+		what = append(what, "add "+strings.Join(res.Added, ", "))
 	}
-	id := NewOperationID("setup", now)
-	if _, err := repo.Commit(CommitMessage("setup", fmt.Sprintf("add %s", strings.Join(written, ", ")), id)); err != nil {
-		return written, err
+	for _, m := range res.Moved {
+		stage = append(stage, m.To)
+		if repo.Tracked(m.From) {
+			stage = append(stage, m.From)
+		}
+		what = append(what, fmt.Sprintf("move %s to %s", m.From, m.To))
 	}
-	return written, nil
+	if err := repo.Add(stage...); err != nil {
+		return res, err
+	}
+	if _, err := repo.Commit(CommitMessage("setup", strings.Join(what, "; "), NewOperationID("setup", now))); err != nil {
+		return res, err
+	}
+	return res, nil
 }
 
 // Ignore adds a pattern to the vault's .gitignore and commits it, so a repository
@@ -499,6 +578,7 @@ type AdoptResult struct {
 	OperationID    string
 	Commit         string
 	Added          []string
+	Moved          []Move
 	GitInitialized bool
 	WasLegacy      bool
 	AlreadyAdopted bool
@@ -506,7 +586,8 @@ type AdoptResult struct {
 
 // Adopt turns an existing directory, an Obsidian vault, or a claude-obsidian vault into
 // a claude-atlas vault. It adds only what is missing and commits a baseline that includes
-// every file already there. It never replaces or removes a file.
+// every file already there. It never replaces or removes a file, except that a vault an
+// older claude-atlas made has its files moved to their current paths.
 func Adopt(root string, mode Mode, now time.Time) (*AdoptResult, error) {
 	if err := requireGit(); err != nil {
 		return nil, err
@@ -535,6 +616,11 @@ func Adopt(root string, mode Mode, now time.Time) (*AdoptResult, error) {
 	repo := gitx.Repo{Dir: abs}
 	if repo.InsideOtherRepo() {
 		return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
+	}
+	if res.AlreadyAdopted {
+		if res.Moved, err = moveLegacy(abs); err != nil {
+			return nil, err
+		}
 	}
 	added, err := writeMissing(abs, mode, now, false)
 	if err != nil {

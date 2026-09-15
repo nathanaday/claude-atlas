@@ -109,7 +109,7 @@ type page struct {
 	headings map[string]bool
 	blocks   map[string]bool
 	aliases  []string
-	isIndex  bool // index.md or _index.md
+	isIndex  bool // index.md, _index.md, or a folder index
 	isMOC    bool // type: moc
 	links    []link
 }
@@ -153,6 +153,10 @@ var (
 var orphanExcluded = map[string]bool{
 	"_index.md": true, "index.md": true, "log.md": true, "hot.md": true, "overview.md": true, "dashboard.md": true,
 }
+
+// folderIndexes are the index pages the layout names after their folder, so that no two
+// pages share the basename index.
+var folderIndexes = map[string]bool{vault.TasksIndex: true, vault.CanvasIndex: true}
 
 // taskErrors checks a task page: the rules the core enforces, a plan where the status
 // promises one, and an active task nobody has touched for tasks.StaleDays.
@@ -422,7 +426,7 @@ func parsePage(rel, text string) *page {
 		pg.fields = map[string]any{}
 	}
 	base := strings.ToLower(path.Base(rel))
-	pg.isIndex = base == "index.md" || base == "_index.md"
+	pg.isIndex = base == "index.md" || base == "_index.md" || folderIndexes[rel]
 	pg.masked = maskCode(text)
 	for _, m := range atxHeading.FindAllStringSubmatch(pg.masked, -1) {
 		if h := normalizeHeading(m[2]); h != "" {
@@ -699,7 +703,7 @@ func fragmentError(l link, t target) string {
 }
 
 func orphanCandidate(rel string) bool {
-	if orphanExcluded[strings.ToLower(path.Base(rel))] {
+	if orphanExcluded[strings.ToLower(path.Base(rel))] || folderIndexes[rel] {
 		return false
 	}
 	inner := strings.ToLower(strings.TrimPrefix(rel, "wiki/"))

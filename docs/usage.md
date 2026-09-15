@@ -95,7 +95,7 @@ change is one git commit in the vault.
 A task is a page in the vault, `wiki/tasks/<Title>.md`, with a status that
 moves from `planted` through `planned`, `active`, and `blocked` to `done` or
 `cancelled`. Finished tasks move to `wiki/tasks/archive/`. The core keeps the
-task ledger and `wiki/tasks/index.md` from the pages; a session started in the
+task ledger and `wiki/tasks/tasks.md` from the pages; a session started in the
 vault sees the open tasks at its start, so a task lives across sessions.
 
 Plant a task without ceremony, from anywhere:
@@ -134,8 +134,9 @@ Obsidian. `T` shows every project's open tasks on one board. The overview
 lists open tasks across projects, and signals blocked tasks and stale ones,
 active but untouched for 14 days.
 
-Vaults made by an older version gain the task folders, the index, and the
-vault's CSS snippet with:
+`upgrade` brings a vault made by an older version to the current layout. It
+adds the task folders, the task index, and the vault's CSS snippet, and it
+moves the task index from `wiki/tasks/index.md` to `wiki/tasks/tasks.md`:
 
 ```bash
 claude-atlas upgrade sensor-triage

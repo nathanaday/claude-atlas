@@ -66,14 +66,14 @@ The kind bounds what a plan may write. The core rejects anything outside it.
 |---|---|
 | `ingest` | `wiki/**`; may also `delete` a file under `inbox/` once it is captured |
 | `save`, `markdown`, `repair`, `fold` | `wiki/**` |
-| `canvas` | `wiki/canvases/**/*.canvas` and `wiki/canvases/index.md` |
+| `canvas` | `wiki/canvases/**/*.canvas` and `wiki/canvases/canvases.md` |
 | `base` | `wiki/**/*.base` |
 | `task` | task pages under `wiki/tasks/` and `wiki/tasks/archive/`, `wiki/hot.md`; may `delete` a note under `inbox/tasks/` |
 | `config` | only through the `mode` tool |
 
 Never writable: `wiki/log.md` (the core writes the entry from your summary),
 `wiki/meta/ledgers/source-ledger.json` (use the `sources` field),
-`wiki/tasks/index.md` and `wiki/meta/ledgers/task-ledger.json` (the core
+`wiki/tasks/tasks.md` and `wiki/meta/ledgers/task-ledger.json` (the core
 rewrites them from the task pages), `.raw/`, `.git/`, `.vault-meta/`,
 `.obsidian/`, and `.claude-atlas.json`. Only a `task` or `repair` plan may
 touch a task page.

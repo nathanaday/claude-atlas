@@ -108,6 +108,87 @@ func TestAdoptKeepsExistingFilesAndFillsGaps(t *testing.T) {
 	}
 }
 
+func TestUpgradeAndAdoptMoveTheTaskIndexFromItsOldPath(t *testing.T) {
+	needGit(t)
+	root := filepath.Join(t.TempDir(), "older")
+	if _, err := Init(root, Generic, now); err != nil {
+		t.Fatal(err)
+	}
+	repo := gitx.Repo{Dir: root}
+	oldPath := filepath.Join(root, "wiki", "tasks", "index.md")
+	newPath := filepath.Join(root, filepath.FromSlash(TasksIndex))
+	board := "---\ntype: meta\ntitle: Tasks\n---\n\n# Tasks\n\n[[Fix it]]\n"
+	os.Remove(newPath)
+	os.WriteFile(oldPath, []byte(board), 0o644)
+	repo.AddAll()
+	repo.Commit(CommitMessage("setup", "an older layout", NewOperationID("setup", now)))
+
+	res, err := Upgrade(root, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Added) != 0 || len(res.Moved) != 1 || res.Moved[0] != (Move{From: "wiki/tasks/index.md", To: TasksIndex}) {
+		t.Fatalf("upgrade %+v", res)
+	}
+	if data, _ := os.ReadFile(newPath); string(data) != board {
+		t.Fatalf("the index should keep its content:\n%s", data)
+	}
+	if _, err := os.Stat(oldPath); err == nil {
+		t.Fatal("the old path should be gone")
+	}
+	if dirty, _ := repo.Dirty(); dirty {
+		t.Fatal("upgrade should commit the move")
+	}
+	commits, _ := repo.Log(1)
+	if !strings.Contains(commits[0].Subject, "move wiki/tasks/index.md to wiki/tasks/tasks.md") {
+		t.Fatalf("commit %q", commits[0].Subject)
+	}
+	if again, err := Upgrade(root, now); err != nil || len(again.Added)+len(again.Moved) != 0 {
+		t.Fatalf("a second upgrade should do nothing: %+v %v", again, err)
+	}
+
+	// A stale copy at the old path next to the current index goes; the current index stays.
+	os.WriteFile(oldPath, []byte("stale\n"), 0o644)
+	repo.AddAll()
+	repo.Commit(CommitMessage("manual", "a stale copy", NewOperationID("manual", now)))
+	adopted, err := Adopt(root, "", now)
+	if err != nil || len(adopted.Moved) != 1 || adopted.Commit == "" {
+		t.Fatalf("adopt %+v %v", adopted, err)
+	}
+	if _, err := os.Stat(oldPath); err == nil {
+		t.Fatal("adopt should remove the stale copy")
+	}
+	if data, _ := os.ReadFile(newPath); string(data) != board {
+		t.Fatalf("the current index should stay:\n%s", data)
+	}
+
+	// A file at the old path that git does not hold as it is belongs to the user; it stays,
+	// untracked or edited.
+	keeps := func(which, want string) {
+		t.Helper()
+		if res, err := Upgrade(root, now); err != nil || len(res.Moved) != 0 {
+			t.Fatalf("upgrade should leave %s file alone: %+v %v", which, res, err)
+		}
+		if data, _ := os.ReadFile(oldPath); string(data) != want {
+			t.Fatalf("%s file changed:\n%s", which, data)
+		}
+	}
+	os.WriteFile(oldPath, []byte("my notes\n"), 0o644)
+	keeps("an untracked", "my notes\n")
+	repo.AddAll()
+	repo.Commit(CommitMessage("manual", "the user's page", NewOperationID("manual", now)))
+	os.WriteFile(oldPath, []byte("my notes, edited\n"), 0o644)
+	keeps("an edited", "my notes, edited\n")
+	os.Remove(oldPath)
+	repo.AddAll()
+	repo.Commit(CommitMessage("manual", "remove the user's page", NewOperationID("manual", now)))
+	if _, err := Ignore(root, "wiki/tasks/index.md", now); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(oldPath, []byte("my ignored notes\n"), 0o644)
+	keeps("an ignored", "my ignored notes\n")
+}
+
 func TestResolveOrder(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "v")

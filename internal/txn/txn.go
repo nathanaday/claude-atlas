@@ -184,6 +184,8 @@ func allowed(kind Kind, p string, mode WriteMode) error {
 		return fmt.Errorf("%s is updated through the plan's sources field; do not write it", p)
 	case p == vault.TaskLedgerPath, p == vault.TasksIndex:
 		return fmt.Errorf("%s is written by the core from the task pages; do not write it", p)
+	case p == vault.LegacyTasksIndex:
+		return fmt.Errorf("%s is the task index's old path; the core moves it to %s", p, vault.TasksIndex)
 	}
 	under := func(dir string) bool { return strings.HasPrefix(p, dir+"/") }
 	if under(vault.TasksDir) && kind != Task && kind != Repair {
@@ -209,8 +211,8 @@ func allowed(kind Kind, p string, mode WriteMode) error {
 			return fmt.Errorf("an ingest writes only under wiki/ (and removes from inbox/): %s", p)
 		}
 	case Canvas:
-		if !(under("wiki/canvases") && strings.HasSuffix(p, ".canvas")) && p != "wiki/canvases/index.md" {
-			return fmt.Errorf("a canvas operation writes only wiki/canvases/*.canvas and wiki/canvases/index.md: %s", p)
+		if !(under("wiki/canvases") && strings.HasSuffix(p, ".canvas")) && p != vault.CanvasIndex {
+			return fmt.Errorf("a canvas operation writes only wiki/canvases/*.canvas and %s: %s", vault.CanvasIndex, p)
 		}
 	case Base:
 		if !under(vault.WikiDir) || !strings.HasSuffix(p, ".base") {
@@ -692,6 +694,7 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 	withTasks := touchesTasks(plan)
 	var prevTasks tasks.Ledger
 	var indexBefore []byte
+	var legacyIndexExisted bool
 	if withTasks {
 		if prevTasks, err = tasks.LoadLedger(v); err != nil {
 			return nil, err
@@ -700,6 +703,9 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 		_, _, taskLedgerExisted, _ := fileState(v, vault.TaskLedgerPath)
 		_, _, indexExisted, _ := fileState(v, vault.TasksIndex)
 		in.Paths = append(in.Paths, InflightPath{Path: vault.TaskLedgerPath, Existed: taskLedgerExisted}, InflightPath{Path: vault.TasksIndex, Existed: indexExisted})
+		if _, _, legacyIndexExisted, _ = fileState(v, vault.LegacyTasksIndex); legacyIndexExisted {
+			in.Paths = append(in.Paths, InflightPath{Path: vault.LegacyTasksIndex, Existed: true})
+		}
 	}
 	if err := writeInflight(v, in); err != nil {
 		return nil, err
@@ -747,6 +753,12 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 			return nil, rollback(err)
 		}
 		changed = append(changed, vault.TaskLedgerPath, vault.TasksIndex)
+		if legacyIndexExisted {
+			if err := os.Remove(v.Path(vault.LegacyTasksIndex)); err != nil {
+				return nil, rollback(err)
+			}
+			changed = append(changed, vault.LegacyTasksIndex)
+		}
 	}
 	if err := repo.Add(changed...); err != nil {
 		return nil, rollback(err)

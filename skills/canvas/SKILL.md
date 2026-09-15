@@ -18,7 +18,7 @@ The open standard is [JSON Canvas 1.0](https://jsoncanvas.org/spec/1.0/).
 
 - Call `status` first. Store boards under `wiki/canvases/`; use
   `wiki/canvases/main.canvas` only when the user did not name a board.
-- `wiki/canvases/index.md` is an optional catalog. Update it only when a canvas
+- `wiki/canvases/canvases.md` is an optional catalog. Update it only when a canvas
   is created, renamed, or removed.
 - Use vault-relative paths in `file` and `background`; reject absolute paths,
   `..`, and `~`.

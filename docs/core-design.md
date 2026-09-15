@@ -99,6 +99,10 @@ Kept from claude-obsidian so the user's current vault lints clean:
   `contested`, `deprecated`, `archived`, plus whatever the vault already uses.
 - Files are named by title, sanitized for the filesystem, not slugified.
   Obsidian links read as `[[Attention Is All You Need]]`.
+- Only `wiki/index.md` is named `index`. A folder's index page takes the
+  folder's name: `wiki/tasks/tasks.md`, `wiki/canvases/canvases.md`. Two
+  pages with one basename give a bare link two targets, and Obsidian picks one
+  while lint resolves `[[index]]` under `wiki/` first and reports nothing.
 
 ### Modes
 
@@ -158,7 +162,7 @@ Kinds and their write scope, enforced at plan time:
 |---|---|
 | `ingest` | `wiki/**`; `.raw/captured/*` is create-only through `capture` |
 | `save`, `markdown`, `repair`, `fold` | `wiki/**` |
-| `canvas` | `wiki/canvases/**/*.canvas`, `wiki/canvases/index.md` |
+| `canvas` | `wiki/canvases/**/*.canvas`, `wiki/canvases/canvases.md` |
 | `base` | `wiki/**/*.base` |
 | `config` | `.claude-atlas.json` |
 | `setup` | the template paths, from `Init` and `Adopt` only |

@@ -453,6 +453,52 @@ func TestTaskOperationsPlantMoveAndRebuildTheLedger(t *testing.T) {
 	}
 }
 
+func TestTaskOperationRemovesTheTaskIndexAtItsOldPath(t *testing.T) {
+	v := newVault(t)
+	repo := v.Repo()
+	os.Rename(v.Path(vault.TasksIndex), v.Path(vault.LegacyTasksIndex))
+	repo.AddAll()
+	repo.Commit(vault.CommitMessage("setup", "an older layout", vault.NewOperationID("setup", now)))
+	if _, err := Prepare(v, Request{Kind: Task, Summary: "x", Writes: []Write{{Path: vault.LegacyTasksIndex, Mode: Replace, Content: []byte("x")}}}, now); err == nil || !strings.Contains(err.Error(), "old path") {
+		t.Fatalf("the old index path is reserved: %v", err)
+	}
+	req, _, err := PlantRequest(v, tasks.Plant{Title: "Fix the dialog"}, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Prepare(v, req, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Apply(v, plan, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(res.ChangedPaths, vault.LegacyTasksIndex) {
+		t.Errorf("changed paths lack the old index: %v", res.ChangedPaths)
+	}
+	if _, err := os.Stat(v.Path(vault.LegacyTasksIndex)); err == nil {
+		t.Fatal("apply should remove the index at its old path")
+	}
+	if index := read(t, v, vault.TasksIndex); !strings.Contains(index, "[[Fix the dialog]] | planted") {
+		t.Fatalf("index:\n%s", index)
+	}
+	if dirty, _ := repo.Dirty(); dirty {
+		t.Fatal("the removal belongs to the operation's commit")
+	}
+}
+
+func TestCanvasKindWritesTheCanvasIndex(t *testing.T) {
+	v := newVault(t)
+	page := mkpage("Canvases", "# Canvases\n")
+	if _, err := Prepare(v, Request{Kind: Canvas, Summary: "x", Writes: []Write{{Path: vault.CanvasIndex, Mode: Create, Content: page}}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(v, Request{Kind: Canvas, Summary: "x", Writes: []Write{{Path: "wiki/canvases/index.md", Mode: Create, Content: page}}}, now); err == nil {
+		t.Fatal("the canvas index is canvases.md, not index.md")
+	}
+}
+
 func TestTaskKindBoundsWrites(t *testing.T) {
 	v := newVault(t)
 	p, text := taskPage("Done wrong", "done", "task-20260912-aaaa", vault.TasksDir, "")

@@ -34,7 +34,7 @@ safety net, and adds the cross-vault view.
 2. The vault is the user's. Apply commits hand edits as `manual` operations
    first, so a rollback never touches what the user typed in Obsidian.
 3. Code owns what code can derive. The core writes `wiki/log.md`, the source
-   ledger, the task ledger, and `wiki/tasks/index.md`; the model never targets
+   ledger, the task ledger, and `wiki/tasks/tasks.md`; the model never targets
    them. A task's status is the truth and its folder follows it: finished
    tasks sit in `wiki/tasks/archive/`, and the core refuses a page whose
    folder disagrees.
@@ -120,10 +120,16 @@ the vaults directory (default `~/Documents/Vaults`).
   vault's CSS snippet and an appearance file that enables it; upgrade merges
   the snippet into an existing appearance file.
 - A kind bounds a plan's writes (`txn.allowed`). Reserved everywhere:
-  `wiki/log.md`, both ledgers, `wiki/tasks/index.md`, `.git`, `.vault-meta`,
-  `.obsidian`, `.raw` except through capture, `inbox` except deletes in an
-  ingest, `inbox/tasks` except deletes in a task operation. Only a `task` or
-  `repair` plan may touch a page under `wiki/tasks/`.
+  `wiki/log.md`, both ledgers, `wiki/tasks/tasks.md` and its old path
+  `wiki/tasks/index.md`, `.git`, `.vault-meta`, `.obsidian`, `.raw` except
+  through capture, `inbox` except deletes in an ingest, `inbox/tasks` except
+  deletes in a task operation. Only a `task` or `repair` plan may touch a page
+  under `wiki/tasks/`.
+- A new vault lints clean, and `lint.TestNewVaultHasNoFindings` holds the
+  template to that. A folder's index page takes the folder's name
+  (`wiki/tasks/tasks.md`, `wiki/canvases/canvases.md`), so no page shares the
+  basename of `wiki/index.md`. When a template path changes, `vault.Upgrade`
+  and `vault.Adopt` move the old file (`vault.legacyPaths`).
 - The server and the hooks resolve the vault in this order: an explicit
   `vault`, `CLAUDE_ATLAS_VAULT`, the nearest identity file, then the atlas: a
   folder that exactly one project links belongs to that project's vault.

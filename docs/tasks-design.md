@@ -71,13 +71,20 @@ created, updated, and the operations that touched it, with their dates and
 summaries, read from git. The model never writes it; a plan that names it is
 refused. The atlas reads it to see every vault's tasks without parsing pages.
 
-`wiki/tasks/index.md` is written by the core from the ledger in the same
+`wiki/tasks/tasks.md` is written by the core from the ledger in the same
 commit: open tasks first, sorted by status (active, blocked, planned,
 planted), then priority, then age; the archive below. It is the triage page
 the brainstorm called `triage.md`, and it stays correct because nobody
 maintains it. Lint treats it as an index, so task pages never count as
 unindexed. Triage order itself is the task pages' `priority` and `due`; a
 separate ranking field is not needed until it is.
+
+The index takes its folder's name, not `index.md`. With `index.md` it shared a
+basename with `wiki/index.md`: a bare `[[index]]` had two targets in
+Obsidian, and every vault carried a duplicate-basename finding from its first
+day. Vaults made before the rename have the index at `wiki/tasks/index.md`.
+`upgrade` moves it, and the next task operation removes it when it writes the
+new one. A task titled "Tasks" or "index" gets a numbered page.
 
 ## What keeps a task fresh across sessions
 
@@ -127,7 +134,7 @@ A new operation kind, `task`, bounds what the ceremony skills may write:
 
 | Path | Allowed |
 |---|---|
-| `wiki/tasks/**/*.md` except `index.md` | create, replace, delete |
+| `wiki/tasks/**/*.md` except `tasks.md` | create, replace, delete |
 | `wiki/hot.md` | replace, so active threads can name the task |
 | `inbox/tasks/**` | delete, once planted |
 

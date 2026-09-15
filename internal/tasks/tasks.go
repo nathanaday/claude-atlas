@@ -57,9 +57,9 @@ func contains(list []string, s string) bool {
 func Terminal(status string) bool { return status == "done" || status == "cancelled" }
 
 // IsPage reports whether a vault-relative path is a task page: a markdown file directly
-// under wiki/tasks/ or wiki/tasks/archive/, other than the index.
+// under wiki/tasks/ or wiki/tasks/archive/, other than the index at its current or old path.
 func IsPage(p string) bool {
-	if !strings.HasSuffix(strings.ToLower(p), ".md") || p == vault.TasksIndex {
+	if !strings.HasSuffix(strings.ToLower(p), ".md") || p == vault.TasksIndex || p == vault.LegacyTasksIndex {
 		return false
 	}
 	dir := path.Dir(p)
@@ -221,7 +221,10 @@ func Skeleton(p Plant, id string, now time.Time) string {
 func PagePath(title string, taken func(string) bool) string {
 	stem := vault.SanitizeTitle(title)
 	candidate := vault.TasksDir + "/" + stem + ".md"
-	for n := 2; taken(candidate) || taken(vault.TaskArchiveDir+"/"+path.Base(candidate)); n++ {
+	reserved := func(p string) bool {
+		return strings.EqualFold(p, vault.TasksIndex) || strings.EqualFold(p, vault.LegacyTasksIndex)
+	}
+	for n := 2; reserved(candidate) || taken(candidate) || taken(vault.TaskArchiveDir+"/"+path.Base(candidate)); n++ {
 		candidate = fmt.Sprintf("%s/%s (%d).md", vault.TasksDir, stem, n)
 	}
 	return candidate

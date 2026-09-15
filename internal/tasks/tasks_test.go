@@ -25,7 +25,7 @@ func TestParseEnforcesTheRules(t *testing.T) {
 	if err != nil || task.ID != "task-20260901-ab12" || task.Status != "planted" || task.Priority != "high" || task.HasPlan {
 		t.Fatalf("%+v %v", task, err)
 	}
-	if !IsPage(p) || IsPage(vault.TasksIndex) || IsPage("wiki/tasks/deep/x.md") || IsPage("wiki/concepts/x.md") {
+	if !IsPage(p) || IsPage(vault.TasksIndex) || IsPage("wiki/tasks/index.md") || IsPage("wiki/tasks/deep/x.md") || IsPage("wiki/concepts/x.md") {
 		t.Fatal("IsPage")
 	}
 	bad := map[string][2]string{
@@ -92,6 +92,11 @@ func TestTitleFromTextAndSkeleton(t *testing.T) {
 	taken := map[string]bool{vault.TasksDir + "/Fix it.md": true, vault.TasksDir + "/Fix it (2).md": true}
 	if got := PagePath("Fix it", func(p string) bool { return taken[p] }); got != vault.TasksDir+"/Fix it (3).md" {
 		t.Fatalf("path %q", got)
+	}
+	for _, title := range []string{"tasks", "Tasks", "index"} {
+		if got := PagePath(title, func(string) bool { return false }); got != vault.TasksDir+"/"+title+" (2).md" {
+			t.Errorf("a task titled %q takes the index's name: %q", title, got)
+		}
 	}
 }
 

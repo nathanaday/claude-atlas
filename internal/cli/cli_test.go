@@ -427,13 +427,14 @@ func TestTaskCommands(t *testing.T) {
 	if code := h.run("plant", "welcome", "x", "--priority", "urgent"); code != 1 {
 		t.Fatalf("bad priority exit %d %s", code, h.err.String())
 	}
-	// An older vault gains the task files and the snippet through upgrade; an appearance
-	// file it already has keeps its settings and gains the snippet.
+	// An older vault gains the scratch folder and the snippet through upgrade, and its task
+	// index moves to its current path; an appearance file it already has keeps its settings
+	// and gains the snippet.
 	os.RemoveAll(filepath.Join(welcome, "ideas"))
-	os.Remove(filepath.Join(welcome, "wiki", "tasks", "index.md"))
+	os.Rename(filepath.Join(welcome, "wiki", "tasks", "tasks.md"), filepath.Join(welcome, "wiki", "tasks", "index.md"))
 	os.Remove(filepath.Join(welcome, ".obsidian", "snippets", "claude-atlas.css"))
 	os.WriteFile(filepath.Join(welcome, ".obsidian", "appearance.json"), []byte(`{"baseFontSize": 15, "enabledCssSnippets": ["vault-colors"]}`), 0o644)
-	if code := h.run("upgrade", "welcome"); code != 0 || !strings.Contains(h.out.String(), "added .obsidian/appearance.json, .obsidian/snippets/claude-atlas.css, ideas/.gitkeep, wiki/tasks/index.md") || !strings.Contains(h.out.String(), "reload Obsidian") {
+	if code := h.run("upgrade", "welcome"); code != 0 || !strings.Contains(h.out.String(), "added .obsidian/appearance.json, .obsidian/snippets/claude-atlas.css, ideas/.gitkeep; moved wiki/tasks/index.md to wiki/tasks/tasks.md") || !strings.Contains(h.out.String(), "reload Obsidian") {
 		t.Fatalf("upgrade exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 	appearance, _ := os.ReadFile(filepath.Join(welcome, ".obsidian", "appearance.json"))

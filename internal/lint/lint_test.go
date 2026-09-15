@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nathanaday/claude-atlas/internal/gitx"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 const front = "---\ntitle: %s\ntype: concept\nstatus: seed\ncreated: 2026-01-01\nupdated: 2026-01-01\ntags:\n  - x\n---\n"
@@ -140,6 +143,43 @@ func TestLedgerErrors(t *testing.T) {
 	}
 }
 
+// A finding in a new vault is the layout's own fault, and the user can do nothing about it.
+func TestNewVaultHasNoFindings(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	asOf := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
+	for _, mode := range vault.Modes {
+		root := filepath.Join(t.TempDir(), string(mode))
+		if _, err := vault.Init(root, mode, asOf); err != nil {
+			t.Fatal(err)
+		}
+		r, err := Run(root, Options{AsOf: asOf})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Summary.IssuesFound != 0 {
+			t.Errorf("%s vault:\n%s", mode, r.Markdown())
+		}
+	}
+}
+
+func TestFolderIndexPagesCatalogAndAreNotOrphans(t *testing.T) {
+	root := fixture(t, map[string]string{
+		"wiki/index.md":             mkpage("Index", "# Index\n\n- [[Alpha]]\n"),
+		"wiki/concepts/Alpha.md":    mkpage("Alpha", "# Alpha\n\ntext\n"),
+		"wiki/concepts/Beta.md":     mkpage("Beta", "# Beta\n\n[[Alpha]]\n"),
+		"wiki/canvases/canvases.md": mkpage("Canvases", "# Canvases\n\n- [[Beta]]\n"),
+	})
+	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Orphans) != 0 || len(r.UnindexedPages) != 0 {
+		t.Fatalf("orphans %v unindexed %v", r.Orphans, r.UnindexedPages)
+	}
+}
+
 func TestExcludeAndFrontmatterYAMLError(t *testing.T) {
 	root := fixture(t, map[string]string{
 		"wiki/index.md":           mkpage("Index", "# I\n\n[[Scratch]]\n"),
@@ -164,7 +204,7 @@ func TestTaskErrors(t *testing.T) {
 	task := func(status, id, extra string) string {
 		return "---\ntype: task\ntitle: T\nstatus: " + status + "\npriority: normal\ncreated: 2026-08-01\nupdated: 2026-08-01\ntags:\n  - task\ntask_id: " + id + "\n---\n\n# T\n\n## Idea\n\nx\n" + extra
 	}
-	write("wiki/tasks/index.md", "---\ntype: meta\ntitle: Tasks\nstatus: evergreen\ncreated: 2026-08-01\nupdated: 2026-08-01\ntags:\n  - meta\n---\n\n[[ok]] [[stale]] [[noplan]] [[wrong]]\n")
+	write("wiki/tasks/tasks.md", "---\ntype: meta\ntitle: Tasks\nstatus: evergreen\ncreated: 2026-08-01\nupdated: 2026-08-01\ntags:\n  - meta\n---\n\n[[ok]] [[stale]] [[noplan]] [[wrong]]\n")
 	write("wiki/tasks/ok.md", task("planted", "task-20260801-aaaa", ""))
 	write("wiki/tasks/stale.md", task("active", "task-20260801-bbbb", "\n## Plan\n\n1. Go.\n"))
 	write("wiki/tasks/noplan.md", task("planned", "task-20260801-cccc", ""))

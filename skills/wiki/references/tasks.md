@@ -52,7 +52,7 @@ operation. A `task` plan may write:
 | `wiki/hot.md` | replace, when active threads should name the task |
 | `inbox/tasks/*` | delete, once planted |
 
-Never `wiki/tasks/index.md` or the task ledger: the core rewrites both from
+Never `wiki/tasks/tasks.md` or the task ledger: the core rewrites both from
 the pages in the same commit.
 
 To change a status, replace the whole page with the new frontmatter and

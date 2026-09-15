@@ -533,9 +533,9 @@ func (e *env) adoptPath(path string, opts vaults.RegisterOptions, mode vault.Mod
 	case res.AlreadyAdopted && res.Commit == "":
 		c.Step(console.Skip, "adopt", "already a claude-atlas vault")
 	case res.WasLegacy:
-		c.Step(console.OK, "adopted", fmt.Sprintf("claude-obsidian vault; added %s", strings.Join(res.Added, ", ")))
+		c.Step(console.OK, "adopted", "claude-obsidian vault; "+setupChanges(res.Added, res.Moved))
 	default:
-		c.Step(console.OK, "adopted", fmt.Sprintf("added %s", strings.Join(res.Added, ", ")))
+		c.Step(console.OK, "adopted", setupChanges(res.Added, res.Moved))
 	}
 	if res.GitInitialized {
 		c.Step(console.OK, "git", "initialized; every operation is now one commit")
@@ -1868,16 +1868,16 @@ func (e *env) upgrade(args []string) (int, error) {
 	}
 	restyled := false
 	for _, root := range roots {
-		written, err := vault.Upgrade(root, time.Now())
+		res, err := vault.Upgrade(root, time.Now())
 		if err != nil {
 			return 1, err
 		}
-		if len(written) == 0 {
+		if len(res.Added)+len(res.Moved) == 0 {
 			e.console.Step(console.Skip, home.Display(root), "current")
 			continue
 		}
-		e.console.Step(console.OK, home.Display(root), "added "+strings.Join(written, ", "))
-		for _, rel := range written {
+		e.console.Step(console.OK, home.Display(root), setupChanges(res.Added, res.Moved))
+		for _, rel := range res.Added {
 			if strings.HasPrefix(rel, ".obsidian/snippets/") {
 				restyled = true
 			}
@@ -1887,6 +1887,21 @@ func (e *env) upgrade(args []string) (int, error) {
 		e.console.Say("  The folder colors come from .obsidian/snippets/claude-atlas.css, enabled in each vault's appearance settings; reload Obsidian (Cmd+R) to see them. An older vault-colors.css may stay; the new snippet takes precedence.")
 	}
 	return 0, nil
+}
+
+// setupChanges says what an adopt or an upgrade did to a vault's files.
+func setupChanges(added []string, moved []vault.Move) string {
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "added "+strings.Join(added, ", "))
+	}
+	for _, m := range moved {
+		parts = append(parts, fmt.Sprintf("moved %s to %s", m.From, m.To))
+	}
+	if len(parts) == 0 {
+		return "committed the files already there"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (e *env) undo(args []string) (int, error) {
