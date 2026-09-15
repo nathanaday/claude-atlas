@@ -41,7 +41,7 @@ func TestSessionStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"claude-atlas vault: v (generic mode)", "<vault-context>", "Active Threads", "/claude-atlas:wiki"} {
+	for _, want := range []string{"claude-atlas project: v (generic mode)", "<vault-context>", "Active Threads", "/claude-atlas:wiki"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
@@ -56,7 +56,7 @@ func TestSessionStart(t *testing.T) {
 	}
 	out.Reset()
 	SessionStart(strings.NewReader(`{"cwd":"/nowhere"}`), &out, env(map[string]string{vault.EnvVault: v.Root, "CLAUDE_ATLAS_SESSION_CONTEXT": "0"}), true, time.Now())
-	if !strings.Contains(out.String(), "claude-atlas vault") || strings.Contains(out.String(), "<vault-context>") {
+	if !strings.Contains(out.String(), "claude-atlas project") || strings.Contains(out.String(), "<vault-context>") {
 		t.Fatalf("env vault with context off:\n%s", out.String())
 	}
 	os.MkdirAll(v.Path(".vault-meta"), 0o755)
@@ -179,7 +179,32 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 	}
 	out.Reset()
 	SessionStart(strings.NewReader(`{"cwd":"`+inside+`"}`), &out, e, false, now)
-	if !strings.Contains(out.String(), "claude-atlas vault: v") || !strings.Contains(out.String(), "mounted repository paper. In it, changes land as commits") {
+	if !strings.Contains(out.String(), "claude-atlas project: v") || !strings.Contains(out.String(), "mounted repository paper. In it, changes land as commits") {
 		t.Fatalf("repo inside the vault:\n%s", out.String())
+	}
+}
+
+func TestSessionStartInAKnowledgeBase(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := filepath.Join(t.TempDir(), "kb")
+	if _, err := vault.Init(root, vault.Options{Kind: vault.Knowledge, Name: "ai-ml"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, env(nil), true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"claude-atlas knowledge base: ai-ml (generic mode)", "Knowledge enters through a project", "<vault-context>", KnowledgeSkills} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	for _, absent := range []string{"Open tasks", "task-plant", "inbox/tasks"} {
+		if strings.Contains(text, absent) {
+			t.Errorf("a knowledge base session mentions %q:\n%s", absent, text)
+		}
 	}
 }
