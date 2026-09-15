@@ -58,6 +58,9 @@ func TestScanFindsEveryVaultAndSortsThem(t *testing.T) {
 	}
 	var names []string
 	for _, e := range ix.Entries {
+		if e.Error != "" {
+			continue
+		}
 		names = append(names, string(e.Kind)+":"+e.Name)
 	}
 	if got := strings.Join(names, ","); got != "project:cs566,project:self-study,project:side,knowledge:ai-ml,knowledge:robotics" {
@@ -65,6 +68,26 @@ func TestScanFindsEveryVaultAndSortsThem(t *testing.T) {
 	}
 	if len(ix.Problems) != 2 {
 		t.Fatalf("problems %+v", ix.Problems)
+	}
+	if len(ix.Entries) != 7 {
+		t.Fatalf("entries len %d: %+v", len(ix.Entries), ix.Entries)
+	}
+	last := ix.Entries[len(ix.Entries)-2:]
+	if last[0].Error == "" || last[1].Error == "" || filepath.Base(last[0].Path) != "bad" || filepath.Base(last[1].Path) != "old" {
+		t.Fatalf("error entries %+v", last)
+	}
+	if _, err := ix.Find("old"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("find old: %v", err)
+	}
+	for _, e := range ix.Projects() {
+		if e.Error != "" {
+			t.Fatalf("projects contains an error entry: %+v", e)
+		}
+	}
+	for _, e := range ix.Knowledge() {
+		if e.Error != "" {
+			t.Fatalf("knowledge contains an error entry: %+v", e)
+		}
 	}
 	for _, p := range ix.Problems {
 		switch filepath.Base(p.Path) {

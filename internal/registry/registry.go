@@ -248,8 +248,10 @@ func markerFileExists(root string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// scanRoot reads the identity file at root and records an Entry when it is a current
-// vault, otherwise a Problem: a bad marker, a v1 vault, or an unsupported schema.
+// scanRoot reads the identity file at root and records an Entry: a full one when it is
+// a current vault, an Entry{Path, Error} alongside a matching Problem when the scan
+// found the vault but could not read it (a bad marker, a v1 vault, or an unsupported
+// schema). A path with no identity file at all is a Problem only.
 func scanRoot(ix *Index, root string) {
 	cfg, ok := vault.ReadConfig(root)
 	if !ok {
@@ -257,17 +259,24 @@ func scanRoot(ix *Index, root string) {
 			ix.Problems = append(ix.Problems, Problem{Path: root, Reason: "not found"})
 			return
 		}
-		ix.Problems = append(ix.Problems, Problem{Path: root, Reason: "identity file is not JSON; run claude-atlas adopt"})
+		fail(ix, root, "identity file is not JSON; run claude-atlas adopt")
 		return
 	}
 	switch cfg.Schema {
 	case vault.Schema:
 		ix.Entries = append(ix.Entries, buildEntry(root, cfg))
 	case vault.SchemaV1:
-		ix.Problems = append(ix.Problems, Problem{Path: root, Reason: fmt.Sprintf("v1 vault; run claude-atlas adopt %s --as knowledge|project", root)})
+		fail(ix, root, fmt.Sprintf("v1 vault; run claude-atlas adopt %s --as knowledge|project", root))
 	default:
-		ix.Problems = append(ix.Problems, Problem{Path: root, Reason: fmt.Sprintf("unsupported schema %q", cfg.Schema)})
+		fail(ix, root, fmt.Sprintf("unsupported schema %q", cfg.Schema))
 	}
+}
+
+// fail records a vault the scan found but could not read: the same reason in both a
+// Problem and an Entry{Path, Error}.
+func fail(ix *Index, root, reason string) {
+	ix.Problems = append(ix.Problems, Problem{Path: root, Reason: reason})
+	ix.Entries = append(ix.Entries, Entry{Path: root, Error: reason})
 }
 
 // buildEntry turns a valid identity file into an Entry, unresolved: a project's mounts
