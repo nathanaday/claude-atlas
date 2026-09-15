@@ -22,6 +22,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/ledger"
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -75,7 +76,7 @@ func (s *Server) resolve(explicit string) (*vault.Vault, error) {
 	case derr != nil:
 		return nil, err
 	case match != nil:
-		return vault.Open(match.Vault)
+		return vault.Open(match.Project.Path)
 	case len(candidates) > 1:
 		return nil, fmt.Errorf("%s is linked by several atlas projects: %s; pass vault", s.opts.ProjectDir, discover.Describe(candidates))
 	}
@@ -139,13 +140,15 @@ type RepoInfo struct {
 	Dirty   int    `json:"dirty"`
 }
 
-func repoInfo(page links.Page) RepoInfo {
-	info := RepoInfo{Name: page.Name, Path: page.Path, Remote: page.Remote, Changes: page.Policy()}
+func repoInfo(r registry.Repo) RepoInfo {
+	info := RepoInfo{Name: r.Name, Path: r.Path, Remote: r.Remote, Changes: links.Policy(r.Changes, r.Remote)}
 	info.Policy = links.PolicyText(info.Changes)
-	if fact := links.Inspect(links.Repo, page.Path); fact.OK {
-		info.Branch = fact.Branch
-		if fact.Dirty != nil {
-			info.Dirty = *fact.Dirty
+	if r.Path != "" {
+		if fact := links.Inspect(links.Repo, r.Path); fact.OK {
+			info.Branch = fact.Branch
+			if fact.Dirty != nil {
+				info.Dirty = *fact.Dirty
+			}
 		}
 	}
 	return info
@@ -209,8 +212,8 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 			}
 		}
 	}
-	if match, _, err := discover.Vault(home.Resolve(s.opts.Env(home.EnvHome)), s.opts.ProjectDir); err == nil && match != nil && match.Page != nil && match.Vault == v.Root {
-		info := repoInfo(*match.Page)
+	if match, _, err := discover.Vault(home.Resolve(s.opts.Env(home.EnvHome)), s.opts.ProjectDir); err == nil && match != nil && match.Project.Path == v.Root {
+		info := repoInfo(match.Repo)
 		out.Repository = &info
 	}
 	if out.Versions.Plugin != "" && out.Versions.Binary != "dev" && out.Versions.Plugin != out.Versions.Binary {
@@ -401,13 +404,13 @@ func (s *Server) repos(ctx context.Context, req *mcp.CallToolRequest, a VaultArg
 	if err := requireProject(v, "repositories"); err != nil {
 		return nil, ReposOut{}, err
 	}
-	pages, err := discover.Repos(home.Resolve(s.opts.Env(home.EnvHome)), v.Root)
+	repos, err := discover.Repos(home.Resolve(s.opts.Env(home.EnvHome)), v.Root)
 	if err != nil {
 		return nil, ReposOut{}, err
 	}
 	out := ReposOut{Repos: []RepoInfo{}}
-	for _, page := range pages {
-		out.Repos = append(out.Repos, repoInfo(page))
+	for _, r := range repos {
+		out.Repos = append(out.Repos, repoInfo(r))
 	}
 	return nil, out, nil
 }

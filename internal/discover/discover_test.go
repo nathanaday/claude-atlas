@@ -4,12 +4,19 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
-func TestVaultThroughALinkedFolder(t *testing.T) {
+func TestVaultThroughARepository(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
 	if m, c, err := Vault(h, root); m != nil || c != nil || err != nil {
@@ -20,35 +27,80 @@ func TestVaultThroughALinkedFolder(t *testing.T) {
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
-	os.MkdirAll(cfg.TreeRoot(), 0o755)
-	mk := func(name string) string {
-		v := filepath.Join(cfg.VaultsDir, name)
-		os.MkdirAll(v, 0o755)
-		os.WriteFile(filepath.Join(v, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v2","id":"00000000-0000-4000-8000-000000000001","kind":"project","name":"v","mode":"generic","created":"2026-09-12"}`), 0o644)
-		return v
-	}
-	a, _ := vaults.RegisterProject(cfg, mk("a"), vaults.RegisterOptions{Name: "A"})
-	b, _ := vaults.RegisterProject(cfg, mk("b"), vaults.RegisterOptions{Name: "B"})
-	repo := filepath.Join(root, "code", "app")
-	os.MkdirAll(filepath.Join(repo, "src"), 0o755)
-	if _, err := vaults.AddLink(cfg, a, repo, true); err != nil {
+	now := time.Now()
+
+	aRoot := filepath.Join(cfg.VaultsDir, "projects", "a")
+	if _, err := vault.Init(aRoot, vault.Options{Kind: vault.Project, Name: "A"}, now); err != nil {
 		t.Fatal(err)
 	}
-	m, c, err := Vault(h, filepath.Join(repo, "src"))
-	if err != nil || m == nil || m.Project.Name != "A" || m.Folder != repo || len(c) != 0 {
+	bRoot := filepath.Join(cfg.VaultsDir, "projects", "b")
+	if _, err := vault.Init(bRoot, vault.Options{Kind: vault.Project, Name: "B"}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := ix.ByPath(aRoot)
+	if a == nil {
+		t.Fatal("project a not scanned")
+	}
+	if _, _, err := vaults.CreateRepo(h, cfg, *a, "code", "", now); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(aRoot, "repos", "code", "src"), 0o755)
+
+	outside := filepath.Join(root, "outside")
+	os.MkdirAll(outside, 0o755)
+	ix, err = registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := ix.ByPath(bRoot)
+	if b == nil {
+		t.Fatal("project b not scanned")
+	}
+	if _, _, err := vaults.AddRepo(h, cfg, *b, outside, true, now); err != nil {
+		t.Fatal(err)
+	}
+
+	m, c, err := Vault(h, filepath.Join(aRoot, "repos", "code", "src"))
+	if err != nil || m == nil || m.Project.Name != "A" || m.Repo.Name != "code" || len(c) != 0 {
 		t.Fatalf("inside the repo: %+v %v %v", m, c, err)
 	}
-	if m, _, _ := Vault(h, filepath.Join(root, "code")); m != nil {
-		t.Fatal("the parent of a linked folder is not inside it")
+	if m, _, _ := Vault(h, aRoot); m != nil {
+		t.Fatal("the project's own root is not inside its repository")
 	}
-	if _, err := vaults.AddLink(cfg, b, repo, true); err != nil {
+
+	m, c, err = Vault(h, outside)
+	if err != nil || m == nil || m.Project.Name != "B" || m.Repo.Name != "outside" || len(c) != 0 {
+		t.Fatalf("the outside repository: %+v %v %v", m, c, err)
+	}
+
+	// A second project mounts the very same folder as the first project's repository:
+	// the two candidates tie on path length, and there is no single match.
+	ix, err = registry.Scan(cfg)
+	if err != nil {
 		t.Fatal(err)
 	}
-	m, c, err = Vault(h, repo)
-	if err != nil || m != nil || len(c) != 2 || c[0].Project.Name != "A" {
-		t.Fatalf("two projects: %+v %+v %v", m, c, err)
+	b = ix.ByPath(bRoot)
+	shared := filepath.Join(aRoot, "repos", "code")
+	if _, _, err := vaults.AddRepo(h, cfg, *b, shared, true, now); err != nil {
+		t.Fatal(err)
+	}
+	m, c, err = Vault(h, shared)
+	if err != nil || m != nil || len(c) != 2 {
+		t.Fatalf("two projects sharing a folder: %+v %+v %v", m, c, err)
 	}
 	if got := Describe(c); got == "" {
 		t.Fatal("describe")
+	}
+
+	if m, _, _ := Vault(h, t.TempDir()); m != nil {
+		t.Fatal("an unrelated folder matches nothing")
+	}
+	if m, c, err := Vault(home.Home{Root: t.TempDir()}, root); m != nil || c != nil || err != nil {
+		t.Fatalf("a home with no config: %v %v %v", m, c, err)
 	}
 }

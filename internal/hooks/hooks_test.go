@@ -10,7 +10,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -125,43 +125,48 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
-	// A repo the atlas links to the vault's project gets the same, through discovery.
+	// A repository the registry mounts on the vault's project gets the same, through
+	// discovery.
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
 	cfg := h.Default(filepath.Join(root, "Vaults"), filepath.Join(root, "Atlas"))
 	os.MkdirAll(h.Root, 0o755)
 	h.Save(cfg)
-	os.MkdirAll(cfg.TreeRoot(), 0o755)
-	p, err := vaults.RegisterProject(cfg, v.Root, vaults.RegisterOptions{Name: "V"})
+	if _, err := vaults.Register(h, cfg, v.Root); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := registry.Scan(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := filepath.Join(root, "code")
-	os.MkdirAll(filepath.Join(repo, "src"), 0o755)
-	if _, err := vaults.AddLink(cfg, p, repo, true); err != nil {
+	entry := ix.ByPath(v.Root)
+	if entry == nil {
+		t.Fatal("project not scanned")
+	}
+	outside := filepath.Join(root, "code")
+	if _, _, err := vaults.CreateRepo(h, cfg, *entry, "code", outside, now); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
 	e := env(map[string]string{home.EnvHome: h.Root})
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+filepath.Join(repo, "src")+`"}`), &out, e, true, now); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+outside+`"}`), &out, e, true, now); err != nil {
 		t.Fatal(err)
 	}
 	text = out.String()
-	for _, want := range []string{"linked to the project V", "Open tasks: 1", "<vault-context>", "mounted repository code. In it, changes land as commits on the current branch. The repos tool says the same."} {
+	for _, want := range []string{"the repository code of the project", "Open tasks: 1", "<vault-context>", "This folder is the repository code. In it, changes land as commits on the current branch. The repos tool says the same."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in repo session:\n%s", want, text)
 		}
 	}
 	// With a remote and no policy, the session is told to open pull requests.
-	pages, _, _ := links.Walk(cfg.AtlasVault)
-	if page := links.FindByPath(pages, repo); page != nil {
-		remote := "https://github.com/you/code"
-		if _, err := vaults.UpdateLink(cfg, *page, vaults.LinkEdit{Remote: &remote}); err != nil {
-			t.Fatal(err)
-		}
+	if err := vault.UpdateConfig(v.Root, "remote", now, func(c *vault.Config) error {
+		c.Repos[0].Remote = "git@example.com:a/code.git"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	out.Reset()
-	SessionStart(strings.NewReader(`{"cwd":"`+filepath.Join(repo, "src")+`"}`), &out, e, false, now)
+	SessionStart(strings.NewReader(`{"cwd":"`+outside+`"}`), &out, e, false, now)
 	if !strings.Contains(out.String(), "changes land as pull requests") {
 		t.Fatalf("policy line:\n%s", out.String())
 	}
@@ -171,15 +176,21 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 		t.Fatalf("silent outside linked folders:\n%s", out.String())
 	}
 	// A repository mounted inside the vault's own folder: the vault is found directly,
-	// and the session is still told it sits in a mounted repository.
-	inside := filepath.Join(v.Root, "paper")
-	os.MkdirAll(inside, 0o755)
-	if _, err := vaults.AddLink(cfg, p, inside, true); err != nil {
+	// and the session is still told it sits in a repository.
+	ix, err = registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry = ix.ByPath(v.Root)
+	if entry == nil {
+		t.Fatal("project not scanned")
+	}
+	if _, _, err := vaults.CreateRepo(h, cfg, *entry, "inside", "", now); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	SessionStart(strings.NewReader(`{"cwd":"`+inside+`"}`), &out, e, false, now)
-	if !strings.Contains(out.String(), "claude-atlas project: v") || !strings.Contains(out.String(), "mounted repository paper. In it, changes land as commits") {
+	SessionStart(strings.NewReader(`{"cwd":"`+v.Path("repos/inside")+`"}`), &out, e, false, now)
+	if !strings.Contains(out.String(), "claude-atlas project: v") || !strings.Contains(out.String(), "This folder is the repository inside. In it, changes land as commits") {
 		t.Fatalf("repo inside the vault:\n%s", out.String())
 	}
 }

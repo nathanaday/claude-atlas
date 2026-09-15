@@ -76,16 +76,16 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	}
 	via := ""
 	policy := ""
-	// A mounted repository may sit inside the vault's folder or anywhere else; the atlas
+	// A repository may sit inside the project's own folder or anywhere else; the registry
 	// knows either way, and a session inside one is told how changes land there.
 	match, candidates, _ := discover.Vault(home.Resolve(env(home.EnvHome)), in.Cwd)
 	if err != nil {
 		switch {
 		case match != nil:
-			if v, err = vault.Open(match.Vault); err != nil {
+			if v, err = vault.Open(match.Project.Path); err != nil {
 				return nil
 			}
-			via = match.Project.Name
+			via = fmt.Sprintf("claude-atlas: this folder is the repository %s of the project %s, whose vault is at %s. The atlas tools use that vault. Search the wiki (the wiki-query skill, or Grep under its wiki/) before answering from the code alone; keep a decision with the save skill.\n", match.Repo.Name, match.Project.Name, match.Project.Path)
 		case len(candidates) > 1:
 			_, err := fmt.Fprintf(w, "claude-atlas: this folder is linked by several atlas projects: %s. Pass vault to the atlas tools, or set %s.\n", discover.Describe(candidates), vault.EnvVault)
 			return err
@@ -93,8 +93,8 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 			return nil
 		}
 	}
-	if match != nil && match.Page != nil && match.Vault == v.Root {
-		policy = fmt.Sprintf("This folder is the mounted repository %s. In it, %s. The repos tool says the same.", match.Page.Name, links.PolicyText(match.Page.Policy()))
+	if match != nil && match.Project.Path == v.Root {
+		policy = fmt.Sprintf("This folder is the repository %s. In it, %s. The repos tool says the same.", match.Repo.Name, links.PolicyText(links.Policy(match.Repo.Changes, match.Repo.Remote)))
 	}
 	switch env("CLAUDE_ATLAS_SESSION_CONTEXT") {
 	case "0":
@@ -105,7 +105,7 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	var b strings.Builder
 	noun := v.Config.Kind.Noun()
 	if via != "" {
-		fmt.Fprintf(&b, "claude-atlas: this folder is linked to the project %s, whose vault is the %s %s (%s mode) at %s. The atlas tools use that vault. Search the wiki (the wiki-query skill, or Grep under its wiki/) before answering from the code alone; keep a decision with the save skill.\n", via, noun, v.Name(), v.Config.Mode, v.Root)
+		b.WriteString(via)
 	} else {
 		fmt.Fprintf(&b, "claude-atlas %s: %s (%s mode) at %s\n", noun, v.Name(), v.Config.Mode, v.Root)
 	}

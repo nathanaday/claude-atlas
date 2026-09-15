@@ -1,5 +1,5 @@
-// Package discover finds the vault a directory belongs to through the atlas: the
-// project that links a folder holding the directory. It lets a session started in a
+// Package discover finds the project a directory belongs to through the registry: the
+// project whose repository holds the directory. It lets a session started in a
 // repository reach its vault without any file in the repository.
 package discover
 
@@ -7,26 +7,22 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
-	"github.com/nathanaday/claude-atlas/internal/tree"
+	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-// Match is a project whose mounted repository holds the directory. Page is the
-// repository's page when it has one.
+// Match is a project whose repository holds the directory.
 type Match struct {
-	Project *tree.Project
-	Vault   string
-	Folder  string
-	Page    *links.Page
+	Project registry.Entry
+	Repo    registry.Repo
 }
 
-// Vault looks a directory up in the atlas. One project linking a folder above dir gives
-// a match; several give them all as candidates and no match; no atlas, or no project,
-// gives nothing.
+// Vault looks a directory up in the registry. One repository holding dir gives a match;
+// several equally specific ones give them all as candidates and no match; no atlas, or
+// no repository holding dir, gives nothing.
 func Vault(h home.Home, dir string) (*Match, []Match, error) {
 	cfg, err := h.Load()
 	if errors.Is(err, home.ErrNoAtlas) {
@@ -39,28 +35,34 @@ func Vault(h home.Home, dir string) (*Match, []Match, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	projects, _, err := tree.Walk(cfg.TreeRoot())
+	ix, err := registry.Scan(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	pages, _, _ := links.Walk(cfg.AtlasVault)
 	var matches []Match
-	for _, p := range projects {
-		var best string
-		for _, l := range p.Linked {
-			if l.Path != "" && inside(l.Path, abs) && len(l.Path) > len(best) {
-				best = l.Path
+	best := -1
+	for _, e := range ix.Projects() {
+		for _, r := range e.Repos {
+			if r.Path == "" || !inside(r.Path, abs) {
+				continue
+			}
+			n := len(r.Path)
+			switch {
+			case n > best:
+				best = n
+				matches = []Match{{Project: e, Repo: r}}
+			case n == best:
+				matches = append(matches, Match{Project: e, Repo: r})
 			}
 		}
-		if best != "" {
-			matches = append(matches, Match{Project: p, Vault: p.VaultPath(), Folder: best, Page: links.FindByPath(pages, best)})
-		}
 	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i].Project.Rel < matches[j].Project.Rel })
 	if len(matches) == 1 {
 		return &matches[0], nil, nil
 	}
-	return nil, matches, nil
+	if len(matches) > 1 {
+		return nil, matches, nil
+	}
+	return nil, nil, nil
 }
 
 func inside(root, p string) bool {
@@ -68,8 +70,8 @@ func inside(root, p string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
-// Repos lists the repositories mounted on the project whose vault is root.
-func Repos(h home.Home, root string) ([]links.Page, error) {
+// Repos lists the repositories of the project at root.
+func Repos(h home.Home, root string) ([]registry.Repo, error) {
 	cfg, err := h.Load()
 	if errors.Is(err, home.ErrNoAtlas) {
 		return nil, nil
@@ -77,32 +79,22 @@ func Repos(h home.Home, root string) ([]links.Page, error) {
 	if err != nil {
 		return nil, err
 	}
-	projects, _, err := tree.Walk(cfg.TreeRoot())
+	ix, err := registry.Scan(cfg)
 	if err != nil {
 		return nil, err
 	}
-	p := tree.FindByVault(projects, root)
-	if p == nil {
+	e := ix.ByPath(root)
+	if e == nil || e.Error != "" || e.Kind != vault.Project {
 		return nil, nil
 	}
-	pages, _, _ := links.Walk(cfg.AtlasVault)
-	var out []links.Page
-	for _, l := range p.Linked {
-		if l.Path == "" {
-			continue
-		}
-		if page := links.FindByPath(pages, l.Path); page != nil {
-			out = append(out, *page)
-		}
-	}
-	return out, nil
+	return e.Repos, nil
 }
 
 // Describe names candidates for an error or a hint.
 func Describe(candidates []Match) string {
 	var parts []string
 	for _, m := range candidates {
-		parts = append(parts, fmt.Sprintf("%s (%s)", m.Project.Name, m.Vault))
+		parts = append(parts, fmt.Sprintf("%s (%s)", m.Project.Name, m.Project.Path))
 	}
 	return strings.Join(parts, ", ")
 }

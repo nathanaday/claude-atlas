@@ -13,6 +13,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -325,17 +326,27 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	cfg := h.Default(filepath.Join(root, "Vaults"), filepath.Join(root, "Atlas"))
 	os.MkdirAll(h.Root, 0o755)
 	h.Save(cfg)
-	os.MkdirAll(cfg.TreeRoot(), 0o755)
-	p, err := vaults.RegisterProject(cfg, v.Root, vaults.RegisterOptions{Name: "V"})
+	if _, err := vaults.Register(h, cfg, v.Root); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := registry.Scan(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := filepath.Join(root, "code")
-	os.MkdirAll(filepath.Join(repo, "src"), 0o755)
-	if _, err := vaults.AddLink(cfg, p, repo, true); err != nil {
+	entry := ix.ByPath(v.Root)
+	if entry == nil {
+		t.Fatal("project not scanned")
+	}
+	if _, _, err := vaults.CreateRepo(h, cfg, *entry, "code", "", now); err != nil {
 		t.Fatal(err)
 	}
-	s := New(Options{Version: "test", ProjectDir: filepath.Join(repo, "src"), Env: func(k string) string {
+	if err := vault.UpdateConfig(v.Root, "remote", now, func(c *vault.Config) error {
+		c.Repos[0].Remote = "git@example.com:a/code.git"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Options{Version: "test", ProjectDir: v.Path("repos/code"), Env: func(k string) string {
 		if k == home.EnvHome {
 			return h.Root
 		}
@@ -356,12 +367,12 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	if msg := c.call("status", nil, &status); msg != "" {
 		t.Fatal(msg)
 	}
-	if status.Vault != v.Root || status.Repository == nil || status.Repository.Name != "code" || status.Repository.Changes != "commit" || status.Repository.Branch != "main" {
+	if status.Vault != v.Root || status.Repository == nil || status.Repository.Name != "code" || status.Repository.Changes != "pr" || status.Repository.Branch != "main" {
 		t.Fatalf("status in a repo: %+v %+v", status, status.Repository)
 	}
 	var repos ReposOut
 	c.call("repos", nil, &repos)
-	if len(repos.Repos) != 1 || repos.Repos[0].Path != repo || !strings.Contains(repos.Repos[0].Policy, "current branch") {
+	if len(repos.Repos) != 1 || repos.Repos[0].Path != v.Path("repos/code") || repos.Repos[0].Changes != "pr" || !strings.Contains(repos.Repos[0].Policy, "pull request") {
 		t.Fatalf("repos %+v", repos)
 	}
 }
