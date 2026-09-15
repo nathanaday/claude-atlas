@@ -119,7 +119,7 @@ func TestRegistryDerivesEveryEntry(t *testing.T) {
 	os.MkdirAll(filepath.Join(cfg.VaultsDir, "old", "wiki"), 0o755)
 	os.WriteFile(filepath.Join(cfg.VaultsDir, "old", vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1"}`), 0o644)
 	stateDir := filepath.Join(root, "state")
-	entries, ix, err := Registry(cfg, stateDir, time.Now())
+	entries, ix, _, err := Registry(cfg, stateDir, time.Now(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,5 +164,41 @@ func TestSignalsOverAnEntry(t *testing.T) {
 	}
 	if got := Signals(registry.Entry{Name: "k", Error: "v1 vault"}, time.Now()); len(got) != 1 || !strings.Contains(got[0], "v1 vault") {
 		t.Fatalf("error entry %v", got)
+	}
+}
+
+// A mount the atlas resolved is only reachable through its symlink. Signals names the
+// symlink that is gone or points somewhere else, and says nothing when it is right.
+func TestSignalsNameAMissingSymlink(t *testing.T) {
+	root := t.TempDir()
+	wiki := filepath.Join(root, "ai-ml", "wiki")
+	e := registry.Entry{Name: "p", Kind: vault.Project, Path: filepath.Join(root, "p"),
+		Mounts: []registry.Mount{{ID: "k1", Name: "ai-ml", Access: vault.AccessWrite, Effective: vault.AccessWrite, Path: wiki}},
+		State:  &registry.State{VaultOK: true},
+	}
+	link := e.KbDir("ai-ml")
+	if got := strings.Join(Signals(e, time.Now()), "\n"); !strings.Contains(got, "symlink missing") {
+		t.Fatalf("no symlink:\n%s", got)
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "elsewhere"), link); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(Signals(e, time.Now()), "\n"); !strings.Contains(got, "points elsewhere") {
+		t.Fatalf("a symlink to another folder:\n%s", got)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(wiki, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(wiki, link); err != nil {
+		t.Fatal(err)
+	}
+	if got := Signals(e, time.Now()); len(got) != 0 {
+		t.Fatalf("a symlink that is right needs no signal: %v", got)
 	}
 }

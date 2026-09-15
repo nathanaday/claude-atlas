@@ -13,6 +13,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // Derive observes one vault and returns what refresh records for it.
@@ -107,11 +108,45 @@ func taskSummaryFor(v *vault.Vault, today time.Time) *registry.TaskSummary {
 	return sum
 }
 
-// Registry scans, derives every readable entry, writes the registry file, and returns the entries.
-func Registry(cfg *home.Config, stateDir string, today time.Time) ([]registry.Entry, *registry.Index, error) {
+// MountChange is what one project's mount symlinks needed: Created and Removed name the
+// symlinks refresh made and dropped, Missing the mounts whose knowledge base the scan did
+// not find, and Error what stopped the repair.
+type MountChange struct {
+	Project string
+	Created []string
+	Removed []string
+	Missing []string
+	Error   string
+}
+
+// any reports whether the change is worth a line.
+func (c MountChange) any() bool {
+	return len(c.Created) > 0 || len(c.Removed) > 0 || len(c.Missing) > 0 || c.Error != ""
+}
+
+// Registry scans, derives every readable entry, writes the registry file, and returns the
+// entries. With ensure, it recreates every project's mount symlinks first and reports what
+// each project needed; one project's failure does not stop the others.
+func Registry(cfg *home.Config, stateDir string, today time.Time, ensure bool) ([]registry.Entry, *registry.Index, []MountChange, error) {
 	ix, err := registry.Scan(cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+	var changes []MountChange
+	if ensure {
+		for _, e := range ix.Entries {
+			if e.Error != "" || e.Kind != vault.Project {
+				continue
+			}
+			created, removed, missing, err := vaults.EnsureMounts(e, ix)
+			change := MountChange{Project: e.Name, Created: created, Removed: removed, Missing: missing}
+			if err != nil {
+				change.Error = err.Error()
+			}
+			if change.any() {
+				changes = append(changes, change)
+			}
+		}
 	}
 	generatedAt := NowUTC()
 	newDays := cfg.NewDays()
@@ -119,12 +154,12 @@ func Registry(cfg *home.Config, stateDir string, today time.Time) ([]registry.En
 		ix.Entries[i].State = Derive(ix.Entries[i], today, generatedAt, newDays)
 	}
 	if err := os.RemoveAll(stateDir); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := registry.Write(stateDir, ix.Entries, generatedAt); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return ix.Entries, ix, nil
+	return ix.Entries, ix, changes, nil
 }
 
 // Signals lists what needs attention on one entry.
@@ -146,6 +181,13 @@ func Signals(e registry.Entry, today time.Time) []string {
 	for _, m := range e.Mounts {
 		if m.Error != "" {
 			notes = append(notes, fmt.Sprintf("mount %s: %s", m.Name, m.Error))
+			continue
+		}
+		switch vaults.MountState(e, m) {
+		case vaults.MountMissing:
+			notes = append(notes, fmt.Sprintf("mount %s: symlink missing; run `claude-atlas refresh`", m.Name))
+		case vaults.MountWrong:
+			notes = append(notes, fmt.Sprintf("mount %s: symlink points elsewhere; run `claude-atlas refresh`", m.Name))
 		}
 	}
 	for _, r := range e.Repos {

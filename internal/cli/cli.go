@@ -61,6 +61,12 @@ Across the vaults:
   remove NAME               forget a vault outside the vaults directory; the folder stays
   refresh                   read every vault again and rewrite the registry
 
+Knowledge bases a project reaches (a mount is a folder kb/NAME inside the project):
+  mount PROJECT KB          mount a knowledge base in a project; --read mounts it read-only, --as NAME renames it
+  unmount PROJECT KB|NAME   drop that mount; the knowledge base stays
+  grant KB PROJECT          let one project into a guarded knowledge base: --read or --write
+  revoke KB PROJECT         take that grant back
+
 Repositories (a project's deliverables; memory stays in the vault):
   link NAME PATH|URL        link a repository to a project, or clone one from a URL; --init makes a plain folder one first
   new-repo NAME REPO        create a repository for a project and link it; --at DIR places it
@@ -166,6 +172,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.openClaude(rest[1:])
 	case "ingest":
 		code, err = e.ingest(rest[1:])
+	case "mount":
+		code, err = e.mount(rest[1:])
+	case "unmount":
+		code, err = e.unmount(rest[1:])
+	case "grant":
+		code, err = e.grant(rest[1:])
+	case "revoke":
+		code, err = e.revoke(rest[1:])
 	case "link":
 		code, err = e.link(rest[1:])
 	case "new-repo":
@@ -345,9 +359,11 @@ func badEntry(ix *registry.Index, arg string) *registry.Entry {
 	return nil
 }
 
-// refreshAll rebuilds the registry from a scan. Callers report the count themselves.
+// refreshAll rebuilds the registry from a scan and recreates every project's mount
+// symlinks. Callers report the count themselves; only `refresh` reports the symlinks.
 func (e *env) refreshAll(cfg *home.Config) ([]registry.Entry, *registry.Index, error) {
-	return refresh.Registry(cfg, e.home.StateDir(), time.Now())
+	entries, ix, _, err := refresh.Registry(cfg, e.home.StateDir(), time.Now(), true)
+	return entries, ix, err
 }
 
 // registryEntries reads the registry the last refresh wrote, writing one first when no
@@ -1282,11 +1298,7 @@ func (e *env) show(args []string) (int, error) {
 		row("Tags", strings.Join(entry.Tags, ", "))
 	}
 	for _, m := range entry.Mounts {
-		detail := m.Error
-		if detail == "" {
-			detail = m.Effective + "  " + home.Display(m.Path)
-		}
-		row("Mount", fmt.Sprintf("%-20s %s", m.Name, detail))
+		row("Mount", mountLine(entry, m))
 	}
 	for _, r := range entry.Repos {
 		row("Repo", repoLine(r))
@@ -1340,6 +1352,18 @@ func taskCounts(c tasks.Counts) string {
 	}
 	return line
 }
+
+// mountLine renders one mount: its name, the folder the project reaches it through, the
+// access both vaults agree on, and what the symlink is.
+func mountLine(project registry.Entry, m registry.Mount) string {
+	if m.Error != "" {
+		return fmt.Sprintf("%-20s %s", m.Name, m.Error)
+	}
+	return fmt.Sprintf("%-20s %-20s %-6s %s", m.Name, kbPath(m.Name), m.Effective, vaults.MountState(project, m))
+}
+
+// kbPath is the folder a project reaches a mount through, as the user sees it.
+func kbPath(name string) string { return vault.KbDir + "/" + name }
 
 // repoLine renders one repository: its name, its folder, how changes land, its remote.
 func repoLine(r registry.Repo) string {
@@ -1452,6 +1476,151 @@ func (e *env) remove(args []string) (int, error) {
 		return 1, err
 	}
 	e.console.Step(console.OK, "removed", fmt.Sprintf("%s; %s", name, ternary(gone, "its folder was already gone", "the vault is still at "+where)))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
+	return 0, nil
+}
+
+func (e *env) mount(args []string) (int, error) {
+	fs := newFlags("mount", e.stderr)
+	read := fs.Bool("read", false, "the project may read the knowledge base but not write to it")
+	as := fs.String("as", "", "the name the project reaches it under (default: the knowledge base's name)")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) != 2 {
+		return 2, errors.New("usage: claude-atlas mount PROJECT KB [--read] [--as NAME]")
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	project, err := e.entry(cfg, positional[0])
+	if err != nil {
+		return 1, err
+	}
+	kb, err := e.entry(cfg, positional[1])
+	if err != nil {
+		return 1, err
+	}
+	access := vault.AccessWrite
+	if *read {
+		access = vault.AccessRead
+	}
+	m, err := vaults.Mount(project, kb, access, *as, time.Now())
+	if err != nil {
+		if m.ID != "" {
+			return 1, fmt.Errorf("%w; the mount is recorded, so `claude-atlas refresh` can make kb/%s", err, m.Name)
+		}
+		return 1, err
+	}
+	entries, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	effective := registry.Effective(m.Access, registry.GrantedAccess(kb, project.ID))
+	e.console.Step(console.OK, "mounted", fmt.Sprintf("%s as kb/%s (effective %s)", kb.Name, m.Name, effective))
+	if effective != m.Access {
+		e.console.Step(console.Skip, "access", fmt.Sprintf("%s is guarded; run `claude-atlas grant %s %s --%s` to open it", kb.Name, kb.Name, project.Name, m.Access))
+	}
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
+	return 0, nil
+}
+
+func (e *env) unmount(args []string) (int, error) {
+	if len(args) != 2 {
+		return 2, errors.New("usage: claude-atlas unmount PROJECT KB|NAME")
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	project, err := e.entry(cfg, args[0])
+	if err != nil {
+		return 1, err
+	}
+	name := args[1]
+	if found := vaults.FindMount(project, name); found != nil {
+		name = found.Name
+	}
+	if err := vaults.Unmount(project, args[1], time.Now()); err != nil {
+		return 1, err
+	}
+	entries, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	e.console.Step(console.OK, "unmounted", fmt.Sprintf("%s from %s; the knowledge base is untouched", name, project.Name))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
+	return 0, nil
+}
+
+func (e *env) grant(args []string) (int, error) {
+	fs := newFlags("grant", e.stderr)
+	read := fs.Bool("read", false, "the project may read the knowledge base")
+	write := fs.Bool("write", false, "the project may write pages there")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) != 2 || *read == *write {
+		return 2, errors.New("usage: claude-atlas grant KB PROJECT --read|--write")
+	}
+	access := vault.AccessRead
+	if *write {
+		access = vault.AccessWrite
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	kb, err := e.entry(cfg, positional[0])
+	if err != nil {
+		return 1, err
+	}
+	project, err := e.entry(cfg, positional[1])
+	if err != nil {
+		return 1, err
+	}
+	if err := vaults.Grant(kb, project, access, time.Now()); err != nil {
+		return 1, err
+	}
+	entries, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	e.console.Step(console.OK, "granted", fmt.Sprintf("%s %s on %s", project.Name, access, kb.Name))
+	if kb.Access == vault.AccessOpen {
+		e.console.Step(console.Skip, "access", fmt.Sprintf("%s is open, so every project already writes there", kb.Name))
+	}
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
+	return 0, nil
+}
+
+func (e *env) revoke(args []string) (int, error) {
+	if len(args) != 2 {
+		return 2, errors.New("usage: claude-atlas revoke KB PROJECT")
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	kb, err := e.entry(cfg, args[0])
+	if err != nil {
+		return 1, err
+	}
+	project, err := e.entry(cfg, args[1])
+	if err != nil {
+		return 1, err
+	}
+	if err := vaults.Revoke(kb, project, time.Now()); err != nil {
+		return 1, err
+	}
+	entries, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	e.console.Step(console.OK, "revoked", fmt.Sprintf("%s on %s", project.Name, kb.Name))
 	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
@@ -1717,9 +1886,23 @@ func (e *env) refresh(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	entries, ix, err := e.refreshAll(cfg)
+	entries, ix, changes, err := refresh.Registry(cfg, e.home.StateDir(), time.Now(), true)
 	if err != nil {
 		return 1, err
+	}
+	for _, ch := range changes {
+		for _, name := range ch.Created {
+			e.console.Step(console.OK, "created", fmt.Sprintf("%s in %s", kbPath(name), ch.Project))
+		}
+		for _, name := range ch.Removed {
+			e.console.Step(console.OK, "removed", fmt.Sprintf("%s from %s", kbPath(name), ch.Project))
+		}
+		for _, name := range ch.Missing {
+			e.console.Step(console.Fail, "missing", fmt.Sprintf("%s in %s: no knowledge base with that id", kbPath(name), ch.Project))
+		}
+		if ch.Error != "" {
+			e.console.Step(console.Fail, "mounts", ch.Project+": "+ch.Error)
+		}
 	}
 	for _, en := range entries {
 		switch {
@@ -2437,6 +2620,12 @@ func (e *env) doctor(args []string) (int, error) {
 			if m.Error != "" {
 				ok = false
 				c.Step(console.Fail, en.Name+" · "+m.Name, m.Error)
+				continue
+			}
+			// Doctor reports the symlink; refresh is what makes it.
+			if state := vaults.MountState(en, m); state != vaults.MountOK {
+				ok = false
+				c.Step(console.Fail, en.Name+" · "+kbPath(m.Name), state+"; run `claude-atlas refresh` to recreate it")
 			}
 		}
 		for _, r := range en.Repos {

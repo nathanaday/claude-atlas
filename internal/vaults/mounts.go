@@ -17,6 +17,27 @@ import (
 // MountLink is the symlink a mount makes: <project>/kb/<name> -> <knowledge base>/wiki.
 func MountLink(project registry.Entry, name string) string { return project.KbDir(name) }
 
+// What MountState reports about a mount's symlink.
+const (
+	MountOK      = "ok"
+	MountMissing = "missing"
+	MountWrong   = "wrong target"
+)
+
+// MountState is what a resolved mount's symlink is on disk. The symlink is local state:
+// EnsureMounts creates it, and nothing else needs to.
+func MountState(project registry.Entry, m registry.Mount) string {
+	target, err := os.Readlink(project.KbDir(m.Name))
+	switch {
+	case err != nil:
+		return MountMissing
+	case target != m.Path:
+		return MountWrong
+	default:
+		return MountOK
+	}
+}
+
 // kbRoot is the folder that holds a project's mount symlinks.
 func kbRoot(project registry.Entry) string { return project.KbDir("") }
 
@@ -107,8 +128,8 @@ func Mount(project, kb registry.Entry, access, name string, now time.Time) (vaul
 	return m, nil
 }
 
-// findMount finds project's mount by kb id or mount name.
-func findMount(project registry.Entry, target string) *registry.Mount {
+// FindMount finds project's mount by kb id or mount name; nil when there is none.
+func FindMount(project registry.Entry, target string) *registry.Mount {
 	for i := range project.Mounts {
 		m := project.Mounts[i]
 		if m.ID == target || strings.EqualFold(m.Name, target) {
@@ -122,7 +143,7 @@ func findMount(project registry.Entry, target string) *registry.Mount {
 // file and removes the symlink. The knowledge base is untouched. A real folder at the
 // mount's path is refused before the identity file changes; the mount stays recorded.
 func Unmount(project registry.Entry, target string, now time.Time) error {
-	found := findMount(project, target)
+	found := FindMount(project, target)
 	if found == nil {
 		return fmt.Errorf("%s has no mount named %q", project.Name, target)
 	}

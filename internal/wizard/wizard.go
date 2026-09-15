@@ -161,7 +161,7 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 		}
 		c.Step(console.OK, "first project", note)
 	}
-	entries, _, err := refresh.Registry(cfg, h.StateDir(), time.Now())
+	entries, _, _, err := refresh.Registry(cfg, h.StateDir(), time.Now(), true)
 	if err != nil {
 		return 1, err
 	}

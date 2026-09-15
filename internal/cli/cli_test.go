@@ -315,6 +315,103 @@ func repoLineFor(out, name string) string {
 	return ""
 }
 
+func TestMountGrantAndRevokeCommands(t *testing.T) {
+	h, vaults := setup(t)
+	welcome := project(vaults, "welcome")
+	link := filepath.Join(welcome, "kb", "ai-ml")
+	wiki := filepath.Join(vaults, "knowledge", "ai-ml", "wiki")
+	if code := h.run("new-knowledge", "ai-ml"); code != 0 {
+		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
+	}
+	if code := h.run("mount", "welcome", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "kb/ai-ml") {
+		t.Fatalf("mount exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if got, err := os.Readlink(link); err != nil || got != wiki {
+		t.Fatalf("symlink %q %v, want %q", got, err, wiki)
+	}
+	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "write") {
+		t.Fatalf("an open knowledge base is mounted for writing: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("mount", "welcome", "ai-ml"); code != 1 || !strings.Contains(h.err.String(), "already") {
+		t.Fatalf("a second mount of the same knowledge base: exit %d %s", code, h.err.String())
+	}
+	if code := h.run("mount", "ai-ml", "welcome"); code != 1 || !strings.Contains(h.err.String(), "knowledge base") {
+		t.Fatalf("a knowledge base mounts nothing: exit %d %s", code, h.err.String())
+	}
+
+	// A guarded knowledge base grants read until it grants more.
+	if code := h.run("edit", "ai-ml", "--access", "guarded"); code != 0 {
+		t.Fatalf("edit --access exit %d %s", code, h.err.String())
+	}
+	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "read") {
+		t.Fatalf("guarded: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("grant", "ai-ml", "welcome", "--write"); code != 0 || !strings.Contains(h.out.String(), "granted") {
+		t.Fatalf("grant exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "write") {
+		t.Fatalf("after the grant: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("revoke", "ai-ml", "welcome"); code != 0 || !strings.Contains(h.out.String(), "revoked") {
+		t.Fatalf("revoke exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "read") {
+		t.Fatalf("after the revoke: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("grant", "ai-ml", "welcome", "--sometimes"); code != 2 {
+		t.Fatalf("an unknown access flag: exit %d", code)
+	}
+	if code := h.run("grant", "ai-ml", "welcome"); code != 2 {
+		t.Fatalf("grant asks for one of --read and --write: exit %d", code)
+	}
+
+	// The symlink is local state: doctor names one that is gone, refresh makes it again.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "kb/ai-ml") || !strings.Contains(h.out.String(), "refresh") {
+		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
+	}
+	if _, err := os.Lstat(link); err == nil {
+		t.Fatal("doctor must not create the symlink")
+	}
+	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "created") || !strings.Contains(h.out.String(), "kb/ai-ml") {
+		t.Fatalf("refresh exit %d:\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if got, err := os.Readlink(link); err != nil || got != wiki {
+		t.Fatalf("refresh should recreate the symlink: %q %v", got, err)
+	}
+	// The exit code here belongs to the whole installation, which this test does not own;
+	// what the repaired mount owes doctor is silence.
+	h.run("doctor")
+	if strings.Contains(h.out.String(), "kb/ai-ml") {
+		t.Fatalf("a mount that works needs no line:\n%s", h.out.String())
+	}
+
+	if code := h.run("unmount", "welcome", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "unmounted") {
+		t.Fatalf("unmount exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Lstat(link); err == nil {
+		t.Fatal("unmount removes the symlink")
+	}
+	if code := h.run("show", "welcome"); code != 0 || mountLineFor(h.out.String(), "ai-ml") != "" {
+		t.Fatalf("the mount should be gone: exit %d\n%s", code, h.out.String())
+	}
+	if _, err := os.Stat(wiki); err != nil {
+		t.Fatalf("unmount must leave the knowledge base: %v", err)
+	}
+}
+
+// mountLineFor is the line `show` printed for one mount.
+func mountLineFor(out, name string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "kb/"+name) {
+			return line
+		}
+	}
+	return ""
+}
+
 func TestRefreshAndDoctorReportProblems(t *testing.T) {
 	h, vaults := setup(t)
 	legacy := project(vaults, "legacy")

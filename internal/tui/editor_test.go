@@ -58,7 +58,7 @@ func atlasFixture(t *testing.T) (*home.Config, home.Home, Hooks) {
 			}
 			return ix.Entries, nil
 		},
-		Refresh: func() error { _, _, err := refresh.Registry(cfg, h.StateDir(), testNow); return err },
+		Refresh: func() error { _, _, _, err := refresh.Registry(cfg, h.StateDir(), testNow, false); return err },
 		Edit: func(e registry.Entry, edit vaults.Edit) error {
 			return vaults.EditIdentity(e, edit, testNow)
 		},
