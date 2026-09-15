@@ -25,8 +25,8 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/mcpserver"
 	"github.com/nathanaday/claude-atlas/internal/obsidian"
-	"github.com/nathanaday/claude-atlas/internal/pages"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/tui"
@@ -42,55 +42,55 @@ var Version = "dev"
 const usage = `claude-atlas: knowledge vaults for Claude Code, and one view across them.
 
 Usage:
-  claude-atlas                       open the atlas: every project as one interactive tree
+  claude-atlas                       open the view: every vault on one screen
   claude-atlas [--home DIR] [-y] <command> [options]
 
 Vaults:
-  setup                  install the plugin, create the atlas, and your first vault
-  new-vault              create a vault and its project page, step by step
-  new-vault NAME         create a vault without prompts
-  adopt [PATH]           make an existing Obsidian or claude-obsidian vault a claude-atlas vault
-  open-vault [NAME]      open the atlas, or a project's vault, in Obsidian
-  open-claude NAME       start Claude Code inside a project's vault; --task ID continues a task in its workdir
-  ingest NAME [PATH...]  stage new files from outside the vault into its inbox, then ingest them
+  setup                     install the plugin and create your first project
+  new-project NAME|PATH     create a project: tasks, questions, notes, repositories
+  new-knowledge NAME|PATH   create a knowledge base: sources, entities, concepts
+  adopt [PATH]              make an existing Obsidian or claude-obsidian vault one of these
+  open-vault [NAME|PATH]    open a vault in Obsidian; with no name, the one you are in
+  open-claude NAME          start Claude Code inside a vault; --task ID continues a task in its workdir
+  ingest NAME [PATH...]     stage new files from outside a project into its inbox, then ingest them
 
-The atlas:
-  view                   the interactive tree; the same as no command at all
-  list                   list every project
-  show NAME              everything the atlas knows about a project
-  edit NAME [flags]      change a project's name, purpose, category, priority, state, or vault
-  remove NAME            remove a project from the atlas; the vault stays on disk
-  link NAME PATH|URL     mount a git repository on a project, or clone one from a URL; --init makes a plain folder one first
-  new-repo NAME REPO     create a repository for a project's deliverables and mount it; --at DIR places it
-  unlink NAME PATH|PAGE  remove that link; the repository and its page are untouched
-  links [NAME]           a project's repositories, or every one and the projects that use it
-  edit-link PAGE [flags] rename a repository's page, point it elsewhere, or set how changes land: --changes pr|commit
-  relate NAME OTHER      record that two projects belong together
-  unrelate NAME OTHER    remove that
-  refresh                read every vault and rewrite Overview.md, Tree.md, and categories/
+Across the vaults:
+  view                      the interactive screen; the same as no command at all
+  list                      every vault: kind, heat, name, path
+  show NAME                 everything the atlas knows about one vault
+  edit NAME [flags]         change a vault's name, tags, scope, or access
+  remove NAME               forget a vault outside the vaults directory; the folder stays
+  refresh                   read every vault again and rewrite the registry
 
-Tasks (VAULT is a project name or a path; default: the current directory):
-  plant VAULT TEXT...    plant a task: a page with status planted, from your words
-  tasks [VAULT]          list open tasks; with no vault and outside one, every project's
+Repositories (a project's deliverables; memory stays in the vault):
+  link NAME PATH|URL        mount a repository on a project, or clone one from a URL; --init makes a plain folder one first
+  new-repo NAME REPO        create a repository for a project and mount it; --at DIR places it
+  unlink NAME REPO          drop that repository from the project; the folder stays
+  repos [NAME]              one project's repositories, or every project's
+  edit-repo NAME REPO       set a repository's remote, folder, or how changes land: --changes pr|commit
 
-Inside a vault (VAULT is a project name or a path; default: the current directory):
-  lint [VAULT]           run the wiki health check
-  stub VAULT [TITLE...]  create seed pages for the pages your links name but nobody has written
-  history [VAULT]        list operations, newest first
-  undo VAULT OPERATION   revert one operation
-  recover [VAULT]        restore a vault after an interrupted operation
-  mode [VAULT] [MODE]    show or set the filing mode: generic or lyt
-  upgrade [VAULT|--all]  add the files a vault made by an older version lacks
-  apply VAULT PLAN.json  apply a plan file, for scripts
+Tasks (VAULT is a vault name or a path; default: the current directory):
+  plant VAULT TEXT...       plant a task: a page with status planted, from your words
+  tasks [VAULT]             list open tasks; with no vault and outside one, every project's
+
+Inside a vault (VAULT is a vault name or a path; default: the current directory):
+  lint [VAULT]              run the wiki health check
+  stub VAULT [TITLE...]     create seed pages for the pages your links name but nobody has written
+  history [VAULT]           list operations, newest first
+  undo VAULT OPERATION      revert one operation
+  recover [VAULT]           restore a vault after an interrupted operation
+  mode [VAULT] [MODE]       show or set the filing mode: generic or lyt
+  upgrade [VAULT|--all]     add the files a vault made by an older version lacks
+  apply VAULT PLAN.json     apply a plan file, for scripts
 
 Plugin:
-  mcp                    serve the atlas tools over stdio; Claude Code runs this
-  hook EVENT             run a plugin hook: session-start, guard, stop
+  mcp                       serve the atlas tools over stdio; Claude Code runs this
+  hook EVENT                run a plugin hook: session-start, guard, stop
 
-  config [KEY VALUE]     show the settings, or set one: new-days N
-  info                   show every path and version the atlas uses
-  doctor                 check the installation and every registered vault
-  version                print the version
+  config [KEY VALUE]        show the settings, or set one: new-days N
+  info                      show every path and version the atlas uses
+  doctor                    check the installation and every vault
+  version                   print the version
 
 Global options:
   --home DIR       atlas home (default ~/.claude-atlas or $CLAUDE_ATLAS_HOME)
@@ -134,7 +134,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 	}
 	e := &env{home: home.Resolve(*homeFlag), console: c, stdin: stdin, stdout: stdout, stderr: stderr}
 	if len(rest) == 0 {
-		// Bare, in a terminal, with an atlas: the tree. Otherwise the usage, with the
+		// Bare, in a terminal, with an atlas: the view. Otherwise the usage, with the
 		// one step that is missing.
 		switch {
 		case !c.Interactive():
@@ -142,7 +142,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 			return 0
 		case !e.home.Exists():
 			fmt.Fprint(stdout, usage)
-			fmt.Fprintf(stdout, "\nNo atlas yet; run `claude-atlas setup`. Afterwards, `claude-atlas` alone opens the tree.\n")
+			fmt.Fprintf(stdout, "\nNo atlas yet; run `claude-atlas setup`. Afterwards, `claude-atlas` alone opens the view.\n")
 			return 0
 		}
 		rest = []string{"view"}
@@ -153,8 +153,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 	switch rest[0] {
 	case "setup":
 		code, err = e.setup(rest[1:])
-	case "new-vault":
-		code, err = e.newVault(rest[1:])
+	case "new-project":
+		code, err = e.newProject(rest[1:])
+	case "new-knowledge":
+		code, err = e.newKnowledge(rest[1:])
 	case "adopt":
 		code, err = e.adopt(rest[1:])
 	case "view":
@@ -171,14 +173,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.newRepo(rest[1:])
 	case "unlink":
 		code, err = e.unlink(rest[1:])
-	case "links":
-		code, err = e.links(rest[1:])
-	case "edit-link":
-		code, err = e.editLink(rest[1:])
-	case "relate":
-		code, err = e.relate(rest[1:], true)
-	case "unrelate":
-		code, err = e.relate(rest[1:], false)
+	case "repos":
+		code, err = e.repos(rest[1:])
+	case "edit-repo":
+		code, err = e.editRepo(rest[1:])
 	case "list":
 		code, err = e.list(rest[1:])
 	case "show":
@@ -260,34 +258,84 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-// refreshAll rewrites every derived page in the atlas vault.
-func (e *env) refreshAll(cfg *home.Config) (string, *refresh.Result, error) {
-	if err := pages.Write(cfg, e.home.Root, Version); err != nil {
-		return "", nil, err
+// setFlags names the flags the user actually gave, so "" can mean "clear this field".
+func setFlags(fs *flag.FlagSet) map[string]bool {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	return set
+}
+
+// entry resolves one vault by name, id, or path. Every command scans afresh: the registry
+// file is derived state, and a stale one must never decide what a command acts on.
+func (e *env) entry(cfg *home.Config, arg string) (registry.Entry, error) {
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		return registry.Entry{}, err
 	}
-	return refresh.Run(cfg, e.home.StateDir(), time.Now())
+	return findEntry(ix, arg)
+}
+
+// findEntry is entry over an index the caller already has. A vault the scan could not
+// read carries its own reason, which says more than "no vault named".
+func findEntry(ix *registry.Index, arg string) (registry.Entry, error) {
+	found, err := ix.Find(arg)
+	if err == nil {
+		return *found, nil
+	}
+	if !errors.Is(err, registry.ErrNotFound) {
+		return registry.Entry{}, err
+	}
+	if bad := badEntry(ix, arg); bad != nil {
+		return registry.Entry{}, fmt.Errorf("%s: %s", home.Display(bad.Path), bad.Error)
+	}
+	return registry.Entry{}, fmt.Errorf("no vault named %q; see `claude-atlas list`", arg)
+}
+
+// badEntry finds a vault the scan could not read, by its path or its folder's name. Such
+// an entry has no name of its own.
+func badEntry(ix *registry.Index, arg string) *registry.Entry {
+	abs, err := filepath.Abs(home.Expand(arg))
+	for i := range ix.Entries {
+		e := &ix.Entries[i]
+		if e.Error == "" {
+			continue
+		}
+		if (err == nil && e.Path == abs) || strings.EqualFold(filepath.Base(e.Path), arg) {
+			return e
+		}
+	}
+	return nil
+}
+
+// refreshAll rebuilds the registry from a scan. Callers report the count themselves.
+func (e *env) refreshAll(cfg *home.Config) ([]registry.Entry, *registry.Index, error) {
+	return refresh.Registry(cfg, e.home.StateDir(), time.Now())
+}
+
+// refreshed is what a command says after rewriting the registry.
+func refreshed(entries []registry.Entry) string {
+	return fmt.Sprintf("%d vault%s", len(entries), plural(len(entries)))
+}
+
+// entryName is the name to show: a vault the scan could not read has only its folder.
+func entryName(en registry.Entry) string {
+	if en.Error != "" {
+		return filepath.Base(en.Path)
+	}
+	return en.Name
 }
 
 func (e *env) setup(args []string) (int, error) {
 	fs := newFlags("setup", e.stderr)
 	vaultsDir := fs.String("vaults-dir", "", "where new vaults are created (default ~/Documents/Vaults)")
-	atlasVault := fs.String("atlas-vault", "", "where the atlas vault lives (default ~/Documents/Atlas)")
-	first := fs.String("first-vault", "", "name or path of the first vault (default welcome)")
+	first := fs.String("first-vault", "", "name or path of the first project (default welcome)")
 	source := fs.String("plugin-source", "", "install the plugin from this marketplace source, e.g. a local checkout")
 	noPlugin := fs.Bool("no-plugin", false, "do not run `claude plugin`")
 	if err := fs.Parse(args); err != nil {
 		return 2, nil
 	}
-	opts := wizard.Options{Version: Version, VaultsDir: *vaultsDir, AtlasVault: *atlasVault, FirstVault: *first, PluginSource: *source, WithPlugin: !*noPlugin}
+	opts := wizard.Options{Version: Version, VaultsDir: *vaultsDir, FirstVault: *first, PluginSource: *source, WithPlugin: !*noPlugin}
 	return wizard.Run(e.home, e.console, opts)
-}
-
-func nodeFlags(fs *flag.FlagSet) *vaults.RegisterOptions {
-	opts := &vaults.RegisterOptions{}
-	fs.StringVar(&opts.Category, "category", "", "directory under tree/ to file the project in, e.g. university/cs566")
-	fs.StringVar(&opts.Purpose, "purpose", "", "one paragraph: why this vault exists")
-	fs.StringVar(&opts.Priority, "priority", "normal", "high, normal, low, or someday")
-	return opts
 }
 
 func modeFlag(fs *flag.FlagSet) *string {
@@ -301,11 +349,7 @@ func parseMode(s string) (vault.Mode, error) {
 	return vault.ParseMode(s)
 }
 
-func kindFlag(fs *flag.FlagSet, name, usage string) *string {
-	return fs.String(name, "", usage)
-}
-
-// parseKind reads a --kind or --as value; empty means the caller's default.
+// parseKind reads a --as value; empty means the caller's default.
 func parseKind(s string, fallback vault.Kind) (vault.Kind, error) {
 	if s == "" {
 		return fallback, nil
@@ -313,48 +357,171 @@ func parseKind(s string, fallback vault.Kind) (vault.Kind, error) {
 	return vault.ParseKind(s)
 }
 
-func (e *env) newVault(args []string) (int, error) {
-	fs := newFlags("new-vault", e.stderr)
-	opts := nodeFlags(fs)
-	fs.StringVar(&opts.Name, "name", "", "display name (default: the vault's directory name)")
-	mode := modeFlag(fs)
-	kind := kindFlag(fs, "kind", "what the vault is for: project (tasks, questions, notes; mounts knowledge bases) or knowledge (a knowledge base of sources, entities, and concepts); default project")
-	from := fs.String("from", "", "register a vault that already exists at this path (same as adopt)")
-	positional, err := parse(fs, args)
-	if err != nil {
-		return 2, nil
+// splitTags reads a comma-separated tag list.
+func splitTags(s string) []string {
+	var out []string
+	for _, tag := range strings.Split(s, ",") {
+		if tag = strings.TrimSpace(tag); tag != "" {
+			out = append(out, tag)
+		}
 	}
-	m, err := parseMode(*mode)
-	if err != nil {
-		return 2, err
-	}
-	k, err := parseKind(*kind, vault.Project)
-	if err != nil {
-		return 2, err
-	}
-	switch {
-	case *from != "" && len(positional) == 0:
-		return e.adoptPath(*from, *opts, vault.Options{Kind: k, Mode: m, Name: opts.Name})
-	case *from == "" && len(positional) == 0:
-		return e.newVaultInteractive()
-	case *from == "" && len(positional) == 1:
-		return e.createVault(positional[0], *opts, vault.Options{Kind: k, Mode: m, Name: opts.Name})
-	}
-	return 2, errors.New("usage: claude-atlas new-vault [NAME | --from PATH] [--kind project|knowledge] [--name N] [--category DIR] [--purpose TEXT] [--priority P] [--mode generic|lyt]")
+	return out
 }
 
-func (e *env) adopt(args []string) (int, error) {
-	fs := newFlags("adopt", e.stderr)
-	opts := nodeFlags(fs)
-	fs.StringVar(&opts.Name, "name", "", "display name (default: the vault's directory name)")
-	mode := fs.String("mode", "", "filing mode when the vault has none: generic (default) or lyt")
-	as := kindFlag(fs, "as", "adopt as a project or a knowledge base; a vault that already has a kind keeps it; default project")
+// checkAccess validates a knowledge base's access value.
+func checkAccess(s string) error {
+	if s != vault.AccessOpen && s != vault.AccessGuarded {
+		return fmt.Errorf("--access must be %s or %s, not %q", vault.AccessOpen, vault.AccessGuarded, s)
+	}
+	return nil
+}
+
+func (e *env) newProject(args []string) (int, error) {
+	fs := newFlags("new-project", e.stderr)
+	name := fs.String("name", "", "display name (default: the folder's name)")
+	tags := fs.String("tags", "", "comma-separated tags, e.g. usc,fall")
+	mode := modeFlag(fs)
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) > 1 {
-		return 2, errors.New("usage: claude-atlas adopt [PATH] [--as project|knowledge] [--name N] [--category DIR] [--purpose TEXT] [--priority P] [--mode generic|lyt]")
+		return 2, errors.New("usage: claude-atlas new-project NAME|PATH [--name N] [--tags a,b] [--mode generic|lyt]")
+	}
+	m, err := parseMode(*mode)
+	if err != nil {
+		return 2, err
+	}
+	if len(positional) == 0 {
+		if !e.console.Interactive() {
+			return 2, errors.New("usage: claude-atlas new-project NAME|PATH (the interactive screen needs a terminal)")
+		}
+		return e.newProjectInteractive()
+	}
+	var edit vaults.Edit
+	if list := splitTags(*tags); len(list) > 0 {
+		edit.Tags = &list
+	}
+	return e.createVault(positional[0], vault.Options{Kind: vault.Project, Mode: m, Name: *name}, edit)
+}
+
+func (e *env) newKnowledge(args []string) (int, error) {
+	fs := newFlags("new-knowledge", e.stderr)
+	name := fs.String("name", "", "display name (default: the folder's name)")
+	scope := fs.String("scope", "", "one or two sentences: what this knowledge base covers")
+	access := fs.String("access", "", "open (every project may write) or guarded (only the projects it grants); default open")
+	mode := modeFlag(fs)
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) != 1 {
+		return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH [--name N] [--scope TEXT] [--access open|guarded] [--mode generic|lyt]")
+	}
+	m, err := parseMode(*mode)
+	if err != nil {
+		return 2, err
+	}
+	set := setFlags(fs)
+	if set["access"] {
+		if err := checkAccess(*access); err != nil {
+			return 2, err
+		}
+	}
+	var edit vaults.Edit
+	if set["scope"] {
+		edit.Scope = scope
+	}
+	if set["access"] {
+		edit.Access = access
+	}
+	return e.createVault(positional[0], vault.Options{Kind: vault.Knowledge, Mode: m, Name: *name}, edit)
+}
+
+// createVault makes a vault at arg, records the identity fields the template does not
+// carry, registers it when it lies outside the vaults directory, and refreshes.
+func (e *env) createVault(arg string, opts vault.Options, edit vaults.Edit) (int, error) {
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	path, err := vaults.ResolvePath(arg, cfg.VaultsDir, opts.Kind)
+	if err != nil {
+		return 1, err
+	}
+	if _, err := vaults.Create(path, opts, e.console, true); err != nil {
+		return 1, err
+	}
+	if err := vaults.EditIdentity(registry.Entry{Path: path, Kind: opts.Kind}, edit, time.Now()); err != nil {
+		return 1, err
+	}
+	return e.finishVault(cfg, path)
+}
+
+// finishVault registers a vault that was just created or adopted, refreshes, and reports.
+func (e *env) finishVault(cfg *home.Config, path string) (int, error) {
+	registered, err := vaults.Register(e.home, cfg, path)
+	if err != nil {
+		return 1, err
+	}
+	entries, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	name := filepath.Base(path)
+	for _, en := range entries {
+		if en.Path == path && en.Error == "" {
+			name = en.Name
+		}
+	}
+	c := e.console
+	c.Say("")
+	c.Step(console.OK, "created", home.Display(path))
+	if registered {
+		c.Step(console.OK, "registered", "in the config; it sits outside "+home.Display(cfg.VaultsDir))
+	}
+	c.Step(console.OK, "refreshed", refreshed(entries))
+	c.Say("")
+	c.Say("  Open it in Obsidian with `claude-atlas open-vault %s`, or start working:", name)
+	c.Say("  claude-atlas open-claude %s    # then /claude-atlas:wiki", name)
+	c.Say("")
+	return 0, nil
+}
+
+// newProjectInteractive walks the user through name and path, then creates the project.
+func (e *env) newProjectInteractive() (int, error) {
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	choice, err := tui.RunAddVault(cfg.VaultsDir, nil)
+	if err != nil {
+		return 1, err
+	}
+	if choice == nil {
+		return 1, vaults.ErrCancelled
+	}
+	mode, err := parseMode(choice.Mode)
+	if err != nil {
+		return 1, err
+	}
+	if _, err := vaults.Create(choice.Path, vault.Options{Kind: vault.Project, Mode: mode, Name: choice.Name}, e.console, false); err != nil {
+		return 1, err
+	}
+	return e.finishVault(cfg, choice.Path)
+}
+
+func (e *env) adopt(args []string) (int, error) {
+	fs := newFlags("adopt", e.stderr)
+	name := fs.String("name", "", "display name (default: the folder's name)")
+	mode := fs.String("mode", "", "filing mode when the vault has none: generic (default) or lyt")
+	as := fs.String("as", "", "adopt as a project or a knowledge base; a vault that already has a kind keeps it; default project")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return 2, nil
+	}
+	if len(positional) > 1 {
+		return 2, errors.New("usage: claude-atlas adopt [PATH] [--as project|knowledge] [--name N] [--mode generic|lyt]")
 	}
 	var m vault.Mode
 	if *mode != "" {
@@ -366,181 +533,31 @@ func (e *env) adopt(args []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	if len(positional) == 0 {
+	path := first(positional)
+	if path == "" {
 		if !e.console.Interactive() {
-			return 2, errors.New("usage: claude-atlas adopt PATH (the interactive screen needs a terminal)")
+			return 2, errors.New("usage: claude-atlas adopt PATH (the questions need a terminal)")
 		}
-		cfg, err := e.home.Load()
-		if err != nil {
-			return 1, err
-		}
-		choice, err := tui.RunAdopt(tui.Categories(cfg.TreeRoot()))
-		if err != nil {
-			return 1, err
-		}
-		if choice == nil {
+		if path = strings.TrimSpace(e.console.Ask("Which folder?", "")); path == "" {
 			return 1, vaults.ErrCancelled
 		}
-		return e.adoptPath(choice.Path, vaults.RegisterOptions{Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose, Priority: opts.Priority}, vault.Options{Kind: k, Mode: vault.Mode(choice.Mode), Name: choice.Name})
-	}
-	return e.adoptPath(positional[0], *opts, vault.Options{Kind: k, Mode: m, Name: opts.Name})
-}
-
-// createOrAdopt is what the interactive screens call: it makes or adopts the vault and
-// registers it, returning the project's rel. The CLI commands share every step.
-func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, error) {
-	mode, err := parseMode(choice.Mode)
-	if err != nil {
-		return "", err
-	}
-	opts := vaults.RegisterOptions{Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose}
-	if choice.Adopt {
-		if _, err := vault.Adopt(choice.Path, vault.Options{Mode: mode, Name: choice.Name}, time.Now()); err != nil {
-			return "", err
+		if k == "" {
+			if k, err = vault.ParseKind(e.console.Ask("A project or a knowledge base?", string(vault.Project))); err != nil {
+				return 2, err
+			}
 		}
-		projects, _, err := tree.Walk(cfg.TreeRoot())
-		if err != nil {
-			return "", err
+		*name = e.console.Ask("Display name", filepath.Base(home.Expand(path)))
+		if m == "" {
+			if m, err = vault.ParseMode(e.console.Ask("Filing mode: generic or lyt", string(vault.Generic))); err != nil {
+				return 2, err
+			}
 		}
-		if existing := tree.FindByVault(projects, choice.Path); existing != nil {
-			return existing.Rel, nil
-		}
-	} else if _, err := vaults.Create(choice.Path, vault.Options{Kind: vault.Project, Mode: mode, Name: choice.Name}, e.console, false); err != nil {
-		return "", err
 	}
-	project, err := vaults.RegisterProject(cfg, choice.Path, opts)
-	if err != nil {
-		return "", err
-	}
-	return project.Rel, nil
-}
-
-// hooks wires the interactive screens to the same backend calls the CLI commands use.
-func (e *env) hooks(cfg *home.Config) tui.Hooks {
-	return tui.Hooks{
-		Load: func() ([]*tree.Project, error) {
-			projects, _, err := tree.Walk(cfg.TreeRoot())
-			return projects, err
-		},
-		Categories: func() []string { return tui.Categories(cfg.TreeRoot()) },
-		State: func(rel string) *tree.State {
-			state, err := tree.ReadState(e.home.StateDir(), rel)
-			if err != nil {
-				return nil
-			}
-			return state
-		},
-		Update:    func(p *tree.Project, edit vaults.TreeEdit) error { return vaults.Update(cfg, p, edit) },
-		Unlink:    vaults.Unlink,
-		Create:    func(choice tui.AddVault) (string, error) { return e.createOrAdopt(cfg, choice) },
-		Refresh:   func() error { _, _, err := e.refreshAll(cfg); return err },
-		StagePlan: func(p *tree.Project, source string) (*capture.StagePlan, error) { return e.stagePlan(p, source) },
-		Stage: func(p *tree.Project, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
-			return e.stage(cfg, p, plan)
-		},
-		Links: func() []links.Page {
-			pages, _, _ := links.Walk(cfg.AtlasVault)
-			return pages
-		},
-		AddLink: func(p *tree.Project, target string, initGit bool) (links.Page, error) {
-			return vaults.AddLink(cfg, p, target, initGit)
-		},
-		NewRepo:    func(p *tree.Project, name, at string) (links.Page, error) { return vaults.NewRepo(cfg, p, name, at) },
-		CloneRepo:  func(p *tree.Project, url, at string) (links.Page, error) { return vaults.CloneRepoPage(cfg, p, url, at) },
-		SetChanges: func(page links.Page, policy string) (links.Page, error) { return vaults.SetChanges(cfg, page, policy) },
-		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
-		Sources: func(p *tree.Project) []string {
-			v, err := vault.Open(p.VaultPath())
-			if err != nil {
-				return nil
-			}
-			return capture.Sources(v)
-		},
-		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
-			return vaults.UpdateLink(cfg, page, edit)
-		},
-		Tasks: func(p *tree.Project) (tasks.Ledger, []string, error) {
-			v, err := vault.Open(p.VaultPath())
-			if err != nil {
-				return tasks.Ledger{}, nil, err
-			}
-			led, err := tasks.Current(v, time.Now())
-			return led, tasks.Notes(v), err
-		},
-		Plant: func(p *tree.Project, plant tasks.Plant) (txn.Planted, error) {
-			v, err := vault.Open(p.VaultPath())
-			if err != nil {
-				return txn.Planted{}, err
-			}
-			now := time.Now()
-			req, planted, err := txn.PlantRequest(v, plant, "", now)
-			if err != nil {
-				return txn.Planted{}, err
-			}
-			plan, err := txn.Prepare(v, req, now)
-			if err != nil {
-				return txn.Planted{}, err
-			}
-			if _, err := txn.Apply(v, plan, now); err != nil {
-				return txn.Planted{}, err
-			}
-			return planted, nil
-		},
-		VaultsDir: cfg.VaultsDir,
-	}
-}
-
-// ingestSources are the paths an ingest reads: the given ones, or the folders the vault
-// staged from before when none is given.
-func ingestSources(v *vault.Vault, p *tree.Project, given []string) ([]string, error) {
-	if len(given) > 0 {
-		out := make([]string, 0, len(given))
-		for _, g := range given {
-			out = append(out, home.Expand(g))
-		}
-		return out, nil
-	}
-	sources := capture.Sources(v)
-	if len(sources) == 0 {
-		return nil, fmt.Errorf("name a file or folder to ingest; %s has not ingested from a folder yet", p.Name)
-	}
-	return sources, nil
-}
-
-// stagePlan opens the project's vault and plans a staging from one source, or from the
-// folders staged from before when source is empty.
-func (e *env) stagePlan(p *tree.Project, source string) (*capture.StagePlan, error) {
-	var given []string
-	if strings.TrimSpace(source) != "" {
-		given = []string{strings.TrimSpace(source)}
-	}
-	v, err := vault.Open(p.VaultPath())
-	if err != nil {
-		return nil, err
-	}
-	sources, err := ingestSources(v, p, given)
-	if err != nil {
-		return nil, err
-	}
-	return capture.PlanStage(v, sources, time.Now())
-}
-
-// stage copies a plan into the inbox; the vault remembers the folders, so a later
-// ingest with no path picks up what is new. It returns the folders newly remembered.
-func (e *env) stage(cfg *home.Config, p *tree.Project, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
-	v, err := vault.Open(p.VaultPath())
-	if err != nil {
-		return nil, nil, err
-	}
-	res, err := capture.ApplyStage(v, plan, time.Now())
-	if err != nil {
-		return res, nil, err
-	}
-	return res, res.Remembered, nil
+	return e.adoptPath(path, vault.Options{Kind: k, Mode: m, Name: *name})
 }
 
 // adoptPath makes a directory a claude-atlas vault, registers it, and refreshes.
-func (e *env) adoptPath(path string, opts vaults.RegisterOptions, vopts vault.Options) (int, error) {
+func (e *env) adoptPath(path string, vopts vault.Options) (int, error) {
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
@@ -573,90 +590,209 @@ func (e *env) adoptPath(path string, opts vaults.RegisterOptions, vopts vault.Op
 	if res.Commit != "" {
 		c.Step(console.OK, "committed", res.Commit[:12]+" baseline")
 	}
+	registered, err := vaults.Register(e.home, cfg, abs)
+	if err != nil {
+		return 1, err
+	}
+	entries, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	if registered {
+		c.Step(console.OK, "registered", "in the config; it sits outside "+home.Display(cfg.VaultsDir))
+	}
+	c.Step(console.OK, "refreshed", refreshed(entries))
+	return 0, nil
+}
+
+// --- the TUI bridge -------------------------------------------------------------
+// The view still reads the atlas vault's tree. Task 8 ports it to the registry; until
+// then cfg.TreeRoot() is "" for every new atlas and the screen opens empty.
+
+// treeItems lists the old tree's projects for the view.
+func (e *env) treeItems(cfg *home.Config) ([]tui.Item, error) {
+	projects, err := treeProjects(cfg)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]tui.Item, 0, len(projects))
+	for _, p := range projects {
+		state, _ := tree.ReadState(e.home.StateDir(), p.Rel)
+		items = append(items, tui.Item{Project: p, State: state})
+	}
+	return items, nil
+}
+
+func treeProjects(cfg *home.Config) ([]*tree.Project, error) {
+	if cfg.TreeRoot() == "" {
+		return nil, nil
+	}
 	projects, _, err := tree.Walk(cfg.TreeRoot())
-	if err != nil {
-		return 1, err
-	}
-	if existing := tree.FindByVault(projects, abs); existing != nil {
-		c.Step(console.Skip, "registered", "already tree/"+existing.Rel+".md")
-	} else {
-		project, err := vaults.RegisterProject(cfg, abs, opts)
-		if err != nil {
-			return 1, err
-		}
-		c.Step(console.OK, "registered", fmt.Sprintf("%s → tree/%s.md", home.Display(abs), project.Rel))
-	}
-	page, _, err := e.refreshAll(cfg)
-	if err != nil {
-		return 1, err
-	}
-	c.Step(console.OK, "refreshed", home.Display(page))
-	return 0, nil
+	return projects, err
 }
 
-func (e *env) createVault(arg string, opts vaults.RegisterOptions, vopts vault.Options) (int, error) {
-	cfg, err := e.home.Load()
-	if err != nil {
-		return 1, err
-	}
-	path, err := vaults.ResolveNewPath(arg, cfg.VaultsDir, opts.Category)
-	if err != nil {
-		return 1, err
-	}
-	if _, err := vaults.Create(path, vopts, e.console, true); err != nil {
-		return 1, err
-	}
-	return e.finishVault(cfg, path, opts)
-}
-
-// finishVault registers a vault that was just created, refreshes, and reports.
-func (e *env) finishVault(cfg *home.Config, path string, opts vaults.RegisterOptions) (int, error) {
-	project, err := vaults.RegisterProject(cfg, path, opts)
-	if err != nil {
-		return 1, err
-	}
-	page, _, err := e.refreshAll(cfg)
-	if err != nil {
-		return 1, err
-	}
-	c := e.console
-	c.Say("")
-	c.Step(console.OK, "created", home.Display(path))
-	c.Step(console.OK, "registered", "tree/"+project.Rel+".md")
-	c.Step(console.OK, "refreshed", home.Display(page))
-	c.Say("")
-	c.Say("  Open it in Obsidian with `claude-atlas open-vault %s`, or start working:", project.Rel)
-	c.Say("  claude-atlas open-claude %s    # then /claude-atlas:wiki", project.Rel)
-	c.Say("")
-	return 0, nil
-}
-
-// newVaultInteractive walks the user through name, category, and purpose, then creates the vault.
-func (e *env) newVaultInteractive() (int, error) {
-	if !e.console.Interactive() {
-		return 2, errors.New("usage: claude-atlas new-vault NAME (the interactive screen needs a terminal)")
-	}
-	cfg, err := e.home.Load()
-	if err != nil {
-		return 1, err
-	}
-	choice, err := tui.RunAddVault(cfg.VaultsDir, tui.Categories(cfg.TreeRoot()))
-	if err != nil {
-		return 1, err
-	}
-	if choice == nil {
-		return 1, vaults.ErrCancelled
-	}
+// createOrAdopt is what the interactive screens call: it makes or adopts the vault and
+// registers it, returning the project's rel.
+func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, error) {
 	mode, err := parseMode(choice.Mode)
 	if err != nil {
-		return 1, err
+		return "", err
 	}
-	if _, err := vaults.Create(choice.Path, vault.Options{Kind: vault.Project, Mode: mode, Name: choice.Name}, e.console, false); err != nil {
-		return 1, err
+	opts := vaults.RegisterOptions{Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose}
+	if choice.Adopt {
+		if _, err := vault.Adopt(choice.Path, vault.Options{Mode: mode, Name: choice.Name}, time.Now()); err != nil {
+			return "", err
+		}
+		projects, err := treeProjects(cfg)
+		if err != nil {
+			return "", err
+		}
+		if existing := tree.FindByVault(projects, choice.Path); existing != nil {
+			return existing.Rel, nil
+		}
+	} else if _, err := vaults.Create(choice.Path, vault.Options{Kind: vault.Project, Mode: mode, Name: choice.Name}, e.console, false); err != nil {
+		return "", err
 	}
-	return e.finishVault(cfg, choice.Path, vaults.RegisterOptions{
-		Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose,
-	})
+	project, err := vaults.RegisterProject(cfg, choice.Path, opts)
+	if err != nil {
+		return "", err
+	}
+	return project.Rel, nil
+}
+
+// hooks wires the interactive screens to the same backend calls the CLI commands use.
+func (e *env) hooks(cfg *home.Config) tui.Hooks {
+	return tui.Hooks{
+		Load:       func() ([]*tree.Project, error) { return treeProjects(cfg) },
+		Categories: func() []string { return tui.Categories(cfg.TreeRoot()) },
+		State: func(rel string) *tree.State {
+			state, err := tree.ReadState(e.home.StateDir(), rel)
+			if err != nil {
+				return nil
+			}
+			return state
+		},
+		Update:  func(p *tree.Project, edit vaults.TreeEdit) error { return vaults.Update(cfg, p, edit) },
+		Unlink:  vaults.Unlink,
+		Create:  func(choice tui.AddVault) (string, error) { return e.createOrAdopt(cfg, choice) },
+		Refresh: func() error { _, _, err := e.refreshAll(cfg); return err },
+		StagePlan: func(p *tree.Project, source string) (*capture.StagePlan, error) {
+			return planStage(p.VaultPath(), p.Name, source)
+		},
+		Stage: func(p *tree.Project, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
+			return stage(p.VaultPath(), plan)
+		},
+		Links: func() []links.Page {
+			if cfg.AtlasVault == "" {
+				return nil
+			}
+			pages, _, _ := links.Walk(cfg.AtlasVault)
+			return pages
+		},
+		AddLink: func(p *tree.Project, target string, initGit bool) (links.Page, error) {
+			return vaults.AddLink(cfg, p, target, initGit)
+		},
+		NewRepo: func(p *tree.Project, name, at string) (links.Page, error) { return vaults.NewRepo(cfg, p, name, at) },
+		CloneRepo: func(p *tree.Project, url, at string) (links.Page, error) {
+			return vaults.CloneRepoPage(cfg, p, url, at)
+		},
+		SetChanges: func(page links.Page, policy string) (links.Page, error) { return vaults.SetChanges(cfg, page, policy) },
+		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
+		Sources: func(p *tree.Project) []string {
+			v, err := vault.Open(p.VaultPath())
+			if err != nil {
+				return nil
+			}
+			return capture.Sources(v)
+		},
+		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
+			return vaults.UpdateLink(cfg, page, edit)
+		},
+		Tasks: func(p *tree.Project) (tasks.Ledger, []string, error) {
+			v, err := vault.Open(p.VaultPath())
+			if err != nil {
+				return tasks.Ledger{}, nil, err
+			}
+			led, err := tasks.Current(v, time.Now())
+			return led, tasks.Notes(v), err
+		},
+		Plant: func(p *tree.Project, plant tasks.Plant) (txn.Planted, error) {
+			v, err := vault.Open(p.VaultPath())
+			if err != nil {
+				return txn.Planted{}, err
+			}
+			return plantTask(v, plant)
+		},
+		VaultsDir: cfg.VaultsDir,
+	}
+}
+
+// --- end of the TUI bridge ------------------------------------------------------
+
+// plantTask plants one task in a vault as a single operation.
+func plantTask(v *vault.Vault, plant tasks.Plant) (txn.Planted, error) {
+	now := time.Now()
+	req, planted, err := txn.PlantRequest(v, plant, "", now)
+	if err != nil {
+		return txn.Planted{}, err
+	}
+	plan, err := txn.Prepare(v, req, now)
+	if err != nil {
+		return txn.Planted{}, err
+	}
+	if _, err := txn.Apply(v, plan, now); err != nil {
+		return txn.Planted{}, err
+	}
+	return planted, nil
+}
+
+// ingestSources are the paths an ingest reads: the given ones, or the folders the vault
+// staged from before when none is given.
+func ingestSources(v *vault.Vault, name string, given []string) ([]string, error) {
+	if len(given) > 0 {
+		out := make([]string, 0, len(given))
+		for _, g := range given {
+			out = append(out, home.Expand(g))
+		}
+		return out, nil
+	}
+	sources := capture.Sources(v)
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("name a file or folder to ingest; %s has not ingested from a folder yet", name)
+	}
+	return sources, nil
+}
+
+// planStage plans a staging into the vault at root from one source, or from the folders
+// staged from before when source is empty.
+func planStage(root, name, source string) (*capture.StagePlan, error) {
+	var given []string
+	if strings.TrimSpace(source) != "" {
+		given = []string{strings.TrimSpace(source)}
+	}
+	v, err := vault.Open(root)
+	if err != nil {
+		return nil, err
+	}
+	sources, err := ingestSources(v, name, given)
+	if err != nil {
+		return nil, err
+	}
+	return capture.PlanStage(v, sources, time.Now())
+}
+
+// stage copies a plan into the inbox; the vault remembers the folders, so a later ingest
+// with no path picks up what is new. It returns the folders newly remembered.
+func stage(root string, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
+	v, err := vault.Open(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	res, err := capture.ApplyStage(v, plan, time.Now())
+	if err != nil {
+		return res, nil, err
+	}
+	return res, res.Remembered, nil
 }
 
 func (e *env) view(args []string) (int, error) {
@@ -667,14 +803,9 @@ func (e *env) view(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	projects, _, err := tree.Walk(cfg.TreeRoot())
+	items, err := e.treeItems(cfg)
 	if err != nil {
 		return 1, err
-	}
-	items := make([]tui.Item, 0, len(projects))
-	for _, p := range projects {
-		state, _ := tree.ReadState(e.home.StateDir(), p.Rel)
-		items = append(items, tui.Item{Project: p, State: state})
 	}
 	opener := tui.Opener{
 		Status:          obsidian.Status,
@@ -695,22 +826,33 @@ func (e *env) view(args []string) (int, error) {
 	if !changed {
 		return 0, nil
 	}
-	page, _, err := e.refreshAll(cfg)
+	entries, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "refreshed", home.Display(page))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
 
-// resolveVault turns an open-vault argument into a directory: nothing means the atlas,
-// a project name or tree path means its vault, and anything else is taken as a path.
-func resolveVault(cfg *home.Config, projects []*tree.Project, arg string) (string, string, error) {
+// resolveVault turns an open-vault argument into a directory and a label: nothing means
+// the vault at or above the current directory, a name or an id means its vault, and
+// anything else is taken as a path.
+func resolveVault(ix *registry.Index, arg string) (string, string, error) {
 	if arg == "" {
-		return cfg.AtlasVault, "the atlas", nil
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", err
+		}
+		root := vault.FindAbove(cwd)
+		if root == "" {
+			return "", "", fmt.Errorf("%w: the current directory is not inside a vault; name one or give a path", vault.ErrNotVault)
+		}
+		return root, filepath.Base(root), nil
 	}
-	if p := tree.FindByRel(projects, arg); p != nil {
-		return p.VaultPath(), p.Name, nil
+	if found, err := ix.Find(arg); err == nil {
+		return found.Path, found.Name, nil
+	} else if errors.Is(err, registry.ErrAmbiguous) {
+		return "", "", err
 	}
 	path, err := filepath.Abs(home.Expand(arg))
 	if err != nil {
@@ -719,10 +861,10 @@ func resolveVault(cfg *home.Config, projects []*tree.Project, arg string) (strin
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		return path, filepath.Base(path), nil
 	}
-	return "", "", fmt.Errorf("%q is neither a project nor a directory", arg)
+	return "", "", fmt.Errorf("%q is neither a vault nor a directory", arg)
 }
 
-// openVaultArg resolves a vault for the in-vault commands: a project name, a path, or the
+// openVaultArg resolves a vault for the in-vault commands: a vault name, a path, or the
 // current directory. It does not need the atlas to be set up when a path is given.
 func (e *env) openVaultArg(arg string) (*vault.Vault, error) {
 	if arg == "" {
@@ -733,12 +875,18 @@ func (e *env) openVaultArg(arg string) (*vault.Vault, error) {
 		if root := vault.FindAbove(cwd); root != "" {
 			return vault.Open(root)
 		}
-		return nil, fmt.Errorf("%w: the current directory is not inside a vault; name a project or a path", vault.ErrNotVault)
+		return nil, fmt.Errorf("%w: the current directory is not inside a vault; name a vault or a path", vault.ErrNotVault)
 	}
 	if cfg, err := e.home.Load(); err == nil {
-		if projects, _, err := tree.Walk(cfg.TreeRoot()); err == nil {
-			if p := tree.FindByRel(projects, arg); p != nil {
-				return vault.Open(p.VaultPath())
+		if ix, err := registry.Scan(cfg); err == nil {
+			if found, ferr := ix.Find(arg); ferr == nil {
+				return vault.Open(found.Path)
+			} else if errors.Is(ferr, registry.ErrAmbiguous) {
+				return nil, ferr
+			}
+			// A vault the scan could not read still has a path; Open says why.
+			if bad := badEntry(ix, arg); bad != nil {
+				return vault.Open(bad.Path)
 			}
 		}
 	}
@@ -758,15 +906,11 @@ func (e *env) openVault(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	projects, _, err := tree.Walk(cfg.TreeRoot())
+	ix, err := registry.Scan(cfg)
 	if err != nil {
 		return 1, err
 	}
-	arg := ""
-	if len(positional) == 1 {
-		arg = positional[0]
-	}
-	root, label, err := resolveVault(cfg, projects, arg)
+	root, label, err := resolveVault(ix, first(positional))
 	if err != nil {
 		return 1, err
 	}
@@ -835,23 +979,16 @@ func (e *env) openClaude(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	projects, _, err := tree.Walk(cfg.TreeRoot())
+	entry, err := e.entry(cfg, positional[0])
 	if err != nil {
 		return 1, err
-	}
-	project := tree.FindByRel(projects, positional[0])
-	if project == nil {
-		return 1, fmt.Errorf("no project named %q; see `claude-atlas list`", positional[0])
 	}
 	if !e.console.Interactive() {
 		return 2, errors.New("open-claude starts an interactive Claude Code session and needs a terminal")
 	}
-	if vault.IsLegacy(project.VaultPath()) {
-		e.console.Say("  %s is a claude-obsidian vault; adopt it first: claude-atlas adopt %s", project.Name, home.Display(project.VaultPath()))
-	}
 	dir, prompt := home.Expand(*in), ""
 	if *taskID != "" {
-		rec, err := e.findTask(project, *taskID)
+		rec, err := e.findTask(entry, *taskID)
 		if err != nil {
 			return 1, err
 		}
@@ -861,7 +998,7 @@ func (e *env) openClaude(args []string) (int, error) {
 		}
 		e.console.Say("  task: %s (%s)", rec.Title, rec.Status)
 	}
-	cmd, err := claudecode.LaunchIn(cfg.ClaudeCode, project.VaultPath(), dir, prompt)
+	cmd, err := claudecode.LaunchIn(cfg.ClaudeCode, entry.Path, dir, prompt)
 	if err != nil {
 		return 1, err
 	}
@@ -894,15 +1031,18 @@ func (e *env) ingest(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	p, err := e.project(cfg, positional[0])
+	entry, err := e.entry(cfg, positional[0])
 	if err != nil {
 		return 1, err
 	}
-	v, err := vault.Open(p.VaultPath())
+	if entry.Kind != vault.Project {
+		return 1, fmt.Errorf("%s is a knowledge base; knowledge enters through a project that mounts it", entry.Name)
+	}
+	v, err := vault.Open(entry.Path)
 	if err != nil {
 		return 1, err
 	}
-	sources, err := ingestSources(v, p, positional[1:])
+	sources, err := ingestSources(v, entry.Name, positional[1:])
 	if err != nil {
 		return 1, err
 	}
@@ -942,19 +1082,19 @@ func (e *env) ingest(args []string) (int, error) {
 		if !ok {
 			return 1, vaults.ErrCancelled
 		}
-		res, remembered, err := e.stage(cfg, p, plan)
+		res, remembered, err := stage(entry.Path, plan)
 		if err != nil {
 			return 1, err
 		}
 		c.Step(console.OK, "staged", fmt.Sprintf("%d file%s in %s", len(res.Staged), plural(len(res.Staged)), home.Display(v.Path("inbox"))))
 		for _, dir := range remembered {
-			c.Step(console.OK, "remembered", home.Display(dir)+"; `claude-atlas ingest "+p.Rel+"` stages what is new there next time")
+			c.Step(console.OK, "remembered", home.Display(dir)+"; `claude-atlas ingest "+entry.Name+"` stages what is new there next time")
 		}
 	} else {
 		c.Say("  nothing new to stage; %d file%s already waiting", plan.Waiting, plural(plan.Waiting))
 	}
 	if *noClaude || !c.Interactive() {
-		c.Say("  Next: claude-atlas open-claude %s, then /claude-atlas:wiki-ingest", p.Rel)
+		c.Say("  Next: claude-atlas open-claude %s, then /claude-atlas:wiki-ingest", entry.Name)
 		return 0, nil
 	}
 	c.Say("  %s", trustNote)
@@ -963,10 +1103,10 @@ func (e *env) ingest(args []string) (int, error) {
 		return 1, err
 	}
 	if !ok {
-		c.Say("  Next: claude-atlas open-claude %s, then /claude-atlas:wiki-ingest", p.Rel)
+		c.Say("  Next: claude-atlas open-claude %s, then /claude-atlas:wiki-ingest", entry.Name)
 		return 0, nil
 	}
-	cmd, err := claudecode.LaunchCommand(cfg.ClaudeCode, p.VaultPath(), claudecode.IngestPrompt)
+	cmd, err := claudecode.LaunchCommand(cfg.ClaudeCode, entry.Path, claudecode.IngestPrompt)
 	if err != nil {
 		return 1, err
 	}
@@ -980,16 +1120,59 @@ func (e *env) ingest(args []string) (int, error) {
 	return 0, nil
 }
 
-func (e *env) project(cfg *home.Config, name string) (*tree.Project, error) {
-	projects, _, err := tree.Walk(cfg.TreeRoot())
+func (e *env) list(args []string) (int, error) {
+	if len(args) != 0 {
+		return 2, errors.New("usage: claude-atlas list")
+	}
+	cfg, err := e.home.Load()
 	if err != nil {
-		return nil, err
+		return 1, err
 	}
-	p := tree.FindByRel(projects, name)
-	if p == nil {
-		return nil, fmt.Errorf("no project named %q; see `claude-atlas list`", name)
+	entries, _, err := registry.Read(e.home.StateDir())
+	if errors.Is(err, os.ErrNotExist) {
+		entries, _, err = e.refreshAll(cfg)
 	}
-	return p, nil
+	if err != nil {
+		return 1, err
+	}
+	if len(entries) == 0 {
+		e.console.Say("no vaults yet; create one with `claude-atlas new-project NAME`")
+		return 0, nil
+	}
+	for _, en := range entries {
+		e.console.Say("  %-9s %-5s %-24s %s", listKind(en), listHeat(en), entryName(en), home.Display(en.Path))
+	}
+	for _, en := range entries {
+		if en.Error != "" {
+			e.console.Step(console.Fail, entryName(en), en.Error)
+		}
+	}
+	return 0, nil
+}
+
+// listKind is the kind column: a vault the scan could not read has no kind.
+func listKind(en registry.Entry) string {
+	if en.Error != "" {
+		return "?"
+	}
+	return string(en.Kind)
+}
+
+// listHeat is the heat column: what the last refresh found, or why there is nothing.
+func listHeat(en registry.Entry) string {
+	if en.Error != "" {
+		if strings.Contains(en.Error, "v1") {
+			return "v1"
+		}
+		return "bad"
+	}
+	if en.State == nil {
+		return "?"
+	}
+	if en.State.Heat == "" {
+		return "off"
+	}
+	return en.State.Heat
 }
 
 func (e *env) show(args []string) (int, error) {
@@ -1000,11 +1183,17 @@ func (e *env) show(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	p, err := e.project(cfg, args[0])
+	entry, err := e.entry(cfg, args[0])
 	if err != nil {
 		return 1, err
 	}
-	state, _ := tree.ReadState(e.home.StateDir(), p.Rel)
+	if stored, _, err := registry.Read(e.home.StateDir()); err == nil {
+		for _, s := range stored {
+			if s.ID == entry.ID {
+				entry.State = s.State
+			}
+		}
+	}
 	c := e.console
 	row := func(k, val string) {
 		if val == "" {
@@ -1012,44 +1201,49 @@ func (e *env) show(args []string) (int, error) {
 		}
 		c.Say("  %-16s %s", k, val)
 	}
-	row("Name", p.Name)
-	row("Page", "tree/"+p.Rel+".md")
-	row("Vault", home.Display(p.VaultPath()))
-	row("Category", p.Category())
-	row("Priority", p.Priority)
-	row("State", p.State)
-	row("Blocked on", p.BlockedOn)
-	row("Review after", p.ReviewAfter)
-	row("Purpose", p.Purpose)
-	row("Done when", p.DefinitionOfDone)
-	for _, l := range p.Linked {
-		row(linkLabel(l.Kind), linkLine(l, state))
+	row("Name", entry.Name)
+	row("Kind", string(entry.Kind))
+	row("Id", entry.ID)
+	row("Path", home.Display(entry.Path))
+	row("Mode", string(entry.Mode))
+	row("Created", entry.Created)
+	if entry.Kind == vault.Knowledge {
+		row("Scope", entry.Scope)
+		row("Access", entry.Access)
+		for _, g := range entry.Grants {
+			row("Grant", g.Name+"  "+g.Access)
+		}
+		for _, m := range entry.MountedBy {
+			row("Mounted by", m.Name+"  "+m.Access)
+		}
+	} else {
+		row("Tags", strings.Join(entry.Tags, ", "))
 	}
-	projects, _, _ := tree.Walk(cfg.TreeRoot())
-	for _, rel := range p.RelatedTo {
-		row("Related", relName(projects, rel)+"  "+rel)
+	for _, m := range entry.Mounts {
+		detail := m.Error
+		if detail == "" {
+			detail = m.Effective + "  " + home.Display(m.Path)
+		}
+		row("Mount", fmt.Sprintf("%-20s %s", m.Name, detail))
 	}
-	for _, q := range tree.RelatedFrom(projects, p) {
-		row("Related from", q.Name+"  "+q.Rel)
+	for _, r := range entry.Repos {
+		row("Repo", repoLine(r))
 	}
-	for _, w := range p.Warnings {
-		row("Warning", w)
-	}
+	state := entry.State
 	if state == nil {
 		row("Refreshed", "never; run `claude-atlas refresh`")
 		return 0, nil
 	}
+	if state.VaultOK {
+		row("Vault check", "ok")
+	} else {
+		row("Vault check", state.VaultError)
+	}
 	heat := state.Heat
 	if heat == "" {
-		heat = "unreachable"
-	}
-	if !state.VaultOK {
-		row("Vault check", state.VaultError)
-	} else {
-		row("Vault check", "ok")
+		heat = "unknown"
 	}
 	row("Heat", heat)
-	row("Created", state.Created)
 	row("Last touched", state.LastTouched)
 	if state.DaysIdle != nil {
 		row("Idle", fmt.Sprintf("%d day%s", *state.DaysIdle, plural(*state.DaysIdle)))
@@ -1066,8 +1260,36 @@ func (e *env) show(args []string) (int, error) {
 		}
 		c.Say("  %-16s - %s", label, refresh.PlainText(t))
 	}
+	if state.Tasks != nil {
+		row("Tasks", taskCounts(state.Tasks.Counts))
+	}
 	row("Refreshed", state.GeneratedAt)
+	for _, signal := range refresh.Signals(entry, time.Now()) {
+		row("Signal", signal)
+	}
 	return 0, nil
+}
+
+// taskCounts is one line of a project's task ledger.
+func taskCounts(c tasks.Counts) string {
+	line := fmt.Sprintf("%d open (active %d, blocked %d, planned %d, planted %d)", c.Open, c.Active, c.Blocked, c.Planned, c.Planted)
+	if c.Notes > 0 {
+		line += fmt.Sprintf(" · %d note%s waiting", c.Notes, plural(c.Notes))
+	}
+	return line
+}
+
+// repoLine renders one repository: its name, its folder, how changes land, its remote.
+func repoLine(r registry.Repo) string {
+	where := home.Display(r.Path)
+	if r.Path == "" {
+		where = r.Error
+	}
+	line := fmt.Sprintf("%-20s %s  changes: %s", r.Name, where, links.Policy(r.Changes, r.Remote))
+	if r.Remote != "" {
+		line += " · remote " + r.Remote
+	}
+	return line
 }
 
 func plural(n int) string {
@@ -1080,110 +1302,55 @@ func plural(n int) string {
 func (e *env) edit(args []string) (int, error) {
 	fs := newFlags("edit", e.stderr)
 	name := fs.String("name", "", "display name")
-	purpose := fs.String("purpose", "", "why the project exists; \"\" clears it")
-	category := fs.String("category", "", "directory under tree/ to move the page to; \"\" for the top level")
-	priority := fs.String("priority", "", "high, normal, low, or someday")
-	state := fs.String("state", "", "active, paused, blocked, or archived")
-	blocked := fs.String("blocked-on", "", "what the project waits for; \"\" clears it")
-	review := fs.String("review-after", "", "date (YYYY-MM-DD) to revisit these fields; \"\" clears it")
-	done := fs.String("done", "", "what finished looks like; \"\" clears it")
-	vaultPath := fs.String("vault", "", "point the project at this vault")
-	move := fs.Bool("move", false, "move the vault directory: to --vault, or with --category to the new category's folder without asking")
+	tags := fs.String("tags", "", "a project's tags, comma-separated; \"\" clears them")
+	scope := fs.String("scope", "", "what a knowledge base covers; \"\" clears it")
+	access := fs.String("access", "", "a knowledge base's access: open or guarded")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
-	if len(positional) != 1 {
-		return 2, errors.New("usage: claude-atlas edit NAME [--name N] [--purpose TEXT] [--category DIR] [--priority P] [--state S] [--blocked-on TEXT] [--review-after DATE] [--done TEXT] [--vault PATH] [--move]")
+	set := setFlags(fs)
+	if len(positional) != 1 || len(set) == 0 {
+		return 2, errors.New("usage: claude-atlas edit NAME [--name N] [--tags a,b] [--scope TEXT] [--access open|guarded]")
 	}
-	set := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	if len(set) == 0 || (len(set) == 1 && set["move"]) {
-		return 2, errors.New("edit needs at least one field flag; see `claude-atlas help`")
+	if set["access"] {
+		if err := checkAccess(*access); err != nil {
+			return 2, err
+		}
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
-	p, err := e.project(cfg, positional[0])
+	entry, err := e.entry(cfg, positional[0])
 	if err != nil {
 		return 1, err
 	}
-	change := vaults.TreeEdit{Name: *name, Priority: *priority, State: *state, Vault: *vaultPath, MoveVault: *move}
-	if set["purpose"] {
-		change.Purpose = *purpose
-		change.ClearPurpose = *purpose == ""
+	change := vaults.Edit{Name: *name}
+	if set["tags"] {
+		list := splitTags(*tags)
+		change.Tags = &list
 	}
-	if set["category"] {
-		cat := strings.Trim(*category, "/")
-		change.Category = &cat
+	if set["scope"] {
+		change.Scope = scope
 	}
-	if set["blocked-on"] {
-		change.BlockedOn = blocked
+	if set["access"] {
+		change.Access = access
 	}
-	if set["review-after"] {
-		change.ReviewAfter = review
-	}
-	if set["done"] {
-		change.DefinitionOfDone = done
-	}
-	if set["category"] && !set["vault"] {
-		if target := vaults.CategoryPath(cfg.VaultsDir, p, *change.Category); target != "" {
-			follow, err := e.followCategory(p, target, *move)
-			if err != nil {
-				return 1, err
-			}
-			if follow {
-				change.Vault, change.MoveVault = target, true
-			}
-		} else if *move {
-			e.console.Step(console.Skip, "vault", "stays at "+home.Display(p.VaultPath())+"; only a vault in its category's folder follows a new category")
-		}
-	}
-	moved := ""
-	if change.MoveVault && change.Vault != "" {
-		if target, _ := filepath.Abs(home.Expand(change.Vault)); target != p.VaultPath() {
-			moved = target
-		}
-	}
-	if err := vaults.Update(cfg, p, change); err != nil {
+	if err := vaults.EditIdentity(entry, change, time.Now()); err != nil {
 		return 1, err
 	}
-	page, _, err := e.refreshAll(cfg)
+	entries, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	rel := p.Rel
-	if change.Category != nil {
-		rel = p.ID()
-		if *change.Category != "" {
-			rel = *change.Category + "/" + rel
-		}
+	shown := entry.Name
+	if *name != "" {
+		shown = *name
 	}
-	e.console.Step(console.OK, "edited", "tree/"+rel+".md")
-	if moved != "" {
-		e.console.Step(console.OK, "moved", home.Display(moved))
-	}
-	e.console.Step(console.OK, "refreshed", home.Display(page))
+	e.console.Step(console.OK, "edited", shown)
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
-}
-
-// followCategory decides whether a vault in its category's folder moves with a new
-// category: a blocked target says no, --move says yes, and otherwise the user answers.
-func (e *env) followCategory(p *tree.Project, target string, move bool) (bool, error) {
-	if err := vaults.CheckMove(p.VaultPath(), target); err != nil {
-		e.console.Step(console.Skip, "vault", err.Error())
-		return false, nil
-	}
-	if move {
-		return true, nil
-	}
-	ok, err := e.console.Confirm(fmt.Sprintf("The vault sits in its category's folder. Move it to %s too?", home.Display(target)), true)
-	if errors.Is(err, console.ErrNotInteractive) {
-		e.console.Step(console.Skip, "vault", "stays at "+home.Display(p.VaultPath())+"; pass --move to move it with the category")
-		return false, nil
-	}
-	return ok, err
 }
 
 func (e *env) remove(args []string) (int, error) {
@@ -1194,85 +1361,71 @@ func (e *env) remove(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	p, err := e.project(cfg, args[0])
+	entry, err := e.entry(cfg, args[0])
 	if err != nil {
 		return 1, err
 	}
-	ok, err := e.console.Confirm(fmt.Sprintf("Remove %s from the atlas? The vault at %s stays on disk.", p.Name, home.Display(p.VaultPath())), false)
+	ok, err := e.console.Confirm(fmt.Sprintf("Forget %s? The vault at %s stays on disk.", entry.Name, home.Display(entry.Path)), false)
 	if err != nil {
 		return 1, err
 	}
 	if !ok {
 		return 1, vaults.ErrCancelled
 	}
-	if err := vaults.Unlink(p); err != nil {
+	if err := vaults.Unregister(e.home, cfg, entry.Path); err != nil {
 		return 1, err
 	}
-	page, _, err := e.refreshAll(cfg)
+	entries, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "removed", fmt.Sprintf("%s; the vault is still at %s", p.Name, home.Display(p.VaultPath())))
-	e.console.Step(console.OK, "refreshed", home.Display(page))
+	e.console.Step(console.OK, "removed", fmt.Sprintf("%s; the vault is still at %s", entry.Name, home.Display(entry.Path)))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
 
-func linkLabel(kind string) string {
-	if kind == links.Repo {
-		return "Repo"
+// checkPolicy validates a --changes value.
+func checkPolicy(s string) error {
+	if s != links.ChangesPR && s != links.ChangesCommit {
+		return errors.New("--changes must be pr or commit")
 	}
-	return "Folder"
-}
-
-// linkLine renders one linked folder: its page, its path, and what refresh found.
-func linkLine(l tree.Linked, state *tree.State) string {
-	switch {
-	case l.Path == "":
-		return l.Entry + "  names no page"
-	case l.Name == "":
-		return home.Display(l.Path) + "  (no page yet; refresh makes one)  " + linkFacts(state, l.Path)
-	}
-	return fmt.Sprintf("%-20s %s  %s", l.Name, home.Display(l.Path), linkFacts(state, l.Path))
-}
-
-func relName(projects []*tree.Project, rel string) string {
-	if q := tree.FindByRel(projects, rel); q != nil {
-		return q.Name
-	}
-	return rel
+	return nil
 }
 
 func (e *env) link(args []string) (int, error) {
 	fs := newFlags("link", e.stderr)
 	initGit := fs.Bool("init", false, "make a plain folder a git repository first, with one commit of what it holds")
-	at := fs.String("at", "", "with a URL: where to clone (default: a folder of the repository's name in the vault's root)")
+	at := fs.String("at", "", "where the repository goes (default: repos/ inside the project)")
 	changes := fs.String("changes", "", "how claude-atlas lands changes there: pr or commit (asked when the repository has a remote)")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) != 2 {
-		return 2, errors.New("usage: claude-atlas link NAME PATH|PAGE|URL [--init] [--at DIR] [--changes pr|commit]")
+		return 2, errors.New("usage: claude-atlas link NAME PATH|URL [--init] [--at DIR] [--changes pr|commit]")
 	}
-	if *changes != "" && *changes != links.ChangesPR && *changes != links.ChangesCommit {
-		return 2, errors.New("--changes must be pr or commit")
+	if *changes != "" {
+		if err := checkPolicy(*changes); err != nil {
+			return 2, err
+		}
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
-	p, err := e.project(cfg, positional[0])
+	entry, err := e.entry(cfg, positional[0])
 	if err != nil {
 		return 1, err
 	}
-	before, _, _ := links.Walk(cfg.AtlasVault)
-	var page links.Page
+	now := time.Now()
 	target := positional[1]
+	var repo vault.Repo
+	var path string
 	if links.IsRemoteURL(target) {
 		e.console.Say("  cloning %s …", target)
-		page, err = vaults.CloneRepoPage(cfg, p, target, *at)
+		repo, path, err = vaults.CloneRepo(e.home, cfg, entry, target, *at, now)
 	} else {
-		page, err = vaults.AddLink(cfg, p, target, *initGit)
+		repo, path, err = vaults.AddRepo(e.home, cfg, entry, target, *initGit, now)
 		var notRepo *vaults.NotRepoError
 		if errors.As(err, &notRepo) && e.console.Interactive() {
 			ok, cerr := e.console.Confirm(fmt.Sprintf("%s is not a git repository. Initialize one there, with one commit of what it holds?", home.Display(notRepo.Path)), true)
@@ -1282,60 +1435,59 @@ func (e *env) link(args []string) (int, error) {
 			if !ok {
 				return 1, vaults.ErrCancelled
 			}
-			page, err = vaults.AddLink(cfg, p, target, true)
+			repo, path, err = vaults.AddRepo(e.home, cfg, entry, target, true, now)
 		}
 	}
 	if err != nil {
 		return 1, err
 	}
-	pageNote := page.Rel() + ".md"
-	if links.FindByPath(before, page.Path) == nil {
-		pageNote += " (new)"
-	}
-	if page, err = e.settleChanges(cfg, page, *changes); err != nil {
+	// The entry was read before the repository was added; settleChanges edits it by name.
+	entry.Repos = append(entry.Repos, registry.Repo{Name: repo.Name, Path: path, Remote: repo.Remote, Changes: repo.Changes})
+	if repo, err = e.settleChanges(cfg, entry, repo, *changes); err != nil {
 		return 1, err
 	}
-	pageOut, _, err := e.refreshAll(cfg)
+	entries, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "linked", fmt.Sprintf("%s (%s) → %s", page.Name, home.Display(page.Path), p.Name))
-	if page.Remote != "" {
-		e.console.Step(console.OK, "remote", page.Remote)
+	policy := links.Policy(repo.Changes, repo.Remote)
+	e.console.Step(console.OK, "linked", fmt.Sprintf("%s (%s) → %s", repo.Name, home.Display(path), entry.Name))
+	if repo.Remote != "" {
+		e.console.Step(console.OK, "remote", repo.Remote)
 	}
-	e.console.Step(console.OK, "changes", page.Policy()+"  "+links.PolicyText(page.Policy()))
-	e.console.Step(console.OK, "page", pageNote)
-	e.console.Step(console.OK, "refreshed", home.Display(pageOut))
+	e.console.Step(console.OK, "changes", policy+"  "+links.PolicyText(policy))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
 
 // settleChanges records how changes land in a repository: the flag, else the user's
-// answer when the repository has a remote and the page says nothing yet, else the
-// default. A repository with no remote lands commits; there is nothing to ask.
-func (e *env) settleChanges(cfg *home.Config, page links.Page, flag string) (links.Page, error) {
+// answer when the repository has a remote and nothing is recorded yet, else the default.
+// A repository with no remote lands commits; there is nothing to ask.
+func (e *env) settleChanges(cfg *home.Config, entry registry.Entry, repo vault.Repo, flag string) (vault.Repo, error) {
+	policy := flag
 	switch {
 	case flag != "":
-		return vaults.SetChanges(cfg, page, flag)
-	case page.Changes != "" || page.Remote == "" || !e.console.Interactive():
-		return page, nil
+	case repo.Changes != "" || repo.Remote == "" || !e.console.Interactive():
+		return repo, nil
+	default:
+		e.console.Say("  %s has a remote, %s. How should claude-atlas land its changes there?", repo.Name, repo.Remote)
+		e.console.Say("    pr      work on a branch and open a pull request; never push to the default branch")
+		e.console.Say("    commit  commit on the current branch")
+		pr, err := e.console.Confirm("Pull requests?", true)
+		if err != nil {
+			return repo, err
+		}
+		policy = links.ChangesCommit
+		if pr {
+			policy = links.ChangesPR
+		}
 	}
-	e.console.Say("  %s has a remote, %s. How should claude-atlas land its changes there?", page.Name, page.Remote)
-	e.console.Say("    pr      work on a branch and open a pull request; never push to the default branch")
-	e.console.Say("    commit  commit on the current branch")
-	pr, err := e.console.Confirm("Pull requests?", true)
-	if err != nil {
-		return page, err
-	}
-	policy := links.ChangesCommit
-	if pr {
-		policy = links.ChangesPR
-	}
-	return vaults.SetChanges(cfg, page, policy)
+	return vaults.EditRepo(e.home, cfg, entry, repo.Name, vaults.RepoEdit{Changes: &policy}, time.Now())
 }
 
 func (e *env) newRepo(args []string) (int, error) {
 	fs := newFlags("new-repo", e.stderr)
-	at := fs.String("at", "", "where to create it (default: a folder of that name in the vault's root)")
+	at := fs.String("at", "", "where to create it (default: repos/ inside the project)")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
@@ -1347,316 +1499,180 @@ func (e *env) newRepo(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	p, err := e.project(cfg, positional[0])
+	entry, err := e.entry(cfg, positional[0])
 	if err != nil {
 		return 1, err
 	}
-	page, err := vaults.NewRepo(cfg, p, positional[1], *at)
+	repo, path, err := vaults.CreateRepo(e.home, cfg, entry, positional[1], *at, time.Now())
 	if err != nil {
 		return 1, err
 	}
-	pageOut, _, err := e.refreshAll(cfg)
+	entries, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "created", home.Display(page.Path)+" with its own git history")
-	e.console.Step(console.OK, "linked", fmt.Sprintf("%s → %s", page.Name, p.Name))
-	e.console.Step(console.OK, "page", page.Rel()+".md")
-	e.console.Step(console.OK, "refreshed", home.Display(pageOut))
+	e.console.Step(console.OK, "created", home.Display(path)+" with its own git history")
+	e.console.Step(console.OK, "linked", fmt.Sprintf("%s → %s", repo.Name, entry.Name))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
 
 func (e *env) unlink(args []string) (int, error) {
 	if len(args) != 2 {
-		return 2, errors.New("usage: claude-atlas unlink NAME PATH|PAGE")
+		return 2, errors.New("usage: claude-atlas unlink NAME REPO")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
-	p, err := e.project(cfg, args[0])
+	entry, err := e.entry(cfg, args[0])
 	if err != nil {
 		return 1, err
 	}
-	if err := vaults.RemoveLink(cfg, p, args[1]); err != nil {
+	if err := vaults.RemoveRepo(e.home, cfg, entry, args[1], time.Now()); err != nil {
 		return 1, err
 	}
-	page, _, err := e.refreshAll(cfg)
+	entries, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "unlinked", fmt.Sprintf("%s from %s; the repository and its page are untouched", args[1], p.Name))
-	e.console.Step(console.OK, "refreshed", home.Display(page))
+	e.console.Step(console.OK, "unlinked", fmt.Sprintf("%s from %s; the folder is untouched", args[1], entry.Name))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
 
-func (e *env) links(args []string) (int, error) {
+func (e *env) repos(args []string) (int, error) {
 	if len(args) > 1 {
-		return 2, errors.New("usage: claude-atlas links [NAME]")
+		return 2, errors.New("usage: claude-atlas repos [NAME]")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
-	if len(args) == 0 {
-		return e.allLinks(cfg)
-	}
-	p, err := e.project(cfg, args[0])
+	ix, err := registry.Scan(cfg)
 	if err != nil {
 		return 1, err
 	}
-	state, _ := tree.ReadState(e.home.StateDir(), p.Rel)
-	if len(p.Linked) == 0 {
-		e.console.Say("%s has no repositories; mount one with `claude-atlas link %s PATH` or create one with `claude-atlas new-repo %s NAME`", p.Name, p.Rel, p.Rel)
+	c := e.console
+	if len(args) == 1 {
+		entry, err := findEntry(ix, args[0])
+		if err != nil {
+			return 1, err
+		}
+		if len(entry.Repos) == 0 {
+			c.Say("%s has no repositories; mount one with `claude-atlas link %s PATH` or create one with `claude-atlas new-repo %s NAME`", entry.Name, entry.Name, entry.Name)
+			return 0, nil
+		}
+		for _, r := range entry.Repos {
+			c.Say("  %s", repoLine(r))
+		}
 		return 0, nil
 	}
-	pages, _, _ := links.Walk(cfg.AtlasVault)
-	for _, l := range p.Linked {
-		e.console.Say("  %-10s %s", l.Kind, linkLine(l, state))
-		if page := links.FindByPath(pages, l.Path); page != nil && page.Kind == links.Repo && l.Path != "" {
-			line := "changes: " + page.Policy()
-			if page.Remote != "" {
-				line += " · remote " + page.Remote
-			}
-			e.console.Say("  %-10s %s", "", line)
+	shown := 0
+	for _, p := range ix.Projects() {
+		if len(p.Repos) == 0 {
+			continue
 		}
+		c.Say("%s", p.Name)
+		for _, r := range p.Repos {
+			c.Say("  %s", repoLine(r))
+			shown++
+		}
+	}
+	if shown == 0 {
+		c.Say("no repositories yet; mount one with `claude-atlas link NAME PATH` or create one with `claude-atlas new-repo NAME REPO`")
 	}
 	return 0, nil
 }
 
-// allLinks lists every link page, its folder, the projects that use it, and what the
-// last refresh found.
-func (e *env) allLinks(cfg *home.Config) (int, error) {
-	pages, problems, err := links.Walk(cfg.AtlasVault)
-	if err != nil {
-		return 1, err
-	}
-	for _, problem := range problems {
-		e.console.Step(console.Fail, problem.File, problem.Reason)
-	}
-	if len(pages) == 0 {
-		e.console.Say("no repositories yet; mount one with `claude-atlas link NAME PATH` or create one with `claude-atlas new-repo NAME REPO`")
-		return 0, nil
-	}
-	state, _ := refresh.ReadLinksState(e.home.StateDir())
-	projects, _, _ := tree.Walk(cfg.TreeRoot())
-	for _, page := range pages {
-		facts := "(not refreshed)"
-		if state != nil {
-			for _, row := range state.Links {
-				if row.Page.Path == page.Path {
-					facts = refresh.LinkSummary(row.Link)
-				}
-			}
-		}
-		var users []string
-		for _, p := range projects {
-			if p.LinkedTo(page.Path) {
-				users = append(users, p.Name)
-			}
-		}
-		used := strings.Join(users, ", ")
-		if used == "" {
-			used = "no project"
-		}
-		kind := page.Kind
-		if kind == links.Materials {
-			kind = "folder"
-		}
-		e.console.Say("  %-10s %-20s %s", kind, page.Name, home.Display(page.Path))
-		e.console.Say("  %-10s %-20s %s", "", "", facts+" · "+used)
-		if page.Kind == links.Repo {
-			line := "changes: " + page.Policy()
-			if page.Remote != "" {
-				line += " · remote " + page.Remote
-			}
-			e.console.Say("  %-10s %-20s %s", "", "", line)
-		}
-	}
-	return 0, nil
-}
-
-func (e *env) editLink(args []string) (int, error) {
-	fs := newFlags("edit-link", e.stderr)
-	name := fs.String("name", "", "new page name")
-	path := fs.String("path", "", "the repository the page points at")
+func (e *env) editRepo(args []string) (int, error) {
+	fs := newFlags("edit-repo", e.stderr)
 	remote := fs.String("remote", "", "the repository's remote URL; \"\" clears it")
 	changes := fs.String("changes", "", "how changes land: pr or commit; \"\" returns to the default")
+	path := fs.String("path", "", "the folder the project mounts under that name")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
-	set := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	if len(positional) != 1 || len(set) == 0 {
-		return 2, errors.New("usage: claude-atlas edit-link PAGE [--name N] [--path DIR] [--remote URL] [--changes pr|commit]")
+	set := setFlags(fs)
+	if len(positional) != 2 || len(set) == 0 {
+		return 2, errors.New("usage: claude-atlas edit-repo NAME REPO [--remote URL] [--changes pr|commit] [--path DIR]")
 	}
-	if *changes != "" && *changes != links.ChangesPR && *changes != links.ChangesCommit {
-		return 2, errors.New("--changes must be pr or commit")
+	if set["changes"] && *changes != "" {
+		if err := checkPolicy(*changes); err != nil {
+			return 2, err
+		}
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
-	pages, _, err := links.Walk(cfg.AtlasVault)
+	entry, err := e.entry(cfg, positional[0])
 	if err != nil {
 		return 1, err
 	}
-	page, err := links.FindPage(pages, positional[0])
-	if err != nil {
-		return 1, err
-	}
-	edit := vaults.LinkEdit{Name: *name, Path: *path}
+	edit := vaults.RepoEdit{Path: *path}
 	if set["remote"] {
 		edit.Remote = remote
 	}
 	if set["changes"] {
 		edit.Changes = changes
 	}
-	updated, err := vaults.UpdateLink(cfg, *page, edit)
+	updated, err := vaults.EditRepo(e.home, cfg, entry, positional[1], edit, time.Now())
 	if err != nil {
 		return 1, err
 	}
-	out, _, err := e.refreshAll(cfg)
+	entries, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "edited", fmt.Sprintf("%s → %s (%s, %s)", page.Rel(), updated.Rel(), updated.Kind, home.Display(updated.Path)))
-	if updated.Kind == links.Repo {
-		e.console.Step(console.OK, "changes", updated.Policy()+"  "+links.PolicyText(updated.Policy()))
-	}
-	e.console.Step(console.OK, "refreshed", home.Display(out))
-	return 0, nil
-}
-
-// relate records or removes a relation between two projects.
-func (e *env) relate(args []string, add bool) (int, error) {
-	verb := "relate"
-	if !add {
-		verb = "unrelate"
-	}
-	if len(args) != 2 {
-		return 2, fmt.Errorf("usage: claude-atlas %s NAME OTHER", verb)
-	}
-	cfg, err := e.home.Load()
-	if err != nil {
-		return 1, err
-	}
-	a, err := e.project(cfg, args[0])
-	if err != nil {
-		return 1, err
-	}
-	b, err := e.project(cfg, args[1])
-	if err != nil {
-		return 1, err
-	}
-	if add {
-		err = vaults.Relate(cfg, a, b)
-	} else {
-		err = vaults.Unrelate(cfg, a, b)
-	}
-	if err != nil {
-		return 1, err
-	}
-	page, _, err := e.refreshAll(cfg)
-	if err != nil {
-		return 1, err
-	}
-	if add {
-		e.console.Step(console.OK, "related", fmt.Sprintf("%s ↔ %s", a.Name, b.Name))
-	} else {
-		e.console.Step(console.OK, "unrelated", fmt.Sprintf("%s and %s", a.Name, b.Name))
-	}
-	e.console.Step(console.OK, "refreshed", home.Display(page))
-	return 0, nil
-}
-
-func linkFacts(state *tree.State, path string) string {
-	if state == nil {
-		return "(not refreshed)"
-	}
-	for _, l := range state.Links {
-		if l.Path == path {
-			return refresh.LinkSummary(l)
-		}
-	}
-	return "(not refreshed)"
-}
-
-func (e *env) list(args []string) (int, error) {
-	cfg, err := e.home.Load()
-	if err != nil {
-		return 1, err
-	}
-	projects, problems, err := tree.Walk(cfg.TreeRoot())
-	if err != nil {
-		return 1, err
-	}
-	if len(projects) == 0 && len(problems) == 0 {
-		e.console.Say("no projects yet; run `claude-atlas new-vault`")
-		return 0, nil
-	}
-	for _, p := range projects {
-		heat := "?"
-		if state, err := tree.ReadState(e.home.StateDir(), p.Rel); err == nil {
-			heat = state.Heat
-			if heat == "" {
-				heat = "off"
-			}
-		}
-		e.console.Say("  %-5s %-7s %-8s %-32s %s", heat, p.Priority, p.State, p.Rel, home.Display(p.VaultPath()))
-	}
-	for _, problem := range problems {
-		e.console.Step(console.Fail, "tree/"+problem.Rel+".md", problem.Reason)
-	}
+	policy := links.Policy(updated.Changes, updated.Remote)
+	e.console.Step(console.OK, "edited", fmt.Sprintf("%s on %s", updated.Name, entry.Name))
+	e.console.Step(console.OK, "changes", policy+"  "+links.PolicyText(policy))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
 
 func (e *env) refresh(args []string) (int, error) {
+	if len(args) != 0 {
+		return 2, errors.New("usage: claude-atlas refresh")
+	}
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
-	page, res, err := e.refreshAll(cfg)
+	entries, ix, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	for _, problem := range res.Problems {
-		e.console.Step(console.Fail, "tree/"+problem.Rel+".md", problem.Reason)
-	}
-	for _, r := range res.Rows {
-		if !r.State.VaultOK {
-			e.console.Step(console.Fail, r.Project.Rel, r.State.VaultError)
-			continue
+	scanned := map[string]bool{}
+	for _, en := range entries {
+		scanned[en.Path] = true
+		switch {
+		case en.Error != "":
+			e.console.Step(console.Fail, entryName(en), en.Error)
+		case en.State == nil:
+			e.console.Step(console.Fail, en.Name, "not read")
+		case !en.State.VaultOK:
+			e.console.Step(console.Fail, en.Name, en.State.VaultError)
+		default:
+			heat := en.State.Heat
+			if heat == "" {
+				heat = "-"
+			}
+			days := "?"
+			if en.State.DaysIdle != nil {
+				days = fmt.Sprint(*en.State.DaysIdle)
+			}
+			e.console.Step(console.OK, en.Name, fmt.Sprintf("%s, idle %sd", heat, days))
 		}
-		heat := r.State.Heat
-		if heat == "" {
-			heat = "-"
-		}
-		days := "?"
-		if r.State.DaysIdle != nil {
-			days = fmt.Sprint(*r.State.DaysIdle)
-		}
-		note := ""
-		if r.State.Legacy {
-			note = " (claude-obsidian vault; adopt it)"
-		}
-		e.console.Step(console.OK, r.Project.Rel, fmt.Sprintf("%s, idle %sd%s", heat, days, note))
 	}
-	for _, row := range res.Links {
-		level := console.OK
-		if !row.Link.OK {
-			level = console.Fail
+	for _, problem := range ix.Problems {
+		if !scanned[problem.Path] {
+			e.console.Step(console.Fail, home.Display(problem.Path), problem.Reason)
 		}
-		e.console.Step(level, row.Page.Rel(), refresh.LinkSummary(row.Link))
 	}
-	for _, note := range refresh.LinkSignals(res) {
-		e.console.Step(console.Fail, "links", note)
-	}
-	for _, u := range res.Upgraded {
-		e.console.Step(console.OK, "upgraded", u)
-	}
-	e.console.Say("  wrote %s, Tree.md, and categories/", home.Display(page))
+	e.console.Say("  wrote %s", home.Display(registry.File(e.home.StateDir())))
 	return 0, nil
 }
 
@@ -1725,9 +1741,9 @@ func (e *env) history(args []string) (int, error) {
 	return 0, nil
 }
 
-// findTask finds a task in a project's vault by id, or by the start of its title.
-func (e *env) findTask(p *tree.Project, key string) (*tasks.Record, error) {
-	v, err := vault.Open(p.VaultPath())
+// findTask finds a task in a vault by id, or by the start of its title.
+func (e *env) findTask(entry registry.Entry, key string) (*tasks.Record, error) {
+	v, err := vault.Open(entry.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -1748,9 +1764,9 @@ func (e *env) findTask(p *tree.Project, key string) (*tasks.Record, error) {
 	case 1:
 		return matches[0], nil
 	case 0:
-		return nil, fmt.Errorf("no task %q in %s; see `claude-atlas tasks %s`", key, p.Name, p.Rel)
+		return nil, fmt.Errorf("no task %q in %s; see `claude-atlas tasks %s`", key, entry.Name, entry.Name)
 	}
-	return nil, fmt.Errorf("%q matches several tasks in %s; use the id", key, p.Name)
+	return nil, fmt.Errorf("%q matches several tasks in %s; use the id", key, entry.Name)
 }
 
 func (e *env) plant(args []string) (int, error) {
@@ -1854,19 +1870,19 @@ func (e *env) tasks(args []string) (int, error) {
 	return 0, nil
 }
 
-// allTasks lists the open tasks of every registered project.
+// allTasks lists the open tasks of every project the scan finds.
 func (e *env) allTasks(now time.Time, all bool, status string) (int, error) {
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
-	projects, _, err := tree.Walk(cfg.TreeRoot())
+	ix, err := registry.Scan(cfg)
 	if err != nil {
 		return 1, err
 	}
 	shown := 0
-	for _, p := range projects {
-		v, err := vault.Open(p.VaultPath())
+	for _, p := range ix.Projects() {
+		v, err := vault.Open(p.Path)
 		if err != nil {
 			continue
 		}
@@ -1929,7 +1945,7 @@ func dash(s string) string {
 
 func (e *env) upgrade(args []string) (int, error) {
 	fs := newFlags("upgrade", e.stderr)
-	all := fs.Bool("all", false, "every registered vault")
+	all := fs.Bool("all", false, "every vault the atlas knows")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
@@ -1943,14 +1959,12 @@ func (e *env) upgrade(args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		projects, _, err := tree.Walk(cfg.TreeRoot())
+		ix, err := registry.Scan(cfg)
 		if err != nil {
 			return 1, err
 		}
-		for _, p := range projects {
-			if vault.IsVault(p.VaultPath()) {
-				roots = append(roots, p.VaultPath())
-			}
+		for _, en := range ix.Entries {
+			roots = append(roots, en.Path)
 		}
 	} else {
 		v, err := e.openVaultArg(first(positional))
@@ -2214,7 +2228,7 @@ func (e *env) hook(args []string) (int, error) {
 	return 2, fmt.Errorf("unknown hook %q", args[0])
 }
 
-// config shows the settings, or sets one and refreshes so the overview follows.
+// config shows the settings, or sets one and refreshes so the registry follows.
 func (e *env) config(args []string) (int, error) {
 	cfg, err := e.home.Load()
 	if err != nil {
@@ -2225,7 +2239,6 @@ func (e *env) config(args []string) (int, error) {
 		row := func(label, value string) { c.Say("  %-18s %s", label, value) }
 		row("new-days", fmt.Sprintf("%d  (a vault is new for this many days after its creation; 0 turns it off)", cfg.NewDays()))
 		row("vaults dir", home.Display(cfg.VaultsDir))
-		row("atlas vault", home.Display(cfg.AtlasVault))
 		row("claude command", cfg.ClaudeCode.Command)
 		row("plugin source", cfg.Plugin.Source)
 		row("file", home.Display(e.home.ConfigPath()))
@@ -2249,12 +2262,12 @@ func (e *env) config(args []string) (int, error) {
 	if err := e.home.Save(cfg); err != nil {
 		return 1, err
 	}
-	page, _, err := e.refreshAll(cfg)
+	entries, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
 	c.Step(console.OK, args[0], args[1])
-	c.Step(console.OK, "refreshed", home.Display(page))
+	c.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
 
@@ -2275,9 +2288,7 @@ func (e *env) info(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	row("atlas vault", home.Display(cfg.AtlasVault))
-	row("overview", home.Display(filepath.Join(cfg.AtlasVault, "Overview.md")))
-	row("tree", home.Display(cfg.TreeRoot()))
+	row("registry", home.Display(registry.File(e.home.StateDir())))
 	row("state", home.Display(e.home.StateDir()))
 	row("vaults dir", home.Display(cfg.VaultsDir))
 	if inst, _ := claudecode.InstalledPlugin(cfg.Plugin.ID); inst != nil {
@@ -2288,13 +2299,13 @@ func (e *env) info(args []string) (int, error) {
 	}
 	row("  source", cfg.Plugin.Source)
 	row("claude config", home.Display(claudecode.ConfigDir()))
-	projects, _, err := tree.Walk(cfg.TreeRoot())
+	ix, err := registry.Scan(cfg)
 	if err != nil {
 		return 1, err
 	}
-	row("projects", fmt.Sprintf("%d registered", len(projects)))
-	for _, p := range projects {
-		row("  "+p.Rel, home.Display(p.VaultPath()))
+	row("vaults", fmt.Sprintf("%d found", len(ix.Entries)))
+	for _, en := range ix.Entries {
+		row("  "+entryName(en), home.Display(en.Path))
 	}
 	return 0, nil
 }
@@ -2333,48 +2344,58 @@ func (e *env) doctor(args []string) (int, error) {
 		ok = false
 		line("plugin", cfg.Plugin.ID+" is not installed; run `claude-atlas setup`")
 	}
-	_, statErr := os.Stat(filepath.Join(cfg.AtlasVault, ".obsidian"))
-	line("atlas vault", home.Display(cfg.AtlasVault)+"  "+ternary(statErr == nil, "ok", "missing"))
 	line("vaults dir", home.Display(cfg.VaultsDir))
-	projects, problems, err := tree.Walk(cfg.TreeRoot())
+	ix, err := registry.Scan(cfg)
 	if err != nil {
 		return 1, err
 	}
-	line("projects", fmt.Sprintf("%d registered", len(projects)))
-	for _, p := range projects {
-		root := p.VaultPath()
-		status := "off"
-		switch {
-		case vault.IsVault(root):
-			status = "ok"
-			switch v, err := vault.Open(root); {
-			case errors.Is(err, vault.ErrV1):
-				status = "v1"
-				ok = false
-			case err == nil:
-				if pending, _ := txn.Pending(v); pending != nil {
-					status = "recover"
-					ok = false
-				} else if !v.Repo().IsRepo() {
-					status = "no git"
-					ok = false
-				}
-			}
-		case vault.IsLegacy(root):
-			status = "adopt"
-		default:
+	line("vaults", fmt.Sprintf("%d found", len(ix.Entries)))
+	for _, en := range ix.Entries {
+		status := vaultStatus(en)
+		if status != "ok" {
 			ok = false
 		}
-		c.Say("    %-7s %-24s %s", status, p.Rel, home.Display(root))
+		c.Say("    %-7s %-24s %s", status, entryName(en), home.Display(en.Path))
 	}
-	for _, problem := range problems {
-		ok = false
-		c.Say("    %-7s %-24s %s", "bad", "tree/"+problem.Rel+".md", problem.Reason)
+	for _, en := range ix.Entries {
+		for _, m := range en.Mounts {
+			if m.Error != "" {
+				ok = false
+				c.Step(console.Fail, en.Name+" · "+m.Name, m.Error)
+			}
+		}
+		for _, r := range en.Repos {
+			if r.Error != "" {
+				ok = false
+				c.Step(console.Fail, en.Name+" · "+r.Name, r.Error)
+			}
+		}
 	}
 	if !ok {
 		return 1, nil
 	}
 	return 0, nil
+}
+
+// vaultStatus is doctor's one word for a vault: what stands between it and working.
+func vaultStatus(en registry.Entry) string {
+	if en.Error != "" {
+		if strings.Contains(en.Error, "v1") {
+			return "v1"
+		}
+		return "bad"
+	}
+	v, err := vault.Open(en.Path)
+	if err != nil {
+		return "bad"
+	}
+	if pending, _ := txn.Pending(v); pending != nil {
+		return "recover"
+	}
+	if !v.Repo().IsRepo() {
+		return "no git"
+	}
+	return "ok"
 }
 
 func ternary[T any](cond bool, a, b T) T {
