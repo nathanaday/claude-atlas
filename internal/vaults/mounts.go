@@ -60,7 +60,9 @@ func checkMountTarget(project, kb registry.Entry, name string) error {
 // Mount records kb in project's identity file with the requested access (read or
 // write; write by default) under name (kb's name by default, cleaned), and creates the
 // symlink. It refuses a knowledge base entry as project, a project entry as kb, a name
-// already in use, and a knowledge base already mounted.
+// already in use, and a knowledge base already mounted. When only the symlink step
+// fails, the mount is still recorded and the returned value names it; EnsureMounts
+// repairs the link later.
 func Mount(project, kb registry.Entry, access, name string, now time.Time) (vault.Mount, error) {
 	if project.Kind != vault.Project {
 		return vault.Mount{}, fmt.Errorf("%s is a knowledge base; only a project mounts one", project.Name)
@@ -117,11 +119,20 @@ func findMount(project registry.Entry, target string) *registry.Mount {
 }
 
 // Unmount removes the mount named by kb's id or the mount name from project's identity
-// file and removes the symlink. The knowledge base is untouched.
+// file and removes the symlink. The knowledge base is untouched. A real folder at the
+// mount's path is refused before the identity file changes; the mount stays recorded.
 func Unmount(project registry.Entry, target string, now time.Time) error {
 	found := findMount(project, target)
 	if found == nil {
 		return fmt.Errorf("%s has no mount named %q", project.Name, target)
+	}
+	path := project.KbDir(found.Name)
+	info, lerr := os.Lstat(path)
+	switch {
+	case lerr != nil && !os.IsNotExist(lerr):
+		return lerr
+	case lerr == nil && info.Mode()&os.ModeSymlink == 0:
+		return fmt.Errorf("%s is a folder, not a mount; leaving it in place", home.Display(path))
 	}
 	if err := vault.UpdateConfig(project.Path, "unmount "+found.Name, now, func(c *vault.Config) error {
 		var keep []vault.Mount
@@ -141,16 +152,9 @@ func Unmount(project registry.Entry, target string, now time.Time) error {
 	}); err != nil {
 		return err
 	}
-	path := project.KbDir(found.Name)
-	info, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return fmt.Errorf("%s is a folder, not a mount; leaving it in place", home.Display(path))
+	if lerr != nil {
+		// os.IsNotExist(lerr): nothing to remove.
+		return nil
 	}
 	return os.Remove(path)
 }

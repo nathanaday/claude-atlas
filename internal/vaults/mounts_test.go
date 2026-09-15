@@ -176,6 +176,54 @@ func TestUnmountRemovesTheSymlinkAndTheMount(t *testing.T) {
 	}
 }
 
+// TestUnmountRefusesARealFolder proves Unmount checks the symlink before it touches the
+// identity file: a real folder in the mount's place leaves the mount recorded and the
+// folder untouched, and only once the folder is gone does Unmount succeed.
+func TestUnmountRefusesARealFolder(t *testing.T) {
+	cfg, project, kb, _ := mountFixture(t)
+
+	if _, err := Mount(project, kb, "", "", identityNow); err != nil {
+		t.Fatal(err)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+
+	link := project.KbDir("ai-ml")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(link, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Unmount(project, "ai-ml", identityNow); err == nil || !strings.Contains(err.Error(), "folder") {
+		t.Fatalf("real folder: %v", err)
+	}
+	v, err := vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Mounts) != 1 {
+		t.Fatalf("the mount should stay recorded: %+v", v.Config.Mounts)
+	}
+	if info, err := os.Stat(link); err != nil || !info.IsDir() {
+		t.Fatalf("the folder should still exist: %v", err)
+	}
+
+	if err := os.RemoveAll(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := Unmount(project, "ai-ml", identityNow); err != nil {
+		t.Fatal(err)
+	}
+	v, err = vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Mounts) != 0 {
+		t.Fatalf("the mount should be gone: %+v", v.Config.Mounts)
+	}
+}
+
 func TestGrantAndRevoke(t *testing.T) {
 	cfg, project, kb, _ := mountFixture(t)
 
