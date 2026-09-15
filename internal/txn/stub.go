@@ -67,6 +67,7 @@ func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now tim
 		empty string // the empty page's path; "" for a wanted page
 	}
 	candidates := map[string]candidate{}
+	unnameable := map[string]string{} // lowercase title -> the empty file's path, when its file name cannot come from a title
 	var order []string
 	for _, w := range report.WantedPages {
 		key := strings.ToLower(w.Title)
@@ -78,6 +79,10 @@ func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now tim
 			continue
 		}
 		title := vault.PageTitle(s.Path)
+		if vault.SanitizeTitle(title) != title {
+			unnameable[strings.ToLower(title)] = s.Path
+			continue
+		}
 		key := strings.ToLower(title)
 		if _, dup := candidates[key]; !dup {
 			order = append(order, key)
@@ -99,6 +104,9 @@ func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now tim
 		key := strings.ToLower(strings.TrimSpace(t.Title))
 		c, ok := candidates[key]
 		if !ok {
+			if p, unnamed := unnameable[key]; unnamed {
+				return Request{}, nil, fmt.Errorf("%s cannot be a page's file name; rename the link so its text is a name a file system accepts, then stub it", p)
+			}
 			return Request{}, nil, notWanted(v, report, strings.TrimSpace(t.Title))
 		}
 		if seen[key] {

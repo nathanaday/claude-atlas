@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -119,6 +120,38 @@ func TestStubConflictsWhenTheUserTypesIntoTheEmptyPage(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(v.Path("wiki/Typed Into.md")); string(data) != "Started writing.\n" {
 		t.Fatalf("the user's text stays: %q", data)
+	}
+}
+
+func TestStubLeavesAnUnsanitizableEmptyPageAlone(t *testing.T) {
+	v := newVault(t)
+	writeFile(t, v, "wiki/concepts/Linker.md", string(mkpage("Linker", "# Linker\n\nSee [[What?]], [[a  b]], and [[Ordinary]].\n")))
+	writeFile(t, v, "wiki/What?.md", "")
+	writeFile(t, v, "wiki/a  b.md", "")
+
+	res, err := StubPages(v, nil, "", now)
+	if err != nil || len(res.Stubs) != 1 || res.Stubs[0].Title != "Ordinary" {
+		t.Fatalf("only the ordinary wanted page stubs: %+v %v", res, err)
+	}
+	if data, err := os.ReadFile(v.Path("wiki/What?.md")); err != nil || len(data) != 0 {
+		t.Fatalf("What?.md stays untouched: %q %v", data, err)
+	}
+	if data, err := os.ReadFile(v.Path("wiki/a  b.md")); err != nil || len(data) != 0 {
+		t.Fatalf("a  b.md stays untouched: %q %v", data, err)
+	}
+
+	report, err := lint.Run(v.Root, lint.Options{AsOf: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range report.DeadLinks {
+		if d.Target == "What?" || d.Target == "a  b" {
+			t.Fatalf("%q should still resolve: %+v", d.Target, d)
+		}
+	}
+
+	if _, _, err := StubRequest(v, []StubTitle{{Title: "What?"}}, "", now); err == nil || !strings.Contains(err.Error(), "cannot be a page's file name") {
+		t.Fatalf("refusal for What?: %v", err)
 	}
 }
 
