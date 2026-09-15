@@ -17,18 +17,44 @@ import (
 
 var ErrCancelled = errors.New("cancelled")
 
-// ResolveNewPath puts a bare name under the vaults directory; anything path-like is a path.
-func ResolveNewPath(arg, vaultsDir string) (string, error) {
+// DefaultPath is where a new vault goes unless the user gives a path: the vaults
+// directory, then the category, then the name, so the folders on disk follow the tree.
+func DefaultPath(vaultsDir, category, name string) (string, error) {
+	category, err := tree.CleanCategory(category)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(filepath.Join(vaultsDir, filepath.FromSlash(category), name))
+}
+
+// ResolveNewPath takes anything path-like as the vault's path and puts a bare name at
+// its DefaultPath.
+func ResolveNewPath(arg, vaultsDir, category string) (string, error) {
+	if _, err := tree.CleanCategory(category); err != nil {
+		return "", err
+	}
 	if strings.Contains(arg, string(filepath.Separator)) || strings.HasPrefix(arg, "~") || strings.HasPrefix(arg, ".") {
 		return filepath.Abs(home.Expand(arg))
 	}
-	return filepath.Abs(filepath.Join(vaultsDir, arg))
+	return DefaultPath(vaultsDir, category, arg)
+}
+
+// CheckNewPath says why a new vault cannot go at path: something is there already, or
+// the path is inside another vault, whose git would take in the new vault's files.
+func CheckNewPath(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("%s already exists; adopt it if it is a vault", home.Display(path))
+	}
+	if outer := vault.FindAbove(filepath.Dir(path)); outer != "" {
+		return fmt.Errorf("%s is inside the vault %s; choose another category or path", home.Display(path), home.Display(outer))
+	}
+	return nil
 }
 
 // Create makes a new vault at path after showing what it will contain.
 func Create(path string, mode vault.Mode, c *console.Console, confirm bool) (*vault.InitResult, error) {
-	if _, err := os.Stat(path); err == nil {
-		return nil, fmt.Errorf("%s already exists; use `claude-atlas adopt` for an existing vault", home.Display(path))
+	if err := CheckNewPath(path); err != nil {
+		return nil, err
 	}
 	if mode == "" {
 		mode = vault.Generic

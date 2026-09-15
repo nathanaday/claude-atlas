@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/nathanaday/claude-atlas/internal/home"
 )
 
 func labels(opts []option) []string {
@@ -63,7 +65,6 @@ func TestCategoriesListsNestedDirectoriesAndSkipsHidden(t *testing.T) {
 
 func TestModelValidatesNameAndBuildsPaths(t *testing.T) {
 	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "taken"), 0o755)
 	m := newModel(root, []string{"work"})
 	if m.nameError() == "" {
 		t.Fatal("empty name should error")
@@ -71,10 +72,6 @@ func TestModelValidatesNameAndBuildsPaths(t *testing.T) {
 	m.name.SetValue("!!!")
 	if m.nameError() == "" {
 		t.Fatal("unsluggable name should error")
-	}
-	m.name.SetValue("Taken")
-	if m.nameError() == "" {
-		t.Fatal("existing path should error")
 	}
 	m.name.SetValue("Sensor Triage")
 	if m.nameError() != "" || m.slug() != "sensor-triage" || m.path() != filepath.Join(root, "sensor-triage") {
@@ -84,8 +81,58 @@ func TestModelValidatesNameAndBuildsPaths(t *testing.T) {
 		t.Fatalf("top-level page path %q", m.pagePath())
 	}
 	m.chosen = option{value: "work"}
-	if m.pagePath() != "tree/work/sensor-triage.md" {
-		t.Fatalf("category page path %q", m.pagePath())
+	if m.pagePath() != "tree/work/sensor-triage.md" || m.path() != filepath.Join(root, "work", "sensor-triage") {
+		t.Fatalf("category page path %q vault path %q", m.pagePath(), m.path())
+	}
+}
+
+func TestLocationFollowsTheCategoryUntilEdited(t *testing.T) {
+	root := t.TempDir()
+	m := newModel(root, []string{"personal", "work"})
+	m = typeText(m, "notes")
+	m = press(m, tea.KeyEnter, tea.KeyDown, tea.KeyEnter) // category: personal
+	if m.step != stepLocation || m.location.value() != home.Display(filepath.Join(root, "personal", "notes")) {
+		t.Fatalf("step %d location %q", m.step, m.location.value())
+	}
+	m = press(m, tea.KeyEsc, tea.KeyDown, tea.KeyEnter) // back; category: work
+	if m.location.value() != home.Display(filepath.Join(root, "work", "notes")) {
+		t.Fatalf("the default should follow the category: %q", m.location.value())
+	}
+	elsewhere := filepath.Join(t.TempDir(), "notes")
+	m.location.setValue("")
+	m = typeText(m, elsewhere)
+	m = press(m, tea.KeyEsc, tea.KeyUp, tea.KeyEnter) // back; category: personal
+	if m.step != stepLocation || m.location.value() != elsewhere || m.path() != elsewhere {
+		t.Fatalf("a typed location should stay: %q", m.location.value())
+	}
+	m = press(m, tea.KeyEnter)
+	if m.step != stepMode || !strings.Contains(m.View(), elsewhere) {
+		t.Fatalf("step %d\n%s", m.step, m.View())
+	}
+}
+
+func TestLocationRefusesTakenPathsAndVaultsInsideVaults(t *testing.T) {
+	root := t.TempDir()
+	taken := filepath.Join(root, "work", "taken")
+	os.MkdirAll(taken, 0o755)
+	os.WriteFile(filepath.Join(taken, ".claude-atlas.json"), []byte("{}"), 0o644)
+	m := newModel(root, []string{"work", "work/taken"})
+	m = typeText(m, "taken")
+	m = press(m, tea.KeyEnter)
+	m = typeText(m, "../out")
+	m = press(m, tea.KeyEnter)
+	if m.step != stepCategory || !strings.Contains(m.err, "inside the tree") {
+		t.Fatalf("a category outside the tree: step %d err %q", m.step, m.err)
+	}
+	m.category.reset()
+	m = typeText(m, "work")
+	m = press(m, tea.KeyEnter, tea.KeyEnter) // category: work; location: work/taken
+	if m.step != stepLocation || !strings.Contains(m.err, "already exists") {
+		t.Fatalf("taken path: step %d err %q", m.step, m.err)
+	}
+	m = press(m, tea.KeyEsc, tea.KeyDown, tea.KeyEnter, tea.KeyEnter) // category: work/taken
+	if m.step != stepLocation || !strings.Contains(m.err, "inside the vault") || !strings.Contains(m.View(), "inside the vault") {
+		t.Fatalf("nested vault: step %d err %q\n%s", m.step, m.err, m.View())
 	}
 }
 
@@ -121,8 +168,16 @@ func TestFlowCreatesUnderNewCategory(t *testing.T) {
 	m = typeText(m, "work")
 	t.Logf("\n%s", m.View())
 	m = press(m, tea.KeyEnter)
-	if m.step != stepMode || !m.chosen.create || m.chosen.value != "work" {
+	if m.step != stepLocation || !m.chosen.create || m.chosen.value != "work" {
 		t.Fatalf("expected new category work, got step=%d chosen=%+v", m.step, m.chosen)
+	}
+	if m.location.value() != home.Display(filepath.Join(root, "work", "sensor-triage")) {
+		t.Fatalf("location should default to the category's folder: %q", m.location.value())
+	}
+	t.Logf("\n%s", m.View())
+	m = press(m, tea.KeyEnter)
+	if m.step != stepMode {
+		t.Fatalf("expected mode step, got %d", m.step)
 	}
 	m = press(m, tea.KeyRight)
 	if m.mode != "lyt" || !strings.Contains(m.View(), "◂ lyt ▸") {
@@ -143,7 +198,7 @@ func TestFlowCreatesUnderNewCategory(t *testing.T) {
 		t.Fatalf("done=%v page=%s", m.done, m.pagePath())
 	}
 	r := m.result()
-	if r == nil || r.Name != "Sensor Triage" || r.Mode != "generic" || r.Purpose != "Sort sensors." || r.Adopt {
+	if r == nil || r.Name != "Sensor Triage" || r.Mode != "generic" || r.Purpose != "Sort sensors." || r.Adopt || r.Path != filepath.Join(root, "work", "sensor-triage") {
 		t.Fatalf("result %+v", r)
 	}
 }

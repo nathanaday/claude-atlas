@@ -102,7 +102,12 @@ internal/console/       prompts and step lines
 
 `~/.claude-atlas/` holds config and derived state. Anything the user views
 lives under `~/Documents`: the atlas vault (default `~/Documents/Atlas`) and
-the vaults directory (default `~/Documents/Vaults`).
+the vaults directory (default `~/Documents/Vaults`). A new vault goes to
+`<vaults dir>/<category>/<name>` unless the user gives a path
+(`vaults.DefaultPath`). When a page changes category, a vault in its
+category's folder is offered the move (`vaults.CategoryPath`); nothing else
+reads a vault's location from its category. A vault never goes inside another
+vault (`vaults.CheckNewPath`, `vaults.CheckMove`).
 
 ## Constraints
 
@@ -180,6 +185,14 @@ the vaults directory (default `~/Documents/Vaults`).
   prunes entries whose path is gone, and rewrites the file whenever its state
   changes. `open-vault` quits Obsidian first (macOS, AppleScript), adds one
   entry, relaunches, then opens the URI. Verified on Obsidian 1.8.7 / 1.13.7.
+
+## iCloud Drive facts
+
+- `~/Documents` is often an iCloud Drive folder. When a folder is renamed away
+  and a new folder takes its name within a second, iCloud can rename the moved
+  folder to `name 2`. `moveVault` does this when a vault moves into a folder
+  of its own name (`admin` to `admin/admin`); check the result. Seen on
+  macOS with Darwin 25.6.
 
 ## Build and test
 

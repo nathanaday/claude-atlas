@@ -354,10 +354,11 @@ func TestNewAndAdoptFromTheTree(t *testing.T) {
 	v = typeV(v, "Sensor Triage")
 	v = pressV(v, tea.KeyEnter)               // name
 	v = pressV(v, tea.KeyDown, tea.KeyEnter)  // category: work
+	v = pressV(v, tea.KeyEnter)               // location: the category's folder
 	v = pressV(v, tea.KeyRight, tea.KeyEnter) // mode: lyt
 	v = pressV(v, tea.KeyEnter)               // purpose: none
 	v = pressV(v, tea.KeyEnter)               // confirm
-	if v.add != nil || len(got) != 1 || got[0].Slug != "sensor-triage" || got[0].Category != "work" || got[0].Mode != "lyt" || got[0].Adopt || got[0].Path != "/vaults/sensor-triage" {
+	if v.add != nil || len(got) != 1 || got[0].Slug != "sensor-triage" || got[0].Category != "work" || got[0].Mode != "lyt" || got[0].Adopt || got[0].Path != "/vaults/work/sensor-triage" {
 		t.Fatalf("create: add=%v got=%+v", v.add, got)
 	}
 	if !v.changed || v.status != "created Sensor Triage" {

@@ -572,7 +572,7 @@ func (e *env) createVault(arg string, opts vaults.RegisterOptions, mode vault.Mo
 	if err != nil {
 		return 1, err
 	}
-	path, err := vaults.ResolveNewPath(arg, cfg.VaultsDir)
+	path, err := vaults.ResolveNewPath(arg, cfg.VaultsDir, opts.Category)
 	if err != nil {
 		return 1, err
 	}
@@ -1061,13 +1061,13 @@ func (e *env) edit(args []string) (int, error) {
 	review := fs.String("review-after", "", "date (YYYY-MM-DD) to revisit these fields; \"\" clears it")
 	done := fs.String("done", "", "what finished looks like; \"\" clears it")
 	vaultPath := fs.String("vault", "", "point the project at this vault")
-	move := fs.Bool("move", false, "with --vault: move the vault directory there")
+	move := fs.Bool("move", false, "move the vault directory: to --vault, or with --category to the new category's folder without asking")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) != 1 {
-		return 2, errors.New("usage: claude-atlas edit NAME [--name N] [--purpose TEXT] [--category DIR] [--priority P] [--state S] [--blocked-on TEXT] [--review-after DATE] [--done TEXT] [--vault PATH [--move]]")
+		return 2, errors.New("usage: claude-atlas edit NAME [--name N] [--purpose TEXT] [--category DIR] [--priority P] [--state S] [--blocked-on TEXT] [--review-after DATE] [--done TEXT] [--vault PATH] [--move]")
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
@@ -1100,6 +1100,25 @@ func (e *env) edit(args []string) (int, error) {
 	if set["done"] {
 		change.DefinitionOfDone = done
 	}
+	if set["category"] && !set["vault"] {
+		if target := vaults.CategoryPath(cfg.VaultsDir, p, *change.Category); target != "" {
+			follow, err := e.followCategory(p, target, *move)
+			if err != nil {
+				return 1, err
+			}
+			if follow {
+				change.Vault, change.MoveVault = target, true
+			}
+		} else if *move {
+			e.console.Step(console.Skip, "vault", "stays at "+home.Display(p.VaultPath())+"; only a vault in its category's folder follows a new category")
+		}
+	}
+	moved := ""
+	if change.MoveVault && change.Vault != "" {
+		if target, _ := filepath.Abs(home.Expand(change.Vault)); target != p.VaultPath() {
+			moved = target
+		}
+	}
 	if err := vaults.Update(cfg, p, change); err != nil {
 		return 1, err
 	}
@@ -1115,8 +1134,29 @@ func (e *env) edit(args []string) (int, error) {
 		}
 	}
 	e.console.Step(console.OK, "edited", "tree/"+rel+".md")
+	if moved != "" {
+		e.console.Step(console.OK, "moved", home.Display(moved))
+	}
 	e.console.Step(console.OK, "refreshed", home.Display(page))
 	return 0, nil
+}
+
+// followCategory decides whether a vault in its category's folder moves with a new
+// category: a blocked target says no, --move says yes, and otherwise the user answers.
+func (e *env) followCategory(p *tree.Project, target string, move bool) (bool, error) {
+	if err := vaults.CheckMove(p.VaultPath(), target); err != nil {
+		e.console.Step(console.Skip, "vault", err.Error())
+		return false, nil
+	}
+	if move {
+		return true, nil
+	}
+	ok, err := e.console.Confirm(fmt.Sprintf("The vault sits in its category's folder. Move it to %s too?", home.Display(target)), true)
+	if errors.Is(err, console.ErrNotInteractive) {
+		e.console.Step(console.Skip, "vault", "stays at "+home.Display(p.VaultPath())+"; pass --move to move it with the category")
+		return false, nil
+	}
+	return ok, err
 }
 
 func (e *env) remove(args []string) (int, error) {

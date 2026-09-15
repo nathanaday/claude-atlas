@@ -79,10 +79,10 @@ func TestVaultCommands(t *testing.T) {
 	if !strings.Contains(h.out.String(), "tree/work/triage.md") {
 		t.Fatalf("output:\n%s", h.out.String())
 	}
-	if _, err := os.Stat(filepath.Join(vaults, "triage", "wiki", "hot.md")); err != nil {
-		t.Fatal("vault not created")
+	if _, err := os.Stat(filepath.Join(vaults, "work", "triage", "wiki", "hot.md")); err != nil {
+		t.Fatal("vault not created in its category's folder")
 	}
-	if code := h.run("new-vault", "--from", filepath.Join(vaults, "triage")); code != 0 || !strings.Contains(h.out.String(), "already tree/work/triage.md") {
+	if code := h.run("new-vault", "--from", filepath.Join(vaults, "work", "triage")); code != 0 || !strings.Contains(h.out.String(), "already tree/work/triage.md") {
 		t.Fatalf("exit %d out %s err %s", code, h.out.String(), h.err.String())
 	}
 	if code := h.run("new-vault", "--from", t.TempDir(), "--name", "Plain"); code != 1 || !strings.Contains(h.err.String(), "is not a vault") {
@@ -115,7 +115,7 @@ func TestVaultCommands(t *testing.T) {
 	if code := h.run("lint", "work/triage"); code != 0 || !strings.Contains(h.out.String(), "# Wiki lint") {
 		t.Fatalf("lint exit %d:\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("history", filepath.Join(vaults, "triage")); code != 0 || !strings.Contains(h.out.String(), "setup") {
+	if code := h.run("history", filepath.Join(vaults, "work", "triage")); code != 0 || !strings.Contains(h.out.String(), "setup") {
 		t.Fatalf("history exit %d:\n%s%s", code, h.out.String(), h.err.String())
 	}
 	if code := h.run("mode", "work/triage"); code != 0 || strings.TrimSpace(h.out.String()) != "generic" {
@@ -232,6 +232,47 @@ func TestEditLinkCommand(t *testing.T) {
 	}
 	if code := h.run("edit-link", "nope", "--name", "x"); code != 1 || !strings.Contains(h.err.String(), "no page named") {
 		t.Fatalf("unknown page: %d %s", code, h.err.String())
+	}
+}
+
+func TestNewVaultLocation(t *testing.T) {
+	h, vaults := setup(t)
+	if code := h.run("new-vault", "triage", "--category", "work/field"); code != 0 {
+		t.Fatalf("new-vault exit %d %s", code, h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(vaults, "work", "field", "triage", ".claude-atlas.json")); err != nil {
+		t.Fatal("the vault should follow its category")
+	}
+	if code := h.run("new-vault", "notes", "--category", "work/field/triage"); code != 1 || !strings.Contains(h.err.String(), "inside the vault") {
+		t.Fatalf("a vault inside a vault: exit %d err %s", code, h.err.String())
+	}
+	if code := h.run("new-vault", "notes", "--category", "../out"); code != 1 || !strings.Contains(h.err.String(), "inside the tree") {
+		t.Fatalf("a category outside the tree: exit %d err %s", code, h.err.String())
+	}
+	elsewhere := filepath.Join(t.TempDir(), "scratch")
+	if code := h.run("new-vault", elsewhere, "--category", "work"); code != 0 || !strings.Contains(h.out.String(), "tree/work/scratch.md") {
+		t.Fatalf("a path overrides the location: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, ".claude-atlas.json")); err != nil {
+		t.Fatal("vault not created at the given path")
+	}
+	if code := h.run("edit", "work/field/triage", "--category", "ops"); code != 0 || !strings.Contains(h.out.String(), "moved") {
+		t.Fatalf("a vault in its category's folder follows: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(vaults, "ops", "triage", ".claude-atlas.json")); err != nil {
+		t.Fatal("the vault should have followed its page to ops")
+	}
+	if _, err := os.Stat(filepath.Join(vaults, "work")); err == nil {
+		t.Fatal("the emptied category folders should be gone")
+	}
+	if code := h.run("edit", "work/scratch", "--category", "ops", "--move"); code != 0 || strings.Contains(h.out.String(), "moved") || !strings.Contains(h.out.String(), "stays at") {
+		t.Fatalf("a vault placed elsewhere stays: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("edit", "welcome", "--vault", filepath.Join(vaults, "welcome", "welcome"), "--move"); code != 0 {
+		t.Fatalf("move into its own folder: exit %d %s", code, h.err.String())
+	}
+	if code := h.run("history", "welcome"); code != 0 || !strings.Contains(h.out.String(), "setup") {
+		t.Fatalf("the moved vault should keep its history: exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 }
 
@@ -362,8 +403,8 @@ func TestShowEditRemove(t *testing.T) {
 	if code := h.run("remove", "ops/triage"); code != 0 || !strings.Contains(h.out.String(), "removed") {
 		t.Fatalf("remove exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if _, err := os.Stat(filepath.Join(vaults, "triage", ".claude-atlas.json")); err != nil {
-		t.Fatal("remove must leave the vault on disk")
+	if _, err := os.Stat(filepath.Join(vaults, "ops", "triage", ".claude-atlas.json")); err != nil {
+		t.Fatal("remove must leave the vault on disk, where it followed its category")
 	}
 	if code := h.run("show", "ops/triage"); code != 1 {
 		t.Fatal("removed project should be gone")

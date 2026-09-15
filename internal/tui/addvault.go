@@ -15,6 +15,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // AddVault is what the user chose on the add-vault or adopt screen.
@@ -33,6 +34,7 @@ type step int
 const (
 	stepName step = iota
 	stepCategory
+	stepLocation
 	stepMode
 	stepPurpose
 	stepConfirm
@@ -63,6 +65,8 @@ type model struct {
 	name       textinput.Model
 	where      pathField // the vault's path when adopting
 	category   picker
+	location   pathField // where a new vault goes; it follows the category until edited
+	edited     bool      // the user typed a location of their own
 	mode       string
 	purpose    textinput.Model
 	chosen     option
@@ -83,7 +87,7 @@ func newModel(vaultsDir string, categories []string) model {
 	purpose.Prompt = ""
 	purpose.CharLimit = 200
 	purpose.Width = 60
-	return model{vaultsDir: vaultsDir, categories: categories, name: name, category: category, mode: string(vault.Generic), purpose: purpose}
+	return model{vaultsDir: vaultsDir, categories: categories, name: name, category: category, location: newPathField("", 60), mode: string(vault.Generic), purpose: purpose}
 }
 
 // newAdoptModel is the same screen for a vault that already exists.
@@ -118,15 +122,28 @@ func (m model) slug() string {
 	return slug
 }
 
-func (m model) path() string {
-	if m.adopting {
-		abs, err := filepath.Abs(home.Expand(m.typed()))
-		if err != nil {
-			return ""
-		}
-		return abs
+// defaultPath is where a new vault goes in a category unless the user types a location.
+func (m model) defaultPath(category string) string {
+	path, err := vaults.DefaultPath(m.vaultsDir, category, m.slug())
+	if err != nil {
+		return ""
 	}
-	return filepath.Join(m.vaultsDir, m.slug())
+	return path
+}
+
+func (m model) path() string {
+	typed := m.typed()
+	if !m.adopting {
+		if !m.edited {
+			return m.defaultPath(m.chosen.value)
+		}
+		typed = m.location.value()
+	}
+	abs, err := filepath.Abs(home.Expand(typed))
+	if err != nil {
+		return ""
+	}
+	return abs
 }
 
 func (m model) nameError() string {
@@ -139,8 +156,15 @@ func (m model) nameError() string {
 	if m.slug() == "" {
 		return "the name needs at least one letter or digit"
 	}
-	if _, err := os.Stat(m.path()); err == nil {
-		return home.Display(m.path()) + " already exists"
+	return ""
+}
+
+func (m model) locationError() string {
+	if m.edited && m.location.value() == "" {
+		return "type where the vault goes"
+	}
+	if err := vaults.CheckNewPath(m.path()); err != nil {
+		return err.Error()
 	}
 	return ""
 }
@@ -162,10 +186,21 @@ func (m model) pathError() string {
 	return ""
 }
 
+// move gives the step before or after this one; adopting skips the location, which the
+// first step gave.
+func (m model) move(by int) step {
+	s := m.step + step(by)
+	if m.adopting && s == stepLocation {
+		s += step(by)
+	}
+	return s
+}
+
 func (m *model) focus() tea.Cmd {
 	m.name.Blur()
 	m.where.blur()
 	m.category.blur()
+	m.location.blur()
 	m.purpose.Blur()
 	switch m.step {
 	case stepName:
@@ -175,6 +210,11 @@ func (m *model) focus() tea.Cmd {
 		return m.name.Focus()
 	case stepCategory:
 		return m.category.focus()
+	case stepLocation:
+		if !m.edited {
+			m.location.setValue(home.Display(m.defaultPath(m.chosen.value)))
+		}
+		return m.location.focus()
 	case stepPurpose:
 		return m.purpose.Focus()
 	}
@@ -193,7 +233,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelled = true
 				return m, tea.Quit
 			}
-			m.step--
+			m.step = m.move(-1)
 			m.err = ""
 			return m, m.focus()
 		case tea.KeyEnter:
@@ -211,6 +251,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = ""
 	case stepCategory:
 		m.category, cmd = m.category.update(msg)
+		m.err = ""
+	case stepLocation:
+		m.location, cmd = m.location.update(msg)
+		m.edited = m.location.value() != home.Display(m.defaultPath(m.chosen.value))
+		m.err = ""
 	case stepMode:
 		if isKey && (key.Type == tea.KeyLeft || key.Type == tea.KeyRight || key.Type == tea.KeySpace) {
 			if m.mode == string(vault.Generic) {
@@ -233,12 +278,22 @@ func (m model) advance() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case stepCategory:
-		m.chosen = m.category.selected()
+		chosen := m.category.selected()
+		if _, err := tree.CleanCategory(chosen.value); err != nil {
+			m.err = err.Error()
+			return m, nil
+		}
+		m.chosen = chosen
+	case stepLocation:
+		if e := m.locationError(); e != "" {
+			m.err = e
+			return m, nil
+		}
 	case stepConfirm:
 		m.done = true
 		return m, tea.Quit
 	}
-	m.step++
+	m.step = m.move(1)
 	m.err = ""
 	return m, m.focus()
 }
@@ -285,14 +340,8 @@ func (m model) View() string {
 	} else {
 		b.WriteString(m.row(stepName, first, m.name.View()))
 	}
-	if m.step == stepName {
-		if m.err != "" {
-			b.WriteString("             " + errSt.Render(m.err) + "\n")
-		} else if !m.adopting && m.slug() != "" {
-			b.WriteString("             " + dim.Render("→ "+home.Display(m.path())) + "\n")
-		}
-	} else if m.step > stepName && !m.adopting {
-		b.WriteString("             " + dim.Render(home.Display(m.path())) + "\n")
+	if m.step == stepName && m.err != "" {
+		b.WriteString("             " + errSt.Render(m.err) + "\n")
 	}
 	b.WriteString("\n")
 
@@ -301,6 +350,9 @@ func (m model) View() string {
 		b.WriteString(m.row(stepCategory, "Category", dim.Render("choose after the "+strings.ToLower(first))))
 	case m.step == stepCategory:
 		b.WriteString(m.row(stepCategory, "Category", m.category.view("             ")))
+		if m.err != "" {
+			b.WriteString("             " + errSt.Render(m.err) + "\n")
+		}
 	default:
 		shown := m.chosen.label
 		if m.chosen.create {
@@ -309,6 +361,25 @@ func (m model) View() string {
 		b.WriteString(m.row(stepCategory, "Category", shown))
 	}
 	b.WriteString("\n")
+
+	if !m.adopting {
+		switch {
+		case m.step < stepLocation:
+			hint := "follows the category"
+			if path := m.defaultPath(m.category.selected().value); m.step == stepCategory && path != "" {
+				hint = "→ " + home.Display(path)
+			}
+			b.WriteString(m.row(stepLocation, "Location", dim.Render(hint)))
+		case m.step == stepLocation:
+			b.WriteString(m.row(stepLocation, "Location", m.location.view("             ")))
+			if m.err != "" {
+				b.WriteString("             " + errSt.Render(m.err) + "\n")
+			}
+		default:
+			b.WriteString(m.row(stepLocation, "Location", home.Display(m.path())))
+		}
+		b.WriteString("\n")
+	}
 
 	switch {
 	case m.step < stepMode:
@@ -352,6 +423,8 @@ func (m model) View() string {
 			}
 		case stepCategory:
 			hints += " · ↑↓ choose · type to filter or name a new category"
+		case stepLocation:
+			hints += " · type another path to put the vault elsewhere · " + pathHint()
 		case stepMode:
 			hints += " · ←→ generic or lyt"
 		}

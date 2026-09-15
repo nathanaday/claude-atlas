@@ -105,7 +105,7 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 		if name == "" {
 			name = c.Ask("Name for your first vault", "welcome")
 		}
-		path, err := vaults.ResolveNewPath(name, cfg.VaultsDir)
+		path, err := vaults.ResolveNewPath(name, cfg.VaultsDir, "")
 		if err != nil {
 			return 1, err
 		}

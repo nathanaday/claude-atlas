@@ -55,7 +55,8 @@ func fakeAtlas(t *testing.T) (*home.Config, Hooks) {
 		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
 			return vaults.UpdateLink(cfg, page, edit)
 		},
-		Refresh: func() error { return nil },
+		Refresh:   func() error { return nil },
+		VaultsDir: cfg.VaultsDir,
 	}
 	return cfg, hooks
 }
@@ -122,6 +123,36 @@ func TestEditRenameRepriorityAndMoveCategory(t *testing.T) {
 	}
 	if !strings.Contains(v.View(), "leisure") || !strings.Contains(v.View(), "reading List") {
 		t.Fatalf("tree not reloaded:\n%s", v.View())
+	}
+}
+
+func TestCategoryChangeOffersToMoveTheVault(t *testing.T) {
+	for _, answer := range []string{"y", "n"} {
+		cfg, v := atlasView(t)
+		v = pressV(v, tea.KeyUp, tea.KeyUp) // welcome, whose vault sits in the top level's folder
+		v = keyV(v, "e")
+		v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyEnter) // category picker
+		v = typeV(v, "archive")
+		v = pressV(v, tea.KeyEnter)
+		v = keyV(v, "s")
+		if v.edit == nil || v.edit.mode != confirmMove || !strings.Contains(v.View(), "sits in its category's folder") {
+			t.Fatalf("%s: expected the offer:\n%s", answer, v.View())
+		}
+		v = keyV(v, answer)
+		if v.edit != nil || v.errMsg != "" {
+			t.Fatalf("%s: save: edit=%v err=%q", answer, v.edit, v.errMsg)
+		}
+		want := filepath.Join(cfg.VaultsDir, "welcome")
+		if answer == "y" {
+			want = filepath.Join(cfg.VaultsDir, "archive", "welcome")
+		}
+		projects, _, _ := tree.Walk(cfg.TreeRoot())
+		if p := tree.FindByRel(projects, "archive/welcome"); p == nil || p.VaultPath() != want {
+			t.Fatalf("%s: page %+v, want vault %s", answer, p, want)
+		}
+		if _, err := os.Stat(filepath.Join(want, ".claude-atlas.json")); err != nil {
+			t.Fatalf("%s: vault not at %s", answer, want)
+		}
 	}
 }
 

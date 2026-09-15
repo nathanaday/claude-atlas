@@ -100,14 +100,8 @@ func Update(cfg *home.Config, p *tree.Project, edit Edit) error {
 		}
 		if target != p.VaultPath() {
 			if edit.MoveVault {
-				if _, err := os.Stat(target); err == nil {
-					return fmt.Errorf("%s already exists; cannot move the vault there", home.Display(target))
-				}
-				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				if err := moveVault(cfg, p.VaultPath(), target); err != nil {
 					return err
-				}
-				if err := os.Rename(p.VaultPath(), target); err != nil {
-					return fmt.Errorf("move vault: %w", err)
 				}
 			} else if !vault.IsVault(target) && !vault.IsLegacy(target) {
 				return fmt.Errorf("%s is not a claude-atlas vault", home.Display(target))
@@ -126,6 +120,96 @@ func Update(cfg *home.Config, p *tree.Project, edit Edit) error {
 		}
 	}
 	return nil
+}
+
+// moveVault renames a vault's folder to target, repoints the repository pages whose
+// folders sit inside it, and removes the folders it leaves empty in the vaults directory.
+func moveVault(cfg *home.Config, from, target string) error {
+	if err := CheckMove(from, target); err != nil {
+		return err
+	}
+	pages, _, err := links.Walk(cfg.AtlasVault)
+	if err != nil {
+		return err
+	}
+	source := from
+	if _, ok := under(from, target); ok {
+		// A vault moving into its own folder, as admin to admin/admin, steps aside first.
+		source = from + ".moving"
+		if _, err := os.Stat(source); err == nil {
+			return fmt.Errorf("%s is in the way; remove it and move again", home.Display(source))
+		}
+		if err := os.Rename(from, source); err != nil {
+			return fmt.Errorf("move vault: %w", err)
+		}
+	}
+	err = os.MkdirAll(filepath.Dir(target), 0o755)
+	if err == nil {
+		err = os.Rename(source, target)
+	}
+	if err != nil {
+		if source != from {
+			os.Rename(source, from)
+		}
+		return fmt.Errorf("move vault: %w", err)
+	}
+	for _, page := range pages {
+		if rel, ok := under(from, page.Path); ok {
+			if err := tree.UpdateFrontmatter(page.File, map[string]any{"path": filepath.Join(target, rel)}); err != nil {
+				return err
+			}
+		}
+	}
+	pruneEmpty(cfg.VaultsDir, filepath.Dir(from))
+	return nil
+}
+
+// CheckMove says why the vault at from cannot move to target: something is there, or
+// target is inside another vault. A vault may move into its own folder.
+func CheckMove(from, target string) error {
+	if _, err := os.Stat(target); err == nil {
+		return fmt.Errorf("%s already exists; cannot move the vault there", home.Display(target))
+	}
+	if outer := vault.FindAbove(filepath.Dir(target)); outer != "" && outer != from {
+		return fmt.Errorf("%s is inside the vault %s; cannot move the vault there", home.Display(target), home.Display(outer))
+	}
+	return nil
+}
+
+// CategoryPath is where a project's vault goes when its page moves to category: the same
+// folder name in the new category's folder. It is empty when the category stays, or when
+// the vault does not sit in its category's folder, because then the user placed it.
+func CategoryPath(vaultsDir string, p *tree.Project, category string) string {
+	category, err := tree.CleanCategory(category)
+	if err != nil || category == p.Category() || vaultsDir == "" {
+		return ""
+	}
+	current := filepath.Clean(p.VaultPath())
+	if filepath.Dir(current) != filepath.Join(vaultsDir, filepath.FromSlash(p.Category())) {
+		return ""
+	}
+	return filepath.Join(vaultsDir, filepath.FromSlash(category), filepath.Base(current))
+}
+
+// under gives path relative to root when path is root or inside it.
+func under(root, path string) (string, bool) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
+}
+
+// pruneEmpty removes dir and the folders above it while they are empty, stopping at the
+// vaults directory.
+func pruneEmpty(vaultsDir, dir string) {
+	for {
+		rel, ok := under(vaultsDir, dir)
+		if !ok || rel == "." || os.Remove(dir) != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 func contains(list []string, value string) bool {
@@ -305,7 +389,7 @@ func repoDir(p *tree.Project, name, at string) (string, error) {
 			return "", fmt.Errorf("%s already exists; link it instead", home.Display(dir))
 		}
 	}
-	if rel, err := filepath.Rel(p.VaultPath(), dir); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+	if rel, ok := under(p.VaultPath(), dir); ok {
 		if rel == "." || strings.HasPrefix(rel, vault.WikiDir+"/") || rel == vault.WikiDir || strings.HasPrefix(rel, ".") {
 			return "", fmt.Errorf("a repository goes beside the wiki, not in %s", home.Display(dir))
 		}

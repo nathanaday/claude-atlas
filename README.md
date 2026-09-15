@@ -70,7 +70,7 @@ Create a vault, put a source in its inbox, and start Claude Code inside it:
 
 ```bash
 claude-atlas new-vault sensor-triage --category work
-cp ~/Downloads/dinov2.pdf ~/Documents/Vaults/sensor-triage/inbox/
+cp ~/Downloads/dinov2.pdf ~/Documents/Vaults/work/sensor-triage/inbox/
 claude-atlas open-claude sensor-triage
 ```
 

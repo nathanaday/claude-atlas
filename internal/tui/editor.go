@@ -172,7 +172,9 @@ type editor struct {
 	err       string
 	discard   bool
 	pendingMv vaults.Edit
-	outcome   editOutcome
+	// follow marks pendingMv as a vault following a new category; n then saves the rest.
+	follow  bool
+	outcome editOutcome
 	// rel is where the project's page sits after a save; a category change moves it.
 	rel string
 }
@@ -337,7 +339,13 @@ func (e editor) update(msg tea.Msg) (editor, tea.Cmd) {
 			case "y":
 				e.pendingMv.MoveVault = true
 				return e.apply(e.pendingMv), nil
-			case "n", "esc":
+			case "n":
+				if e.follow {
+					e.pendingMv.Vault = ""
+					return e.apply(e.pendingMv), nil
+				}
+				e.mode = editFields
+			case "esc":
 				e.mode = editFields
 			}
 		}
@@ -489,7 +497,15 @@ func (e editor) save() editor {
 		target, _ := filepath.Abs(home.Expand(e.draft.Vault))
 		edit.Vault = target
 		if _, err := os.Stat(target); err != nil {
-			e.pendingMv = edit
+			e.pendingMv, e.follow = edit, false
+			e.mode = confirmMove
+			return e
+		}
+	} else if edit.Category != nil {
+		target := vaults.CategoryPath(e.hooks.VaultsDir, e.current, *edit.Category)
+		if target != "" && vaults.CheckMove(e.current.VaultPath(), target) == nil {
+			edit.Vault = target
+			e.pendingMv, e.follow = edit, true
 			e.mode = confirmMove
 			return e
 		}
@@ -564,6 +580,11 @@ func (e editor) view() string {
 		fmt.Fprintf(&b, "  %s Remove %s from the atlas? The vault at %s stays on disk.  %s\n",
 			errSt.Render("▲"), e.current.Name, home.Display(e.current.VaultPath()), title.Render("y")+" / "+title.Render("n"))
 	case confirmMove:
+		if e.follow {
+			fmt.Fprintf(&b, "  %s The vault sits in its category's folder. Move it to %s too?  %s\n",
+				errSt.Render("▲"), home.Display(e.pendingMv.Vault), title.Render("y")+" / "+title.Render("n")+dim.Render(" · Esc back"))
+			break
+		}
 		fmt.Fprintf(&b, "  %s %s does not exist. Move the vault directory there?  %s\n",
 			errSt.Render("▲"), home.Display(e.pendingMv.Vault), title.Render("y")+" / "+title.Render("n"))
 	case editList:

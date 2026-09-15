@@ -86,6 +86,101 @@ func TestUpdateMovesTheVaultDirectoryWhenAsked(t *testing.T) {
 	}
 }
 
+func TestUpdateMovesAVaultIntoItsOwnFolder(t *testing.T) {
+	cfg, p := setup(t)
+	target := filepath.Join(p.VaultPath(), "a")
+	if err := Update(cfg, p, Edit{Vault: target, MoveVault: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, ".claude-obsidian.json")); err != nil {
+		t.Fatal("vault not moved into its own folder")
+	}
+	if entries, _ := os.ReadDir(cfg.VaultsDir); len(entries) != 1 || entries[0].Name() != "a" {
+		t.Fatalf("the vaults dir should hold only a/, and nothing set aside: %v", entries)
+	}
+	if got := reload(t, cfg, p).VaultPath(); got != target {
+		t.Fatalf("page not repointed: %s", got)
+	}
+}
+
+func TestUpdateMoveCarriesRepositoriesAndPrunesEmptyFolders(t *testing.T) {
+	cfg, _ := setup(t)
+	from := fakeVault(t, filepath.Join(cfg.VaultsDir, "old", "b"))
+	p, err := Register(cfg, from, RegisterOptions{Name: "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(from, "deliverables")
+	outside := filepath.Join(cfg.VaultsDir, "code")
+	os.MkdirAll(inside, 0o755)
+	os.MkdirAll(outside, 0o755)
+	if err := SetLinks(cfg, p, []links.Page{{Kind: links.Repo, Path: inside}, {Kind: links.Repo, Path: outside}}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(cfg.VaultsDir, "engineering", "b")
+	if err := Update(cfg, reload(t, cfg, p), Edit{Vault: target, MoveVault: true}); err != nil {
+		t.Fatal(err)
+	}
+	pages, _, _ := links.Walk(cfg.AtlasVault)
+	if links.FindByPath(pages, filepath.Join(target, "deliverables")) == nil || links.FindByPath(pages, outside) == nil {
+		t.Fatalf("the repository inside the vault moves with it, the other stays: %+v", pages)
+	}
+	if q := reload(t, cfg, p); len(q.Warnings) != 0 || !q.LinkedTo(filepath.Join(target, "deliverables")) {
+		t.Fatalf("project links after the move: %+v %v", q.Linked, q.Warnings)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.VaultsDir, "old")); err == nil {
+		t.Fatal("the folder the vault left empty should be gone")
+	}
+}
+
+func TestCategoryPathFollowsOnlyAVaultInItsCategoryFolder(t *testing.T) {
+	cfg, placed := setup(t)
+	if got := CategoryPath(cfg.VaultsDir, placed, "ops"); got != "" {
+		t.Fatalf("a vault outside its category's folder stays: %q", got)
+	}
+	q, err := Register(cfg, fakeVault(t, filepath.Join(cfg.VaultsDir, "work", "b")), RegisterOptions{Name: "B", Category: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ category, want string }{
+		{"ops/field", filepath.Join(cfg.VaultsDir, "ops", "field", "b")},
+		{"", filepath.Join(cfg.VaultsDir, "b")},
+		{"work/", ""},
+		{"../out", ""},
+	} {
+		if got := CategoryPath(cfg.VaultsDir, q, c.category); got != c.want {
+			t.Errorf("CategoryPath(%q) = %q; want %q", c.category, got, c.want)
+		}
+	}
+	if err := CheckMove(q.VaultPath(), filepath.Join(q.VaultPath(), "b")); err != nil {
+		t.Fatalf("a vault may move into its own folder: %v", err)
+	}
+	if err := CheckMove(q.VaultPath(), placed.VaultPath()); err == nil {
+		t.Fatal("a taken target should be refused")
+	}
+}
+
+func TestUpdateRefusesToMoveAVaultIntoAnother(t *testing.T) {
+	cfg, p := setup(t)
+	other := filepath.Join(cfg.VaultsDir, "other")
+	os.MkdirAll(other, 0o755)
+	os.WriteFile(filepath.Join(other, vault.Marker), []byte("{}"), 0o644)
+	err := Update(cfg, p, Edit{Vault: filepath.Join(other, "a"), MoveVault: true})
+	if err == nil || !strings.Contains(err.Error(), "inside the vault") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.VaultPath(), ".claude-obsidian.json")); err != nil {
+		t.Fatal("the vault should not have moved")
+	}
+	os.RemoveAll(other)
+	if err := Update(cfg, p, Edit{Vault: filepath.Join(t.TempDir(), "a"), MoveVault: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cfg.VaultsDir); err != nil {
+		t.Fatal("an emptied vaults dir must stay")
+	}
+}
+
 func TestUnlinkLeavesTheVault(t *testing.T) {
 	cfg, p := setup(t)
 	if err := Unlink(p); err != nil {

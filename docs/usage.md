@@ -26,15 +26,24 @@ one command, so scripts and muscle memory both work:
 
 ## Create a vault
 
-With no arguments, `new-vault` asks for a name, a category, and a one-line
-purpose:
+With no arguments, `new-vault` asks for a name, a category, a location, and a
+one-line purpose:
 
 ```bash
 claude-atlas new-vault
 claude-atlas new-vault sensor-triage --category work --purpose "Sort field sensor faults."
 claude-atlas new-vault reading --mode lyt
-claude-atlas new-vault ~/Desktop/scratch-vault
+claude-atlas new-vault ~/Desktop/scratch-vault --category work
 ```
+
+A new vault goes in the vaults directory, in the folder of its category, so
+the folders on disk match the tree: `sensor-triage` in `work` goes to
+`~/Documents/Vaults/work/sensor-triage`. To put a vault somewhere else, give a
+path instead of a name, or type another location on the add screen. Nothing
+depends on where a vault is.
+
+A vault cannot go inside another vault. If a category leads there, choose
+another category or a path.
 
 ## Edit a project
 
@@ -49,6 +58,14 @@ claude-atlas edit sensor-triage --name "Sensor triage" --purpose "" --category w
 claude-atlas edit sensor-triage --vault ~/Vaults/sensor-triage --move
 ```
 
+`--move` moves the vault's folder to the new path. Repositories inside the
+vault move with it, and their pages follow.
+
+A new category moves the project page. If the vault sits in its category's
+folder, `edit` asks whether to move the vault to the new category's folder
+too, and `--move` answers yes. The editor in `view` asks the same when you
+save. A vault in any other place stays where it is.
+
 See everything the atlas knows about a project, and remove one from the atlas
 (the vault stays on disk):
 
@@ -62,7 +79,7 @@ claude-atlas remove sensor-triage
 Put a source in the inbox and start Claude Code inside the vault:
 
 ```bash
-cp ~/Downloads/dinov2.pdf ~/Documents/Vaults/sensor-triage/inbox/
+cp ~/Downloads/dinov2.pdf ~/Documents/Vaults/work/sensor-triage/inbox/
 claude-atlas open-claude sensor-triage
 ```
 
@@ -194,7 +211,7 @@ claude-atlas undo sensor-triage ingest-20260912-150405-ab12
 Inside a vault, the vault argument can be omitted:
 
 ```bash
-cd ~/Documents/Vaults/sensor-triage
+cd ~/Documents/Vaults/work/sensor-triage
 claude-atlas history
 claude-atlas lint
 ```

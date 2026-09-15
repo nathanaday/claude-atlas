@@ -17,6 +17,27 @@ links the project. A project page links its repositories through `repos`, and
 other projects through `related`. Obsidian resolves links in properties, so
 every one of these is an edge in the graph view.
 
+## Where a vault lives
+
+A new vault goes to `<vaults dir>/<category>/<name>`, so the vaults directory
+has the same folders as `tree/`, and a user who browses the file system finds
+a vault where the atlas files it. This is a default only. A project page
+records the vault's absolute path, so a vault created at another path or
+adopted from elsewhere works the same.
+
+When a page moves to another category and its vault sits in the old
+category's folder, the atlas offers to move the vault to the new category's
+folder (`vaults.CategoryPath`), so the two layouts stay together. A vault the
+user placed anywhere else stays.
+
+A vault never goes inside another vault: the outer vault's git would record
+the inner vault as an embedded repository. `new-vault` and `edit --move`
+refuse such a path. A category folder with the name of a project beside it
+(`tree/work/a/` beside `tree/work/a.md`) leads to this case.
+
+`edit --move` repoints the pages of the repositories inside the vault and
+removes the folders the vault leaves empty in the vaults directory.
+
 ## The wiki and the repository
 
 A project has two kinds of place, and the atlas keeps them apart on purpose.

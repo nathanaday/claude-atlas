@@ -219,6 +219,15 @@ func hasParentSegment(rel string) bool {
 	return false
 }
 
+// CleanCategory trims a category's slashes and refuses one that climbs out of the tree.
+func CleanCategory(category string) (string, error) {
+	clean := strings.Trim(filepath.ToSlash(category), "/")
+	if hasParentSegment(clean) {
+		return "", fmt.Errorf("category %q must stay inside the tree", category)
+	}
+	return clean, nil
+}
+
 func contains(list []string, value string) bool {
 	for _, item := range list {
 		if item == value {
@@ -392,9 +401,9 @@ func Create(root string, opts ProjectOptions) (string, error) {
 	if !contains(Priorities, opts.Priority) {
 		return "", fmt.Errorf("priority must be one of %s", strings.Join(Priorities, ", "))
 	}
-	category := strings.Trim(filepath.ToSlash(opts.Category), "/")
-	if hasParentSegment(category) {
-		return "", fmt.Errorf("category %q must stay inside the tree", opts.Category)
+	category, err := CleanCategory(opts.Category)
+	if err != nil {
+		return "", err
 	}
 	dir := filepath.Join(root, filepath.FromSlash(category))
 	path := filepath.Join(dir, opts.ID+".md")
