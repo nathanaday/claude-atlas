@@ -13,6 +13,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/tree"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 type harness struct {
@@ -137,6 +138,38 @@ func TestVaultCommands(t *testing.T) {
 		if !strings.Contains(h.out.String(), want) {
 			t.Errorf("info missing %q:\n%s", want, h.out.String())
 		}
+	}
+}
+
+func TestNewVaultKindAndAdoptAs(t *testing.T) {
+	h, vaults := setup(t)
+	if code := h.run("new-vault", "ai-ml", "--kind", "knowledge", "--category", "kb"); code != 0 {
+		t.Fatalf("new-vault exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	v, err := vault.Open(filepath.Join(vaults, "kb", "ai-ml"))
+	if err != nil || v.Config.Kind != vault.Knowledge {
+		t.Fatalf("open %+v %v", v, err)
+	}
+	if _, err := os.Stat(v.Path("inbox")); err == nil {
+		t.Fatal("a knowledge base has no inbox")
+	}
+	if code := h.run("new-vault", "x", "--kind", "bogus"); code != 2 || !strings.Contains(h.err.String(), "kind must be") {
+		t.Fatalf("bad kind: exit %d %s", code, h.err.String())
+	}
+	old := filepath.Join(t.TempDir(), "old")
+	os.MkdirAll(filepath.Join(old, "wiki"), 0o755)
+	os.WriteFile(filepath.Join(old, "wiki", "index.md"), []byte("---\ntitle: I\n---\n# I\n"), 0o644)
+	if code := h.run("adopt", old, "--as", "knowledge", "--category", "kb"); code != 0 {
+		t.Fatalf("adopt exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if !strings.Contains(h.out.String(), "as knowledge base") {
+		t.Fatalf("adopt output:\n%s", h.out.String())
+	}
+	if adopted, err := vault.Open(old); err != nil || adopted.Config.Kind != vault.Knowledge {
+		t.Fatalf("adopted %+v %v", adopted, err)
+	}
+	if code := h.run("adopt", old, "--as", "project"); code != 1 || !strings.Contains(h.err.String(), "does not change") {
+		t.Fatalf("kind is fixed: exit %d %s", code, h.err.String())
 	}
 }
 

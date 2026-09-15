@@ -301,11 +301,24 @@ func parseMode(s string) (vault.Mode, error) {
 	return vault.ParseMode(s)
 }
 
+func kindFlag(fs *flag.FlagSet, name, usage string) *string {
+	return fs.String(name, "", usage)
+}
+
+// parseKind reads a --kind or --as value; empty means the caller's default.
+func parseKind(s string, fallback vault.Kind) (vault.Kind, error) {
+	if s == "" {
+		return fallback, nil
+	}
+	return vault.ParseKind(s)
+}
+
 func (e *env) newVault(args []string) (int, error) {
 	fs := newFlags("new-vault", e.stderr)
 	opts := nodeFlags(fs)
 	fs.StringVar(&opts.Name, "name", "", "display name (default: the vault's directory name)")
 	mode := modeFlag(fs)
+	kind := kindFlag(fs, "kind", "what the vault is for: project (tasks, questions, notes; mounts knowledge bases) or knowledge (a knowledge base of sources, entities, and concepts); default project")
 	from := fs.String("from", "", "register a vault that already exists at this path (same as adopt)")
 	positional, err := parse(fs, args)
 	if err != nil {
@@ -315,15 +328,19 @@ func (e *env) newVault(args []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
+	k, err := parseKind(*kind, vault.Project)
+	if err != nil {
+		return 2, err
+	}
 	switch {
 	case *from != "" && len(positional) == 0:
-		return e.adoptPath(*from, *opts, m)
+		return e.adoptPath(*from, *opts, vault.Options{Kind: k, Mode: m, Name: opts.Name})
 	case *from == "" && len(positional) == 0:
 		return e.newVaultInteractive()
 	case *from == "" && len(positional) == 1:
-		return e.createVault(positional[0], *opts, m)
+		return e.createVault(positional[0], *opts, vault.Options{Kind: k, Mode: m, Name: opts.Name})
 	}
-	return 2, errors.New("usage: claude-atlas new-vault [NAME | --from PATH] [--name N] [--category DIR] [--purpose TEXT] [--priority P] [--mode generic|lyt]")
+	return 2, errors.New("usage: claude-atlas new-vault [NAME | --from PATH] [--kind project|knowledge] [--name N] [--category DIR] [--purpose TEXT] [--priority P] [--mode generic|lyt]")
 }
 
 func (e *env) adopt(args []string) (int, error) {
@@ -331,18 +348,23 @@ func (e *env) adopt(args []string) (int, error) {
 	opts := nodeFlags(fs)
 	fs.StringVar(&opts.Name, "name", "", "display name (default: the vault's directory name)")
 	mode := fs.String("mode", "", "filing mode when the vault has none: generic (default) or lyt")
+	as := kindFlag(fs, "as", "adopt as a project or a knowledge base; a vault that already has a kind keeps it; default project")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) > 1 {
-		return 2, errors.New("usage: claude-atlas adopt [PATH] [--name N] [--category DIR] [--purpose TEXT] [--priority P] [--mode generic|lyt]")
+		return 2, errors.New("usage: claude-atlas adopt [PATH] [--as project|knowledge] [--name N] [--category DIR] [--purpose TEXT] [--priority P] [--mode generic|lyt]")
 	}
 	var m vault.Mode
 	if *mode != "" {
 		if m, err = vault.ParseMode(*mode); err != nil {
 			return 2, err
 		}
+	}
+	k, err := parseKind(*as, "")
+	if err != nil {
+		return 2, err
 	}
 	if len(positional) == 0 {
 		if !e.console.Interactive() {
@@ -359,9 +381,9 @@ func (e *env) adopt(args []string) (int, error) {
 		if choice == nil {
 			return 1, vaults.ErrCancelled
 		}
-		return e.adoptPath(choice.Path, vaults.RegisterOptions{Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose, Priority: opts.Priority}, vault.Mode(choice.Mode))
+		return e.adoptPath(choice.Path, vaults.RegisterOptions{Name: choice.Name, Category: choice.Category, Purpose: choice.Purpose, Priority: opts.Priority}, vault.Options{Kind: vault.Project, Mode: vault.Mode(choice.Mode), Name: choice.Name})
 	}
-	return e.adoptPath(positional[0], *opts, m)
+	return e.adoptPath(positional[0], *opts, vault.Options{Kind: k, Mode: m, Name: opts.Name})
 }
 
 // createOrAdopt is what the interactive screens call: it makes or adopts the vault and
@@ -518,7 +540,7 @@ func (e *env) stage(cfg *home.Config, p *tree.Project, plan *capture.StagePlan) 
 }
 
 // adoptPath makes a directory a claude-atlas vault, registers it, and refreshes.
-func (e *env) adoptPath(path string, opts vaults.RegisterOptions, mode vault.Mode) (int, error) {
+func (e *env) adoptPath(path string, opts vaults.RegisterOptions, vopts vault.Options) (int, error) {
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
@@ -527,18 +549,23 @@ func (e *env) adoptPath(path string, opts vaults.RegisterOptions, mode vault.Mod
 	if err != nil {
 		return 1, err
 	}
-	res, err := vault.Adopt(abs, vault.Options{Mode: mode, Name: opts.Name}, time.Now())
+	res, err := vault.Adopt(abs, vopts, time.Now())
 	if err != nil {
 		return 1, err
 	}
 	c := e.console
 	switch {
 	case res.AlreadyAdopted && res.Commit == "":
-		c.Step(console.Skip, "adopt", "already a claude-atlas vault")
+		c.Step(console.Skip, "adopt", "already a claude-atlas "+res.Kind.Noun())
 	case res.WasLegacy:
-		c.Step(console.OK, "adopted", "claude-obsidian vault; "+setupChanges(res.Added, res.Moved))
+		c.Step(console.OK, "adopted", fmt.Sprintf("claude-obsidian vault as %s; %s", res.Kind.Noun(), setupChanges(res.Added, res.Moved)))
+	case res.FromV1:
+		c.Step(console.OK, "adopted", fmt.Sprintf("v1 vault as %s; %s", res.Kind.Noun(), setupChanges(res.Added, res.Moved)))
 	default:
-		c.Step(console.OK, "adopted", setupChanges(res.Added, res.Moved))
+		c.Step(console.OK, "adopted", fmt.Sprintf("as %s; %s", res.Kind.Noun(), setupChanges(res.Added, res.Moved)))
+	}
+	if len(res.Removed) > 0 {
+		c.Step(console.OK, "removed", strings.Join(res.Removed, ", ")+" (a knowledge base has none)")
 	}
 	if res.GitInitialized {
 		c.Step(console.OK, "git", "initialized; every operation is now one commit")
@@ -567,7 +594,7 @@ func (e *env) adoptPath(path string, opts vaults.RegisterOptions, mode vault.Mod
 	return 0, nil
 }
 
-func (e *env) createVault(arg string, opts vaults.RegisterOptions, mode vault.Mode) (int, error) {
+func (e *env) createVault(arg string, opts vaults.RegisterOptions, vopts vault.Options) (int, error) {
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
@@ -576,7 +603,7 @@ func (e *env) createVault(arg string, opts vaults.RegisterOptions, mode vault.Mo
 	if err != nil {
 		return 1, err
 	}
-	if _, err := vaults.Create(path, vault.Options{Kind: vault.Project, Mode: mode, Name: opts.Name}, e.console, true); err != nil {
+	if _, err := vaults.Create(path, vopts, e.console, true); err != nil {
 		return 1, err
 	}
 	return e.finishVault(cfg, path, opts)

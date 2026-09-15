@@ -11,7 +11,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 
 | Thing | Location |
 |---|---|
-| v2: knowledge bases, projects, mounts, access (designed, not built) | `docs/v2-design.md` |
+| v2: knowledge bases, projects, mounts, access (phase 1 built: kinds) | `docs/v2-design.md` |
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side: tree, link pages, graph (superseded by v2) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
@@ -125,6 +125,12 @@ vault (`vaults.CheckNewPath`, `vaults.CheckMove`).
   directly, and only before or outside an operation. The template includes the
   vault's CSS snippet and an appearance file that enables it; upgrade merges
   the snippet into an existing appearance file.
+- A vault has a kind, `knowledge` or `project` (`vault.Kind`, in the v2
+  identity file with an `id` and a `name`). A knowledge base has no inbox,
+  ideas, tasks, questions, or sessions; `txn`, the tools, lint, and the hook
+  refuse or skip them there. `new-vault --kind` and `adopt --as` choose the
+  kind; it does not change afterwards. Templates live under
+  `internal/vault/templates/{common,knowledge,project}/`.
 - A kind bounds a plan's writes (`txn.allowed`). Reserved everywhere:
   `wiki/log.md`, both ledgers, `wiki/tasks/tasks.md` and its old path
   `wiki/tasks/index.md`, `.git`, `.vault-meta`, `.obsidian`, `.raw` except
