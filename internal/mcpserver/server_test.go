@@ -79,6 +79,19 @@ func newVault(t *testing.T) *vault.Vault {
 	return v
 }
 
+func newKnowledge(t *testing.T) *vault.Vault {
+	t.Helper()
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := filepath.Join(t.TempDir(), "kb")
+	if _, err := vault.Init(root, vault.Options{Kind: vault.Knowledge}, now); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := vault.Open(root)
+	return v
+}
+
 const page = "---\ntitle: %s\ntype: %s\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - x\n---\n# %s\n\n%s\n"
 
 func TestToolsListAndStatus(t *testing.T) {
@@ -99,7 +112,7 @@ func TestToolsListAndStatus(t *testing.T) {
 	if msg := c.call("status", nil, &st); msg != "" {
 		t.Fatal(msg)
 	}
-	if st.Vault != v.Root || st.Mode != "generic" || st.Pages != 5 || !st.Git.HasHistory || st.LastOperation == nil || st.LastOperation.Kind != "setup" {
+	if st.Vault != v.Root || st.Kind != "project" || st.ID == "" || st.Mode != "generic" || st.Pages != 5 || !st.Git.HasHistory || st.LastOperation == nil || st.LastOperation.Kind != "setup" {
 		t.Fatalf("status %+v", st)
 	}
 	if msg := c.call("status", map[string]any{"vault": t.TempDir()}, nil); !strings.Contains(msg, "not a claude-atlas vault") {
@@ -380,5 +393,49 @@ func TestStubTool(t *testing.T) {
 	out = txn.StubResult{}
 	if msg := c.call("stub", nil, &out); msg != "" || len(out.Stubs) != 0 || out.OperationID != "" {
 		t.Fatalf("nothing left: %q %+v", msg, out)
+	}
+}
+
+func TestKnowledgeBaseTools(t *testing.T) {
+	v := newKnowledge(t)
+	c := connect(t, v.Root)
+	var st Status
+	if msg := c.call("status", nil, &st); msg != "" || st.Kind != "knowledge" || st.ID == "" || st.Name != "kb" || st.Tasks.Open != 0 {
+		t.Fatalf("%s %+v", msg, st)
+	}
+	refused := map[string]map[string]any{
+		"inbox":   {},
+		"capture": {"paths": []string{"x.md"}},
+		"plant":   {"title": "T", "text": "t"},
+		"tasks":   {},
+		"repos":   {},
+		"route":   {"type": "task", "title": "T"},
+	}
+	for name, args := range refused {
+		if msg := c.call(name, args, nil); !strings.Contains(msg, "knowledge base") {
+			t.Errorf("%s in a knowledge base: %q", name, msg)
+		}
+	}
+	if msg := c.call("route", map[string]any{"type": "question", "title": "Q"}, nil); !strings.Contains(msg, "knowledge base") {
+		t.Errorf("route question: %q", msg)
+	}
+	page := "---\ntype: concept\ntitle: A\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# A\n\ntext\n"
+	write := []map[string]any{{"path": "wiki/concepts/A.md", "mode": "create", "content": page}}
+	for _, kind := range []string{"ingest", "save"} {
+		if msg := c.call("plan", map[string]any{"kind": kind, "summary": "x", "writes": write}, nil); !strings.Contains(msg, "through a project") {
+			t.Errorf("%s in a knowledge base: %q", kind, msg)
+		}
+	}
+	var po PlanOut
+	if msg := c.call("plan", map[string]any{"kind": "repair", "summary": "add A", "writes": write}, &po); msg != "" {
+		t.Fatal(msg)
+	}
+	var res txn.Result
+	if msg := c.call("apply", map[string]any{"plan_id": po.PlanID}, &res); msg != "" || res.Commit == "" {
+		t.Fatalf("apply: %s %+v", msg, res)
+	}
+	var mo ModeOut
+	if msg := c.call("mode", nil, &mo); msg != "" || strings.Join(mo.Types, ",") != "source,entity,concept" {
+		t.Fatalf("mode: %s %+v", msg, mo)
 	}
 }

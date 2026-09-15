@@ -97,6 +97,14 @@ func (s *Server) pluginVersion() string {
 	return m.Version
 }
 
+// requireProject refuses what only a project has.
+func requireProject(v *vault.Vault, what string) error {
+	if v.Config.Kind == vault.Project {
+		return nil
+	}
+	return fmt.Errorf("%s is a knowledge base and has no %s; sources, tasks, and repositories belong to a project that mounts it", v.Name(), what)
+}
+
 // VaultArg is the argument every tool shares.
 type VaultArg struct {
 	Vault string `json:"vault,omitempty" jsonschema:"absolute path of the vault; omit to use the session's vault"`
@@ -106,6 +114,8 @@ type VaultArg struct {
 type Status struct {
 	Vault         string         `json:"vault"`
 	Name          string         `json:"name"`
+	Kind          string         `json:"kind"`
+	ID            string         `json:"id"`
 	Mode          string         `json:"mode"`
 	Pages         int            `json:"pages"`
 	InboxWaiting  int            `json:"inbox_waiting"`
@@ -151,7 +161,7 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 	if err != nil {
 		return nil, Status{}, err
 	}
-	out := Status{Vault: v.Root, Name: v.Name(), Mode: string(v.Config.Mode), Warnings: []string{}, Versions: Versions{Binary: s.opts.Version, Plugin: s.pluginVersion()}}
+	out := Status{Vault: v.Root, Name: v.Name(), Kind: string(v.Config.Kind), ID: v.Config.ID, Mode: string(v.Config.Mode), Warnings: []string{}, Versions: Versions{Binary: s.opts.Version, Plugin: s.pluginVersion()}}
 	st, err := txn.Inspect(v)
 	if err != nil {
 		return nil, Status{}, err
@@ -166,33 +176,37 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 	if report, err := lint.Run(v.Root, lint.Options{AsOf: s.opts.Now()}); err == nil {
 		out.Pages = report.Summary.PagesScanned
 	}
-	if files, err := capture.ListInbox(v, s.opts.Now()); err == nil {
-		for _, f := range files {
-			if !f.Captured {
-				out.InboxWaiting++
+	if v.Config.Kind == vault.Project {
+		if files, err := capture.ListInbox(v, s.opts.Now()); err == nil {
+			for _, f := range files {
+				if !f.Captured {
+					out.InboxWaiting++
+				}
 			}
 		}
 	}
 	if ops, err := txn.History(v, 1, false); err == nil && len(ops) > 0 {
 		out.LastOperation = &ops[0]
 	}
-	if led, err := tasks.Current(v, s.opts.Now()); err == nil {
-		out.Tasks = led.Counts(s.opts.Now())
-		out.Tasks.Notes = len(tasks.Notes(v))
-		var stale []string
-		for _, r := range led.Open() {
-			if tasks.Stale(r, s.opts.Now()) {
-				stale = append(stale, r.Title)
+	if v.Config.Kind == vault.Project {
+		if led, err := tasks.Current(v, s.opts.Now()); err == nil {
+			out.Tasks = led.Counts(s.opts.Now())
+			out.Tasks.Notes = len(tasks.Notes(v))
+			var stale []string
+			for _, r := range led.Open() {
+				if tasks.Stale(r, s.opts.Now()) {
+					stale = append(stale, r.Title)
+				}
 			}
-		}
-		if len(stale) > 0 {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("%d active task%s untouched for %d days: %s", len(stale), plural(len(stale)), tasks.StaleDays, strings.Join(stale, "; ")))
-		}
-		for _, p := range led.Problems {
-			out.Warnings = append(out.Warnings, "task page "+p.Path+": "+p.Reason)
-		}
-		if out.Tasks.Notes > 0 {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("%d task note%s wait in %s/; the task-plant skill turns them into tasks", out.Tasks.Notes, plural(out.Tasks.Notes), vault.InboxTasksDir))
+			if len(stale) > 0 {
+				out.Warnings = append(out.Warnings, fmt.Sprintf("%d active task%s untouched for %d days: %s", len(stale), plural(len(stale)), tasks.StaleDays, strings.Join(stale, "; ")))
+			}
+			for _, p := range led.Problems {
+				out.Warnings = append(out.Warnings, "task page "+p.Path+": "+p.Reason)
+			}
+			if out.Tasks.Notes > 0 {
+				out.Warnings = append(out.Warnings, fmt.Sprintf("%d task note%s wait in %s/; the task-plant skill turns them into tasks", out.Tasks.Notes, plural(out.Tasks.Notes), vault.InboxTasksDir))
+			}
 		}
 	}
 	if match, _, err := discover.Vault(home.Resolve(s.opts.Env(home.EnvHome)), s.opts.ProjectDir); err == nil && match != nil && match.Page != nil && match.Vault == v.Root {
@@ -214,6 +228,9 @@ func (s *Server) inbox(ctx context.Context, req *mcp.CallToolRequest, a VaultArg
 	if err != nil {
 		return nil, InboxOut{}, err
 	}
+	if err := requireProject(v, "inbox"); err != nil {
+		return nil, InboxOut{}, err
+	}
 	files, err := capture.ListInbox(v, s.opts.Now())
 	if err != nil {
 		return nil, InboxOut{}, err
@@ -229,6 +246,9 @@ type CaptureArgs struct {
 func (s *Server) capture(ctx context.Context, req *mcp.CallToolRequest, a CaptureArgs) (*mcp.CallToolResult, capture.Result, error) {
 	v, err := s.resolve(a.Vault)
 	if err != nil {
+		return nil, capture.Result{}, err
+	}
+	if err := requireProject(v, "inbox"); err != nil {
 		return nil, capture.Result{}, err
 	}
 	res, err := capture.Capture(v, a.Paths, s.opts.Now())
@@ -250,6 +270,9 @@ func (s *Server) route(ctx context.Context, req *mcp.CallToolRequest, a RouteArg
 		return nil, vault.Route{}, err
 	}
 	if a.Type == "task" {
+		if err := requireProject(v, "tasks"); err != nil {
+			return nil, vault.Route{}, err
+		}
 		now := s.opts.Now()
 		plain := vault.TasksDir + "/" + vault.SanitizeTitle(a.Title) + ".md"
 		r := vault.Route{Path: plain, Type: "task", Mode: v.Config.Mode, Skeleton: tasks.Skeleton(tasks.Plant{Title: a.Title}, tasks.NewID(now), now)}
@@ -284,6 +307,9 @@ type PlantOut struct {
 func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArgs) (*mcp.CallToolResult, PlantOut, error) {
 	v, err := s.resolve(a.Vault)
 	if err != nil {
+		return nil, PlantOut{}, err
+	}
+	if err := requireProject(v, "tasks"); err != nil {
 		return nil, PlantOut{}, err
 	}
 	now := s.opts.Now()
@@ -338,6 +364,9 @@ func (s *Server) tasks(ctx context.Context, req *mcp.CallToolRequest, a TasksArg
 	if err != nil {
 		return nil, TasksOut{}, err
 	}
+	if err := requireProject(v, "tasks"); err != nil {
+		return nil, TasksOut{}, err
+	}
 	now := s.opts.Now()
 	led, err := tasks.Current(v, now)
 	if err != nil {
@@ -367,6 +396,9 @@ type ReposOut struct {
 func (s *Server) repos(ctx context.Context, req *mcp.CallToolRequest, a VaultArg) (*mcp.CallToolResult, ReposOut, error) {
 	v, err := s.resolve(a.Vault)
 	if err != nil {
+		return nil, ReposOut{}, err
+	}
+	if err := requireProject(v, "repositories"); err != nil {
 		return nil, ReposOut{}, err
 	}
 	pages, err := discover.Repos(home.Resolve(s.opts.Env(home.EnvHome)), v.Root)
@@ -436,6 +468,9 @@ func (s *Server) plan(ctx context.Context, req *mcp.CallToolRequest, a PlanArgs)
 	}
 	if !allowedKind {
 		return nil, PlanOut{}, fmt.Errorf("kind must be one of ingest, save, markdown, repair, fold, canvas, base, config")
+	}
+	if v.Config.Kind == vault.Knowledge && (kind == txn.Ingest || kind == txn.Save) {
+		return nil, PlanOut{}, fmt.Errorf("knowledge enters through a project: %s is a knowledge base, so ingest and save run in a project session that mounts it", v.Name())
 	}
 	r := txn.Request{Kind: kind, Summary: a.Summary}
 	for _, w := range a.Writes {
@@ -610,7 +645,7 @@ func ro() *mcp.ToolAnnotations {
 func (s *Server) MCP() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: Name, Title: "claude-atlas", Version: s.opts.Version}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "status", Annotations: ro(),
-		Description: "Describe the current vault: path, mode, page count, files waiting in the inbox, git state, last operation, and warnings. Call this first."}, s.status)
+		Description: "Describe the current vault: kind (knowledge base or project), path, mode, page count, files waiting in the inbox, git state, last operation, and warnings. Call this first."}, s.status)
 	mcp.AddTool(server, &mcp.Tool{Name: "inbox", Annotations: ro(),
 		Description: "List files waiting in inbox/ with size, kind, hash, and whether each already has a captured copy and source id."}, s.inbox)
 	mcp.AddTool(server, &mcp.Tool{Name: "capture",
