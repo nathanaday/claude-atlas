@@ -189,9 +189,8 @@ func resolveInbox(v *vault.Vault, arg string) (string, error) {
 // Capture copies the named inbox files into .raw/captured/ and records them in the ledger,
 // as one commit. A file already captured is reported, not copied again.
 func Capture(v *vault.Vault, paths []string, now time.Time) (*Result, error) {
-	read := func(rel string) ([]byte, error) { return os.ReadFile(v.Path(rel)) }
 	resolve := func(arg string) (string, error) { return resolveInbox(v, arg) }
-	return captureInto(v, read, resolve, nil, paths, now)
+	return captureInto(v, v.Path, resolve, nil, paths, now)
 }
 
 // CaptureFrom copies files from source's inbox into target's raw store and records them
@@ -203,15 +202,15 @@ func CaptureFrom(target, source *vault.Vault, paths []string, via ledger.Via, no
 	if source.Config.Kind != vault.Project {
 		return nil, errors.New("sources enter through a project's inbox")
 	}
-	read := func(rel string) ([]byte, error) { return os.ReadFile(source.Path(rel)) }
 	resolve := func(arg string) (string, error) { return resolveInbox(source, arg) }
-	return captureInto(target, read, resolve, &via, paths, now)
+	return captureInto(target, source.Path, resolve, &via, paths, now)
 }
 
-// captureInto resolves paths through resolve, reads their bytes through read, and copies
+// captureInto resolves paths through resolve, reads their bytes from srcPath, and copies
 // them into target's .raw/captured/, recording each in target's ledger as one commit. A
-// file already captured is reported, not copied again.
-func captureInto(target *vault.Vault, read func(rel string) ([]byte, error), resolve func(arg string) (string, error), via *ledger.Via, paths []string, now time.Time) (*Result, error) {
+// file already captured is reported, not copied again. A file's size is checked, from a
+// stat, before any of its bytes are read.
+func captureInto(target *vault.Vault, srcPath func(rel string) string, resolve func(arg string) (string, error), via *ledger.Via, paths []string, now time.Time) (*Result, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("name at least one file in %s/", vault.InboxDir)
 	}
@@ -228,33 +227,35 @@ func captureInto(target *vault.Vault, read func(rel string) ([]byte, error), res
 		if err != nil {
 			return nil, err
 		}
-		data, err := read(rel)
+		abs := srcPath(rel)
+		sum, size, err := hashFile(abs)
 		if err != nil {
 			return nil, err
 		}
-		sum := sha256.Sum256(data)
-		hexSum := hex.EncodeToString(sum[:])
-		size := int64(len(data))
 		if size > MaxFileBytes {
 			return nil, fmt.Errorf("%s is %d bytes; capture accepts up to %d", rel, size, MaxFileBytes)
 		}
-		c := Captured{Path: rel, SHA256: hexSum, Kind: KindOf(rel), Size: size}
-		if id, rec := led.FindBySHA(hexSum); id != "" {
+		c := Captured{Path: rel, SHA256: sum, Kind: KindOf(rel), Size: size}
+		if id, rec := led.FindBySHA(sum); id != "" {
 			c.AlreadyCaptured, c.SourceID, c.StoredPath = true, id, rec.Origin.Locator
 			res.Sources = append(res.Sources, c)
 			continue
 		}
-		c.StoredPath = storedPath(hexSum, rel)
-		c.SourceID = ledger.ID("file", c.StoredPath, hexSum)
+		c.StoredPath = storedPath(sum, rel)
+		c.SourceID = ledger.ID("file", c.StoredPath, sum)
 		if size > WarnFileBytes {
 			c.Warning = fmt.Sprintf("%s is large; the vault's git history grows by its size", rel)
 		}
-		if !seen[hexSum] {
-			seen[hexSum] = true
+		if !seen[sum] {
+			seen[sum] = true
+			data, err := os.ReadFile(abs)
+			if err != nil {
+				return nil, err
+			}
 			req.Writes = append(req.Writes, txn.Write{Path: c.StoredPath, Mode: txn.Create, Content: data})
 			update := ledger.Update{
 				ID: c.SourceID, Title: vault.PageTitle(rel), Origin: &ledger.Origin{Kind: "file", Locator: c.StoredPath},
-				ContentSHA256: hexSum, ContentKind: c.Kind,
+				ContentSHA256: sum, ContentKind: c.Kind,
 			}
 			if via != nil {
 				update.Via = via

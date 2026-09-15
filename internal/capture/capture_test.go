@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,6 +93,46 @@ func TestListAndCapture(t *testing.T) {
 	}
 	if _, err := Capture(v, []string{t.TempDir()}, now); err == nil {
 		t.Fatal("absolute paths outside the vault must fail")
+	}
+}
+
+func TestCaptureRefusesAFileOverTheSizeCapWithoutReadingIt(t *testing.T) {
+	v := newVault(t)
+	f, err := os.Create(v.Path("inbox/huge.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(MaxFileBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := v.Repo().Log(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Capture(v, []string{"huge.bin"}, now)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", MaxFileBytes)) {
+		t.Fatalf("a file over the cap must be refused and name it: %v", err)
+	}
+
+	l, err := ledger.Load(v.Path(vault.LedgerPath), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Sources) != 0 {
+		t.Fatalf("a refused capture must not record a source, got %+v", l.Sources)
+	}
+
+	after, err := v.Repo().Log(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) || before[0].SHA != after[0].SHA {
+		t.Fatal("a refused capture must not commit")
 	}
 }
 
