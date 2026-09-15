@@ -12,6 +12,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/discover"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -61,6 +62,7 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	in := readInput(r)
 	v, err := findVault(in, env)
 	via := ""
+	policy := ""
 	if err != nil {
 		match, candidates, _ := discover.Vault(home.Resolve(env(home.EnvHome)), in.Cwd)
 		switch {
@@ -69,6 +71,9 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 				return nil
 			}
 			via = match.Project.Name
+			if match.Page != nil {
+				policy = fmt.Sprintf("In %s, %s. The repos tool says the same.", match.Page.Name, links.PolicyText(match.Page.Policy()))
+			}
 		case len(candidates) > 1:
 			_, err := fmt.Fprintf(w, "claude-atlas: this folder is linked by several atlas projects: %s. Pass vault to the atlas tools, or set %s.\n", discover.Describe(candidates), vault.EnvVault)
 			return err
@@ -87,6 +92,9 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 		fmt.Fprintf(&b, "claude-atlas: this folder is linked to the project %s, whose vault is %s (%s mode) at %s. The atlas tools use that vault. Search the wiki (the wiki-query skill, or Grep under its wiki/) before answering from the code alone; keep a decision with the save skill.\n", via, v.Name(), v.Config.Mode, v.Root)
 	} else {
 		fmt.Fprintf(&b, "claude-atlas vault: %s (%s mode) at %s\n", v.Name(), v.Config.Mode, v.Root)
+	}
+	if policy != "" {
+		b.WriteString(policy + "\n")
 	}
 	b.WriteString("Change wiki pages only through the atlas MCP tools (plan, then apply). Skills: " + Skills + "\n")
 	if pending, _ := txn.Pending(v); pending != nil {

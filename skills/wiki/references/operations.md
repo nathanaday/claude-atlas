@@ -24,6 +24,7 @@ The tools are on the atlas MCP server, named `mcp__plugin_claude-atlas_atlas__<t
 | `mode` | read or prepare a change of filing mode |
 | `plant` | create a task page with status planted, as one commit |
 | `tasks` | the task ledger: open tasks in board order, counts, notes waiting |
+| `repos` | the repositories mounted on the project, and how changes land in each |
 
 ## Workflow
 

@@ -12,7 +12,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
+	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 var now = time.Date(2026, 9, 12, 15, 0, 0, 0, time.UTC)
@@ -89,7 +91,7 @@ func TestToolsListAndStatus(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, ",") != "apply,capture,history,inbox,lint,mode,plan,plant,route,status,tasks,undo" {
+	if strings.Join(names, ",") != "apply,capture,history,inbox,lint,mode,plan,plant,repos,route,status,tasks,undo" {
 		t.Fatalf("tools %v", names)
 	}
 	var st Status
@@ -299,5 +301,53 @@ func TestTaskTools(t *testing.T) {
 	c.call("tasks", nil, &list)
 	if list.Counts.Active != 1 || !list.Tasks[0].HasPlan || len(list.Tasks[0].History) != 2 {
 		t.Fatalf("after apply %+v", list)
+	}
+}
+
+func TestReposToolAndStatusInARepository(t *testing.T) {
+	v := newVault(t)
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := h.Default(filepath.Join(root, "Vaults"), filepath.Join(root, "Atlas"))
+	os.MkdirAll(h.Root, 0o755)
+	h.Save(cfg)
+	os.MkdirAll(cfg.TreeRoot(), 0o755)
+	p, err := vaults.Register(cfg, v.Root, vaults.RegisterOptions{Name: "V"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(root, "code")
+	os.MkdirAll(filepath.Join(repo, "src"), 0o755)
+	if _, err := vaults.AddLink(cfg, p, repo, true); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Options{Version: "test", ProjectDir: filepath.Join(repo, "src"), Env: func(k string) string {
+		if k == home.EnvHome {
+			return h.Root
+		}
+		return ""
+	}, Now: func() time.Time { return now }})
+	st, ct := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+	if _, err := s.MCP().Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	c := &client{t: t, sess: sess}
+	var status Status
+	if msg := c.call("status", nil, &status); msg != "" {
+		t.Fatal(msg)
+	}
+	if status.Vault != v.Root || status.Repository == nil || status.Repository.Name != "code" || status.Repository.Changes != "commit" || status.Repository.Branch != "main" {
+		t.Fatalf("status in a repo: %+v %+v", status, status.Repository)
+	}
+	var repos ReposOut
+	c.call("repos", nil, &repos)
+	if len(repos.Repos) != 1 || repos.Repos[0].Path != repo || !strings.Contains(repos.Repos[0].Policy, "current branch") {
+		t.Fatalf("repos %+v", repos)
 	}
 }

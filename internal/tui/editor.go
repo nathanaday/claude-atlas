@@ -46,6 +46,8 @@ type Hooks struct {
 	Links      func() []links.Page
 	AddLink    func(*tree.Project, string, bool) (links.Page, error)
 	NewRepo    func(*tree.Project, string, string) (links.Page, error)
+	CloneRepo  func(*tree.Project, string, string) (links.Page, error)
+	SetChanges func(links.Page, string) (links.Page, error)
 	RemoveLink func(*tree.Project, string) error
 	EditLink   func(links.Page, vaults.LinkEdit) (links.Page, error)
 	Sources    func(*tree.Project) []string

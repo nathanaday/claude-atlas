@@ -51,7 +51,10 @@ safety net, and adds the cross-vault view.
    into a link to its page, and moves a git-backed page from the retired
    `materials/` under `repos/`.
 4. A link is a mounted repository, always a git repository: deliverables live
-   there, memory lives in the vault. Ingest sources are not links.
+   there, memory lives in the vault. Ingest sources are not links. A
+   repository's page carries its remote and its change policy (`changes: pr`
+   or `commit`); the vault records nothing about mounts, and sessions learn
+   the policy from the hook and the `repos` tool.
 
 ## Two layers, one backend
 

@@ -67,6 +67,19 @@ blocked, planned, planted; then priority; then age), each with its page,
 workdir, last touch, and history. `tasks` with `all` includes the archive.
 `status` reports counts, stale tasks, and notes waiting in `inbox/tasks/`.
 
+## Working in a repository
+
+A task's `workdir` is usually a repository the project mounts. Before changing
+files there, call `repos` (or read `status`, which names the repository when
+the session runs inside one). Each repository says how changes land:
+
+- `pr`: work on a branch, commit there, and open a pull request; never push
+  to the default branch.
+- `commit`: commit on the current branch.
+
+The policy is the user's choice, kept on the repository's page in the atlas.
+Do not change it from a session; say when it gets in the way.
+
 ## Freshness
 
 A task lives across sessions. The page is the only memory: write progress

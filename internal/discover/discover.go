@@ -11,14 +11,17 @@ import (
 	"strings"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 )
 
-// Match is a project whose linked folder holds the directory.
+// Match is a project whose mounted repository holds the directory. Page is the
+// repository's page when it has one.
 type Match struct {
 	Project *tree.Project
 	Vault   string
 	Folder  string
+	Page    *links.Page
 }
 
 // Vault looks a directory up in the atlas. One project linking a folder above dir gives
@@ -40,6 +43,7 @@ func Vault(h home.Home, dir string) (*Match, []Match, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	pages, _, _ := links.Walk(cfg.AtlasVault)
 	var matches []Match
 	for _, p := range projects {
 		var best string
@@ -49,7 +53,7 @@ func Vault(h home.Home, dir string) (*Match, []Match, error) {
 			}
 		}
 		if best != "" {
-			matches = append(matches, Match{Project: p, Vault: p.VaultPath(), Folder: best})
+			matches = append(matches, Match{Project: p, Vault: p.VaultPath(), Folder: best, Page: links.FindByPath(pages, best)})
 		}
 	}
 	sort.Slice(matches, func(i, j int) bool { return matches[i].Project.Rel < matches[j].Project.Rel })
@@ -62,6 +66,36 @@ func Vault(h home.Home, dir string) (*Match, []Match, error) {
 func inside(root, p string) bool {
 	rel, err := filepath.Rel(filepath.Clean(root), p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+}
+
+// Repos lists the repositories mounted on the project whose vault is root.
+func Repos(h home.Home, root string) ([]links.Page, error) {
+	cfg, err := h.Load()
+	if errors.Is(err, home.ErrNoAtlas) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	projects, _, err := tree.Walk(cfg.TreeRoot())
+	if err != nil {
+		return nil, err
+	}
+	p := tree.FindByVault(projects, root)
+	if p == nil {
+		return nil, nil
+	}
+	pages, _, _ := links.Walk(cfg.AtlasVault)
+	var out []links.Page
+	for _, l := range p.Linked {
+		if l.Path == "" {
+			continue
+		}
+		if page := links.FindByPath(pages, l.Path); page != nil {
+			out = append(out, *page)
+		}
+	}
+	return out, nil
 }
 
 // Describe names candidates for an error or a hint.

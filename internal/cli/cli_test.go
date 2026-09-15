@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/nathanaday/claude-atlas/internal/console"
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 )
 
@@ -489,5 +491,45 @@ func TestConfigNewDays(t *testing.T) {
 	}
 	if code := h.run("list"); code != 0 || strings.Contains(h.out.String(), "new  ") {
 		t.Fatalf("with 0, a fresh vault is not new:\n%s", h.out.String())
+	}
+}
+
+func TestLinkFromAURLAndChanges(t *testing.T) {
+	h, vaults := setup(t)
+	upstream := filepath.Join(filepath.Dir(vaults), "upstream")
+	os.MkdirAll(upstream, 0o755)
+	os.WriteFile(filepath.Join(upstream, "hello.txt"), []byte("hi"), 0o644)
+	if err := links.InitRepo(upstream, "upstream"); err != nil {
+		t.Fatal(err)
+	}
+	url := "file://" + upstream
+	policy := regexp.MustCompile(`changes\s+(pr|commit)\s`)
+	if code := h.run("link", "welcome", url); code != 0 || !strings.Contains(h.out.String(), "cloning") || !strings.Contains(h.out.String(), "remote") || policy.FindStringSubmatch(h.out.String())[1] != "pr" {
+		t.Fatalf("clone exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(vaults, "welcome", "upstream", "hello.txt")); err != nil {
+		t.Fatal("the clone lands beside the wiki under the repository's name")
+	}
+	elsewhere := filepath.Join(filepath.Dir(vaults), "elsewhere")
+	if code := h.run("link", "welcome", url, "--at", elsewhere, "--changes", "commit"); code != 0 || policy.FindStringSubmatch(h.out.String())[1] != "commit" {
+		t.Fatalf("clone --at exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("link", "welcome", url, "--changes", "sometimes"); code != 2 {
+		t.Fatalf("bad policy exit %d", code)
+	}
+	if code := h.run("links", "welcome"); code != 0 || !strings.Contains(h.out.String(), "changes: pr · remote "+url) || !strings.Contains(h.out.String(), "changes: commit · remote "+url) {
+		t.Fatalf("links:\n%s", h.out.String())
+	}
+	if code := h.run("edit-link", "upstream", "--changes", "commit"); code != 0 || policy.FindStringSubmatch(h.out.String())[1] != "commit" {
+		t.Fatalf("edit-link --changes exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("edit-link", "upstream", "--remote", "", "--changes", ""); code != 0 {
+		t.Fatalf("clear exit %d %s", code, h.err.String())
+	}
+	if code := h.run("links", "welcome"); code != 0 || strings.Count(h.out.String(), "remote "+url) != 1 || !strings.Contains(h.out.String(), "changes: commit\n") {
+		t.Fatalf("after clearing, upstream has no remote and lands commits:\n%s", h.out.String())
+	}
+	if code := h.run("edit-link", "upstream", "--changes", "later"); code != 2 {
+		t.Fatalf("bad policy on edit exit %d", code)
 	}
 }

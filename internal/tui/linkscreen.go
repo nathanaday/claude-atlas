@@ -27,6 +27,8 @@ const (
 	linksList linksMode = iota
 	linksAdd
 	linksConfirmInit
+	linksClonePath
+	linksChanges
 	linksNewName
 	linksNewPath
 	linksEdit
@@ -49,7 +51,8 @@ type linksScreen struct {
 	cursor  int
 	mode    linksMode
 	source  pathField
-	pending string // the folder awaiting a yes to git init
+	pending string     // the folder awaiting a yes to git init, or the URL awaiting a location
+	asked   links.Page // the page awaiting a change policy
 	name    textinput.Model
 	where   pathField
 	edit    linkEditor
@@ -62,7 +65,7 @@ type linksScreen struct {
 
 func newLinks(hooks Hooks, item *Item, items []Item, width int) linksScreen {
 	s := linksScreen{hooks: hooks, item: item, width: width}
-	s.source = newPathField("~/code/project, or the name of a repository another project links", 60)
+	s.source = newPathField("~/code/project, https://github.com/you/repo, or the name of a repository another project links", 60)
 	s.name = textinput.New()
 	s.name.Prompt = ""
 	s.name.Placeholder = "paper, slides, app"
@@ -121,6 +124,14 @@ func (s linksScreen) current() *linkRow {
 }
 
 // pageNames lists the pages the project does not link yet, for the add field.
+// page finds the repository page for a folder among the atlas's pages.
+func (s linksScreen) page(path string) *links.Page {
+	if s.hooks.Links == nil || path == "" {
+		return nil
+	}
+	return links.FindByPath(s.hooks.Links(), path)
+}
+
 func (s linksScreen) pageNames() []string {
 	if s.hooks.Links == nil {
 		return nil
@@ -206,6 +217,32 @@ func (s linksScreen) update(msg tea.Msg) (linksScreen, tea.Cmd) {
 			}
 		}
 		return s, nil
+	case linksClonePath:
+		if isKey {
+			switch key.Type {
+			case tea.KeyEnter:
+				return s.clone(), nil
+			case tea.KeyEsc:
+				s.err = ""
+				s.mode = linksList
+				return s, nil
+			}
+		}
+		var cmd tea.Cmd
+		s.where, cmd = s.where.update(msg)
+		return s, cmd
+	case linksChanges:
+		if isKey {
+			switch strings.ToLower(key.String()) {
+			case "p":
+				return s.setChanges(links.ChangesPR), nil
+			case "c":
+				return s.setChanges(links.ChangesCommit), nil
+			case "esc":
+				s.mode = linksList
+			}
+		}
+		return s, nil
 	case linksNewName:
 		if isKey {
 			switch key.Type {
@@ -267,14 +304,66 @@ func (s linksScreen) update(msg tea.Msg) (linksScreen, tea.Cmd) {
 	return s, nil
 }
 
-// add links what the field names: a page, or a folder that gets one.
+// add links what the field names: a page, a folder that gets one, or a URL to clone.
 func (s linksScreen) add() linksScreen {
 	target := s.source.value()
 	if target == "" {
 		s.mode = linksList
 		return s
 	}
+	if links.IsRemoteURL(target) {
+		if s.hooks.CloneRepo == nil {
+			s.err = "cloning is not available here"
+			return s
+		}
+		s.pending = target
+		s.err = ""
+		s.where.setValue(home.Display(s.item.Project.VaultPath() + "/" + links.NameFromURL(target)))
+		s.mode = linksClonePath
+		return s
+	}
 	return s.link(target, false)
+}
+
+// clone clones the pending URL where the field says and mounts it, then asks how
+// changes should land there.
+func (s linksScreen) clone() linksScreen {
+	at := s.where.value()
+	if at == home.Display(s.item.Project.VaultPath()+"/"+links.NameFromURL(s.pending)) {
+		at = ""
+	}
+	page, err := s.hooks.CloneRepo(s.item.Project, s.pending, at)
+	if err != nil {
+		s.err = err.Error()
+		return s
+	}
+	s.err = ""
+	s.status = "cloned " + page.Name + " into " + home.Display(page.Path) + ", and linked it"
+	s.changed = true
+	return s.askChanges(page)
+}
+
+// askChanges asks how changes land in a repository with a remote that has no policy yet.
+func (s linksScreen) askChanges(page links.Page) linksScreen {
+	if page.Remote == "" || page.Changes != "" || s.hooks.SetChanges == nil {
+		s.mode = linksList
+		return s
+	}
+	s.asked = page
+	s.mode = linksChanges
+	return s
+}
+
+func (s linksScreen) setChanges(policy string) linksScreen {
+	page, err := s.hooks.SetChanges(s.asked, policy)
+	if err != nil {
+		s.err = err.Error()
+		return s
+	}
+	s.status = page.Name + ": " + links.PolicyText(policy)
+	s.changed = true
+	s.mode = linksList
+	return s
 }
 
 // link mounts a repository; a plain folder is offered a git init first.
@@ -301,8 +390,7 @@ func (s linksScreen) link(target string, initGit bool) linksScreen {
 		s.status += "; it is a git repository now"
 	}
 	s.changed = true
-	s.mode = linksList
-	return s
+	return s.askChanges(page)
 }
 
 // create makes a new repository where the fields say and mounts it.
@@ -360,7 +448,11 @@ func (s linksScreen) startEdit() (linksScreen, tea.Cmd) {
 		s.err = "editing links is not available here"
 		return s, nil
 	}
-	s.edit = newLinkEditor(s.hooks, links.Page{Kind: row.link.Kind, Name: row.link.Name, Path: row.link.Path})
+	page := links.Page{Kind: row.link.Kind, Name: row.link.Name, Path: row.link.Path}
+	if known := s.page(row.link.Path); known != nil {
+		page = *known
+	}
+	s.edit = newLinkEditor(s.hooks, page)
 	s.mode = linksEdit
 	return s, nil
 }
@@ -405,6 +497,13 @@ func (s linksScreen) view() string {
 		if row.link.Path != "" && row.link.Name != "" {
 			lines = append(lines, home.Display(row.link.Path))
 		}
+		if page := s.page(row.link.Path); page != nil && page.Kind == links.Repo {
+			line := "changes: " + page.Policy()
+			if page.Remote != "" {
+				line += " · " + page.Remote
+			}
+			lines = append(lines, dim.Render(line))
+		}
 		facts := row.facts
 		if row.broken {
 			facts = errSt.Render(facts)
@@ -421,7 +520,16 @@ func (s linksScreen) view() string {
 	switch s.mode {
 	case linksAdd:
 		b.WriteString("  " + activeL.Width(9).Render("Link") + s.source.view("           ") + "\n")
-		b.WriteString("  " + dim.Render("a repository's folder, or the name of one another project links · "+pathHint()+" · Enter link · Esc cancel") + "\n")
+		b.WriteString("  " + dim.Render("a repository's folder, a URL to clone, or the name of one another project links · "+pathHint()+" · Enter link · Esc cancel") + "\n")
+	case linksClonePath:
+		b.WriteString("  " + label.Width(9).Render("Clone") + s.pending + "\n")
+		b.WriteString("  " + activeL.Width(9).Render("Into") + s.where.view("           ") + "\n")
+		b.WriteString("  " + dim.Render("the default sits beside the wiki in the vault, ignored by the vault's git · "+pathHint()+" · Enter clone · Esc cancel") + "\n")
+	case linksChanges:
+		fmt.Fprintf(&b, "  %s %s has a remote, %s. How should claude-atlas land its changes there?\n", title.Render("?"), s.asked.Name, s.asked.Remote)
+		b.WriteString("  " + title.Render("p") + " pull requests: work on a branch and open a PR; never push to the default branch\n")
+		b.WriteString("  " + title.Render("c") + " commits on the current branch\n")
+		b.WriteString("  " + dim.Render("Esc decide later (pull requests until then)") + "\n")
 	case linksConfirmInit:
 		fmt.Fprintf(&b, "  %s %s is not a git repository. Initialize one there, with one commit of what it holds?  %s\n",
 			errSt.Render("▲"), home.Display(s.pending), title.Render("y")+" / "+title.Render("n"))
@@ -455,12 +563,15 @@ func indent(block, pad string) string {
 	return pad + strings.ReplaceAll(block, "\n", "\n"+pad)
 }
 
-// linkEditor edits one link page: its name and its folder.
+// linkEditor edits one repository page: its name, its folder, its remote, and how
+// changes land there.
 type linkEditor struct {
 	hooks     Hooks
 	page      links.Page
 	name      string
 	path      string
+	remote    string
+	changes   string
 	field     int
 	text      textinput.Model
 	folder    pathField
@@ -474,6 +585,8 @@ type linkEditor struct {
 const (
 	linkFieldName = iota
 	linkFieldPath
+	linkFieldRemote
+	linkFieldChanges
 	linkFieldCount
 )
 
@@ -482,11 +595,23 @@ func newLinkEditor(hooks Hooks, page links.Page) linkEditor {
 	text.Prompt = ""
 	text.CharLimit = 120
 	text.Width = 40
-	return linkEditor{hooks: hooks, page: page, name: page.Name, path: page.Path, text: text, folder: newPathField("", 60)}
+	return linkEditor{hooks: hooks, page: page, name: page.Name, path: page.Path, remote: page.Remote, changes: page.Changes, text: text, folder: newPathField("", 60)}
 }
 
 func (e linkEditor) dirty() bool {
-	return e.name != e.page.Name || e.path != e.page.Path
+	return e.name != e.page.Name || e.path != e.page.Path || e.remote != e.page.Remote || e.changes != e.page.Changes
+}
+
+// cycleChanges moves through default, pr, commit.
+func (e *linkEditor) cycleChanges() {
+	switch e.changes {
+	case "":
+		e.changes = links.ChangesPR
+	case links.ChangesPR:
+		e.changes = links.ChangesCommit
+	default:
+		e.changes = ""
+	}
 }
 
 func (e linkEditor) update(msg tea.Msg) (linkEditor, tea.Cmd) {
@@ -495,10 +620,15 @@ func (e linkEditor) update(msg tea.Msg) (linkEditor, tea.Cmd) {
 		if isKey {
 			switch key.Type {
 			case tea.KeyEnter:
-				if e.field == linkFieldName {
+				switch e.field {
+				case linkFieldName:
 					e.name = strings.TrimSpace(e.text.Value())
-				} else if v := e.folder.value(); v != "" {
-					e.path = home.Expand(v)
+				case linkFieldRemote:
+					e.remote = strings.TrimSpace(e.text.Value())
+				default:
+					if v := e.folder.value(); v != "" {
+						e.path = home.Expand(v)
+					}
 				}
 				e.typing = false
 				return e, nil
@@ -508,10 +638,10 @@ func (e linkEditor) update(msg tea.Msg) (linkEditor, tea.Cmd) {
 			}
 		}
 		var cmd tea.Cmd
-		if e.field == linkFieldName {
-			e.text, cmd = e.text.Update(msg)
-		} else {
+		if e.field == linkFieldPath {
 			e.folder, cmd = e.folder.update(msg)
+		} else {
+			e.text, cmd = e.text.Update(msg)
 		}
 		return e, cmd
 	}
@@ -524,13 +654,23 @@ func (e linkEditor) update(msg tea.Msg) (linkEditor, tea.Cmd) {
 		e.field = (e.field + linkFieldCount - 1) % linkFieldCount
 	case tea.KeyDown:
 		e.field = (e.field + 1) % linkFieldCount
+	case tea.KeyLeft, tea.KeyRight:
+		if e.field == linkFieldChanges {
+			e.cycleChanges()
+		}
 	case tea.KeyEnter:
 		switch e.field {
-		case linkFieldName:
-			e.text.SetValue(e.name)
+		case linkFieldName, linkFieldRemote:
+			value := e.name
+			if e.field == linkFieldRemote {
+				value = e.remote
+			}
+			e.text.SetValue(value)
 			e.text.CursorEnd()
 			e.typing = true
 			return e, e.text.Focus()
+		case linkFieldChanges:
+			e.cycleChanges()
 		case linkFieldPath:
 			e.folder.names = nil
 			e.folder.setValue(home.Display(e.path))
@@ -564,6 +704,14 @@ func (e linkEditor) save() linkEditor {
 	if e.path != e.page.Path {
 		edit.Path = e.path
 	}
+	if e.remote != e.page.Remote {
+		remote := e.remote
+		edit.Remote = &remote
+	}
+	if e.changes != e.page.Changes {
+		changes := e.changes
+		edit.Changes = &changes
+	}
 	updated, err := e.hooks.EditLink(e.page, edit)
 	if err != nil {
 		e.err = err.Error()
@@ -577,8 +725,16 @@ func (e linkEditor) save() linkEditor {
 func (e linkEditor) view() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "  %s   %s\n\n", title.Render("Edit "+e.page.Name), dim.Render(e.page.Rel()+".md"))
+	changesShown := "◂ default: " + (links.Page{Remote: e.remote}).Policy() + " ▸"
+	if e.changes != "" {
+		changesShown = "◂ " + e.changes + " ▸"
+	}
+	remoteShown := e.remote
+	if remoteShown == "" {
+		remoteShown = dim.Render("none")
+	}
 	rows := [linkFieldCount]struct{ name, content string }{
-		{"Name", e.name}, {"Path", home.Display(e.path)},
+		{"Name", e.name}, {"Path", home.Display(e.path)}, {"Remote", remoteShown}, {"Changes", changesShown},
 	}
 	for f, r := range rows {
 		marker, name := "  ", label.Width(8).Render(r.name)
@@ -587,13 +743,14 @@ func (e linkEditor) view() string {
 		}
 		content := r.content
 		if e.typing && f == e.field {
-			if f == linkFieldName {
-				content = e.text.View()
-			} else {
+			if f == linkFieldPath {
 				content = e.folder.view("            ")
+			} else {
+				content = e.text.View()
 			}
 		}
-		changed := (f == linkFieldName && e.name != e.page.Name) || (f == linkFieldPath && e.path != e.page.Path)
+		changed := (f == linkFieldName && e.name != e.page.Name) || (f == linkFieldPath && e.path != e.page.Path) ||
+			(f == linkFieldRemote && e.remote != e.page.Remote) || (f == linkFieldChanges && e.changes != e.page.Changes)
 		if changed {
 			content = strings.TrimRight(content, "\n") + modSt.Render("  •")
 		}
@@ -606,12 +763,12 @@ func (e linkEditor) view() string {
 	case e.typing:
 		b.WriteString("  " + dim.Render("Enter keep · Esc cancel") + "\n")
 	default:
-		hints := "↑↓ field · Enter edit"
+		hints := "↑↓ field · Enter edit · ←→ changes"
 		if e.dirty() {
 			hints += " · " + title.Render("s") + " save"
 		}
 		b.WriteString("  " + dim.Render(hints+" · Esc back") + "\n")
-		b.WriteString("  " + dim.Render("renaming rewrites every project that links this page; the path must be a git repository") + "\n")
+		b.WriteString("  " + dim.Render("changes: pr means a branch and a pull request, commit means the current branch; renaming rewrites every project that links this page") + "\n")
 	}
 	if e.err != "" {
 		b.WriteString("  " + errSt.Render(e.err) + "\n")

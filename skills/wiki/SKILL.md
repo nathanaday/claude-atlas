@@ -61,8 +61,10 @@ Query is read-only. Keeping an answer is a separate `save` operation the user
 asks for. Never update the hot cache merely because a session ended.
 
 A session started in a repository that an atlas project links uses that
-project's vault; `status` says which. Search the wiki before answering from
-the code alone, and keep decisions made there with `save`.
+project's vault; `status` says which, and how changes land in that repository
+(`pr`: a branch and a pull request; `commit`: the current branch). Search the
+wiki before answering from the code alone, and keep decisions made there with
+`save`.
 
 ## The operation contract
 

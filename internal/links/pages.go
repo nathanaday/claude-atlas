@@ -31,12 +31,46 @@ func Dir(kind string) string {
 	return "materials"
 }
 
-// Page is one linked folder's page.
+// Page is one repository's page. Remote is where it was cloned from or pushes to, when
+// it has one. Changes says how claude-atlas sessions land their work there: "pr" for a
+// branch and a pull request, "commit" for commits on the current branch; empty means
+// the default for the repository, which Policy gives.
 type Page struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"` // file name without .md; what links call it
-	Path string `json:"path"` // the folder, absolute
-	File string `json:"-"`    // the page on disk
+	Kind    string `json:"kind"`
+	Name    string `json:"name"` // file name without .md; what links call it
+	Path    string `json:"path"` // the folder, absolute
+	Remote  string `json:"remote,omitempty"`
+	Changes string `json:"changes,omitempty"`
+	File    string `json:"-"` // the page on disk
+}
+
+// Change policies.
+const (
+	ChangesPR     = "pr"
+	ChangesCommit = "commit"
+)
+
+// Policies lists the change policies a page may carry.
+var Policies = []string{ChangesPR, ChangesCommit}
+
+// Policy is the page's change policy, or the default: pull requests when the repository
+// has a remote, commits when it has none.
+func (p Page) Policy() string {
+	if p.Changes != "" {
+		return p.Changes
+	}
+	if p.Remote != "" {
+		return ChangesPR
+	}
+	return ChangesCommit
+}
+
+// PolicyText says what a policy means, for a session.
+func PolicyText(policy string) string {
+	if policy == ChangesPR {
+		return "changes land as pull requests: work on a branch, commit there, and open a pull request; never push to the default branch"
+	}
+	return "changes land as commits on the current branch"
 }
 
 // Rel is the page's vault-relative path without .md, as a wikilink target.
@@ -52,8 +86,10 @@ type Problem struct {
 }
 
 type pageFront struct {
-	Schema string `yaml:"schema"`
-	Path   string `yaml:"path"`
+	Schema  string `yaml:"schema"`
+	Path    string `yaml:"path"`
+	Remote  string `yaml:"remote"`
+	Changes string `yaml:"changes"`
 }
 
 // splitFront separates a leading YAML block from the body.
@@ -93,7 +129,11 @@ func LoadPage(kind, file string) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	return Page{Kind: kind, Name: strings.TrimSuffix(filepath.Base(file), ".md"), Path: abs, File: file}, nil
+	changes := strings.TrimSpace(f.Changes)
+	if changes != "" && changes != ChangesPR && changes != ChangesCommit {
+		return Page{}, fmt.Errorf("changes must be %s or %s, not %q", ChangesPR, ChangesCommit, changes)
+	}
+	return Page{Kind: kind, Name: strings.TrimSuffix(filepath.Base(file), ".md"), Path: abs, Remote: strings.TrimSpace(f.Remote), Changes: changes, File: file}, nil
 }
 
 // Walk reads every link page in the atlas vault, repos first, each kind sorted by name.
@@ -240,8 +280,9 @@ func PageName(path string, taken func(string) bool) string {
 	return candidate
 }
 
-// Create writes the page for a folder under the kind's directory and returns it. A page
-// that already holds the folder is returned as is.
+// Create writes the page for a repository under the kind's directory and returns it,
+// recording the repository's origin remote when it has one. A page that already holds
+// the folder is returned as is.
 func Create(atlas, kind, path string, existing []Page) (Page, error) {
 	abs, err := filepath.Abs(home.Expand(path))
 	if err != nil {
@@ -249,6 +290,10 @@ func Create(atlas, kind, path string, existing []Page) (Page, error) {
 	}
 	if page := FindByPath(existing, abs); page != nil {
 		return *page, nil
+	}
+	remote := ""
+	if kind == Repo && IsRepo(abs) {
+		remote = gitx.Repo{Dir: abs}.RemoteURL()
 	}
 	dir := filepath.Join(atlas, Dir(kind))
 	taken := func(name string) bool {
@@ -258,17 +303,20 @@ func Create(atlas, kind, path string, existing []Page) (Page, error) {
 		_, err := os.Stat(filepath.Join(dir, name+".md"))
 		return err == nil
 	}
-	page := Page{Kind: kind, Name: PageName(abs, taken), Path: abs}
+	page := Page{Kind: kind, Name: PageName(abs, taken), Path: abs, Remote: remote}
 	page.File = filepath.Join(dir, page.Name+".md")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Page{}, err
 	}
 	what := "folder"
 	if kind == Repo {
-		what = "repo"
+		what = "repository"
 	}
-	text := fmt.Sprintf("---\nschema: %s\npath: %s\n---\n\n# %s\n\nNotes about this %s that belong to the atlas.\n",
-		PageSchema, quoteYAML(abs), page.Name, what)
+	front := fmt.Sprintf("schema: %s\npath: %s\n", PageSchema, quoteYAML(abs))
+	if kind == Repo {
+		front += fmt.Sprintf("remote: %s\nchanges: %q\n", quoteYAML(remote), "")
+	}
+	text := fmt.Sprintf("---\n%s---\n\n# %s\n\nNotes about this %s that belong to the atlas.\n", front, page.Name, what)
 	if err := os.WriteFile(page.File, []byte(text), 0o644); err != nil {
 		return Page{}, err
 	}
@@ -344,4 +392,36 @@ func CreateRepo(dir, name string) error {
 
 func readme(name string) string {
 	return "# " + name + "\n\nDeliverables live here. The knowledge behind them lives in the claude-atlas vault this repository is linked to.\n"
+}
+
+// IsRemoteURL reports whether s names a repository to clone rather than a folder: an
+// https, ssh, git, or file URL, or an scp-style git@host:path.
+func IsRemoteURL(s string) bool {
+	s = strings.TrimSpace(s)
+	for _, prefix := range []string{"https://", "http://", "ssh://", "git://", "file://"} {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return strings.HasPrefix(s, "git@") && strings.Contains(s, ":")
+}
+
+// NameFromURL is the repository's name as a clone would name its folder.
+func NameFromURL(url string) string {
+	s := strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(url), "/"), ".git")
+	if i := strings.LastIndexAny(s, "/:"); i >= 0 {
+		s = s[i+1:]
+	}
+	return CleanName(s)
+}
+
+// Clone clones url into dir, which must not exist or must be empty.
+func Clone(url, dir string) error {
+	if !gitx.Available() {
+		return fmt.Errorf("git is required and is not on PATH")
+	}
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		return fmt.Errorf("%s already exists and is not empty", home.Display(dir))
+	}
+	return gitx.Repo{Dir: dir}.Clone(url)
 }

@@ -47,7 +47,7 @@ func TestCreateWalkAndResolve(t *testing.T) {
 		t.Fatalf("%+v %v", page, err)
 	}
 	text, _ := os.ReadFile(page.File)
-	if !strings.HasPrefix(string(text), "---\nschema: atlas.link.v1\npath: "+repo+"\n---\n") || !strings.Contains(string(text), "# code") {
+	if !strings.HasPrefix(string(text), "---\nschema: atlas.link.v1\npath: "+repo+"\n") || !strings.Contains(string(text), "remote: \"\"\nchanges: \"\"\n---\n") || !strings.Contains(string(text), "# code") {
 		t.Fatalf("page text:\n%s", text)
 	}
 	again, err := Create(atlas, Materials, repo, []Page{page})
@@ -100,5 +100,35 @@ func TestInspectAcceptsAFileAsMaterial(t *testing.T) {
 	}
 	if repo := Inspect(Repo, file); repo.OK || repo.Error != "not a directory" {
 		t.Fatalf("a file is never a repo: %+v", repo)
+	}
+}
+
+func TestRemoteURLsAndPolicy(t *testing.T) {
+	for in, want := range map[string]bool{
+		"https://github.com/you/repo.git": true, "git@github.com:you/repo.git": true, "ssh://git@host/repo": true,
+		"file:///tmp/x": true, "~/code/repo": false, "/tmp/repo": false, "repo": false, "git@nowhere": false,
+	} {
+		if got := IsRemoteURL(in); got != want {
+			t.Errorf("IsRemoteURL(%q) = %v", in, got)
+		}
+	}
+	for in, want := range map[string]string{
+		"https://github.com/you/My-Repo.git": "My-Repo", "git@github.com:you/repo": "repo", "https://host/a/b/": "b", "file:///tmp/x.git": "x",
+	} {
+		if got := NameFromURL(in); got != want {
+			t.Errorf("NameFromURL(%q) = %q", in, got)
+		}
+	}
+	if (Page{}).Policy() != ChangesCommit || (Page{Remote: "x"}).Policy() != ChangesPR || (Page{Remote: "x", Changes: ChangesCommit}).Policy() != ChangesCommit {
+		t.Fatal("policy defaults")
+	}
+	// A page carries what the frontmatter says and refuses an unknown policy.
+	atlas := t.TempDir()
+	os.MkdirAll(filepath.Join(atlas, "repos"), 0o755)
+	os.WriteFile(filepath.Join(atlas, "repos", "a.md"), []byte("---\nschema: atlas.link.v1\npath: /x\nremote: https://github.com/you/a\nchanges: commit\n---\n"), 0o644)
+	os.WriteFile(filepath.Join(atlas, "repos", "b.md"), []byte("---\nschema: atlas.link.v1\npath: /y\nchanges: sometimes\n---\n"), 0o644)
+	pages, problems, _ := Walk(atlas)
+	if len(pages) != 1 || pages[0].Remote != "https://github.com/you/a" || pages[0].Changes != ChangesCommit || len(problems) != 1 || !strings.Contains(problems[0].Reason, "changes must be") {
+		t.Fatalf("pages %+v problems %+v", pages, problems)
 	}
 }

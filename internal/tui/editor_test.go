@@ -49,6 +49,8 @@ func fakeAtlas(t *testing.T) (*home.Config, Hooks) {
 			return vaults.AddLink(cfg, p, target, initGit)
 		},
 		NewRepo:    func(p *tree.Project, name, at string) (links.Page, error) { return vaults.NewRepo(cfg, p, name, at) },
+		CloneRepo:  func(p *tree.Project, url, at string) (links.Page, error) { return vaults.CloneRepo(cfg, p, url, at) },
+		SetChanges: func(page links.Page, policy string) (links.Page, error) { return vaults.SetChanges(cfg, page, policy) },
 		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
 		EditLink: func(page links.Page, edit vaults.LinkEdit) (links.Page, error) {
 			return vaults.UpdateLink(cfg, page, edit)

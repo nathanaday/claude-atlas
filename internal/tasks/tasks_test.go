@@ -115,6 +115,8 @@ func TestLedgerBuildIndexAndFreshness(t *testing.T) {
 	os.MkdirAll(v.Path(vault.TaskArchiveDir), 0o755)
 	os.WriteFile(v.Path(q), qtext, 0o644)
 	os.WriteFile(v.Path(vault.TasksDir+"/broken.md"), []byte("no frontmatter"), 0o644)
+	t.Setenv("GIT_AUTHOR_DATE", "2026-09-13T12:00:00")
+	t.Setenv("GIT_COMMITTER_DATE", "2026-09-13T12:00:00")
 	repo := v.Repo()
 	repo.AddAll()
 	repo.Commit("task: hand made\n\natlas-operation: task-20260902-0000\n")

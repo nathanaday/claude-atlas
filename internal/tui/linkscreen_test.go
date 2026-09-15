@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/tree"
 )
 
@@ -148,5 +149,55 @@ func TestLinksScreenNeedsHooks(t *testing.T) {
 	none := keyV(pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown, tea.KeyDown, tea.KeyDown), "l")
 	if none.links != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("l without hooks reports why")
+	}
+}
+
+func TestLinksScreenClonesAndAsksHowChangesLand(t *testing.T) {
+	cfg, v := atlasView(t)
+	upstream := filepath.Join(cfg.VaultsDir, "upstream")
+	os.MkdirAll(upstream, 0o755)
+	os.WriteFile(filepath.Join(upstream, "hello.txt"), []byte("hi"), 0o644)
+	if err := links.InitRepo(upstream, "upstream"); err != nil {
+		t.Fatal(err)
+	}
+	url := "file://" + upstream
+	v = keyV(v, "l")
+	v = keyV(v, "a")
+	v.links.source.setValue(url)
+	v = pressV(v, tea.KeyEnter)
+	if v.links.mode != linksClonePath || !strings.HasSuffix(v.links.where.value(), "/reading/upstream") || !strings.Contains(v.View(), "Enter clone") {
+		t.Fatalf("clone path step: mode=%d where=%q\n%s", v.links.mode, v.links.where.value(), v.View())
+	}
+	v = pressV(v, tea.KeyEnter)
+	if v.links.mode != linksChanges || !strings.Contains(v.View(), "How should claude-atlas land its changes there?") || !strings.Contains(v.links.status, "cloned upstream") {
+		t.Fatalf("changes step: mode=%d status=%q err=%q\n%s", v.links.mode, v.links.status, v.links.err, v.View())
+	}
+	v = keyV(v, "c")
+	if v.links.mode != linksList || !strings.Contains(v.links.status, "commits on the current branch") || !strings.Contains(v.View(), "changes: commit") {
+		t.Fatalf("after choosing: mode=%d status=%q\n%s", v.links.mode, v.links.status, v.View())
+	}
+	projects, _, _ := tree.Walk(cfg.TreeRoot())
+	p := tree.FindByRel(projects, "personal/reading")
+	if _, err := os.Stat(filepath.Join(p.VaultPath(), "upstream", "hello.txt")); err != nil {
+		t.Fatal("the clone should hold the upstream files")
+	}
+	pages, _, _ := links.Walk(cfg.AtlasVault)
+	page := links.FindByPath(pages, filepath.Join(p.VaultPath(), "upstream"))
+	if page == nil || page.Remote != url || page.Changes != "commit" {
+		t.Fatalf("page %+v", page)
+	}
+	// The editor shows remote and changes; ←→ cycles the policy.
+	v = keyV(v, "e")
+	if !strings.Contains(v.View(), "Remote") || !strings.Contains(v.View(), "◂ commit ▸") {
+		t.Fatalf("edit form:\n%s", v.View())
+	}
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyRight)
+	if !strings.Contains(v.View(), "◂ default: pr ▸") {
+		t.Fatalf("cycle to default:\n%s", v.View())
+	}
+	v = keyV(v, "s")
+	pages, _, _ = links.Walk(cfg.AtlasVault)
+	if page := links.FindByPath(pages, filepath.Join(p.VaultPath(), "upstream")); page == nil || page.Changes != "" || page.Policy() != "pr" {
+		t.Fatalf("after edit %+v", page)
 	}
 }

@@ -39,6 +39,18 @@ vault's folder; the vault's `.gitignore` then names it, so the two histories
 stay apart, and Obsidian still shows it. Any other folder on the machine
 works too.
 
+A repository may come from a remote: `link` with a URL clones it, beside the
+wiki or where the user says, and the page records the `remote`. How a
+session lands its changes there is a property of the repository, not of the
+vault or the project: two projects may mount the same repository, and the
+vault records nothing about mounts. So the page carries `changes`: `pr` for
+a branch and a pull request, `commit` for commits on the current branch. The
+user is asked once, when the repository gains a remote through the atlas;
+until then a remote means `pr` and no remote means `commit`. Sessions learn
+the policy at their start and from the `repos` tool, so no file in the
+repository and no setting in the vault has to say it. The vault's identity
+file stays what it is, the vault's own facts: schema, mode, created.
+
 Folders of sources the vault ingests from are not links: ingest stages from
 any path and the vault remembers the folders it staged from, so an ingest
 with no path picks up what is new. Pages under `materials/`, from when links

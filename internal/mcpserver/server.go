@@ -20,6 +20,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/discover"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
@@ -111,8 +112,33 @@ type Status struct {
 	Git           txn.Status     `json:"git"`
 	LastOperation *txn.Operation `json:"last_operation,omitempty"`
 	Tasks         tasks.Counts   `json:"tasks"`
-	Versions      Versions       `json:"versions"`
-	Warnings      []string       `json:"warnings"`
+	// Repository is set when the session runs inside a repository the project mounts.
+	Repository *RepoInfo `json:"repository,omitempty"`
+	Versions   Versions  `json:"versions"`
+	Warnings   []string  `json:"warnings"`
+}
+
+// RepoInfo describes a mounted repository and how changes land in it.
+type RepoInfo struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Remote  string `json:"remote,omitempty"`
+	Changes string `json:"changes"`
+	Policy  string `json:"policy"`
+	Branch  string `json:"branch,omitempty"`
+	Dirty   int    `json:"dirty"`
+}
+
+func repoInfo(page links.Page) RepoInfo {
+	info := RepoInfo{Name: page.Name, Path: page.Path, Remote: page.Remote, Changes: page.Policy()}
+	info.Policy = links.PolicyText(info.Changes)
+	if fact := links.Inspect(links.Repo, page.Path); fact.OK {
+		info.Branch = fact.Branch
+		if fact.Dirty != nil {
+			info.Dirty = *fact.Dirty
+		}
+	}
+	return info
 }
 
 type Versions struct {
@@ -168,6 +194,10 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 		if out.Tasks.Notes > 0 {
 			out.Warnings = append(out.Warnings, fmt.Sprintf("%d task note%s wait in %s/; the task-plant skill turns them into tasks", out.Tasks.Notes, plural(out.Tasks.Notes), vault.InboxTasksDir))
 		}
+	}
+	if match, _, err := discover.Vault(home.Resolve(s.opts.Env(home.EnvHome)), s.opts.ProjectDir); err == nil && match != nil && match.Page != nil && match.Vault == v.Root {
+		info := repoInfo(*match.Page)
+		out.Repository = &info
 	}
 	if out.Versions.Plugin != "" && out.Versions.Binary != "dev" && out.Versions.Plugin != out.Versions.Binary {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("plugin %s and binary %s differ; update one of them", out.Versions.Plugin, out.Versions.Binary))
@@ -308,6 +338,26 @@ func (s *Server) tasks(ctx context.Context, req *mcp.CallToolRequest, a TasksArg
 	}
 	if out.Notes == nil {
 		out.Notes = []string{}
+	}
+	return nil, out, nil
+}
+
+type ReposOut struct {
+	Repos []RepoInfo `json:"repos"`
+}
+
+func (s *Server) repos(ctx context.Context, req *mcp.CallToolRequest, a VaultArg) (*mcp.CallToolResult, ReposOut, error) {
+	v, err := s.resolve(a.Vault)
+	if err != nil {
+		return nil, ReposOut{}, err
+	}
+	pages, err := discover.Repos(home.Resolve(s.opts.Env(home.EnvHome)), v.Root)
+	if err != nil {
+		return nil, ReposOut{}, err
+	}
+	out := ReposOut{Repos: []RepoInfo{}}
+	for _, page := range pages {
+		out.Repos = append(out.Repos, repoInfo(page))
 	}
 	return nil, out, nil
 }
@@ -563,6 +613,8 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "Plant a task: create a task page with status planted from a title and the idea's text, as one commit. Give from to remove the inbox/tasks/ note it came from. No plan preview is needed; undo covers it."}, s.plant)
 	mcp.AddTool(server, &mcp.Tool{Name: "tasks", Annotations: ro(),
 		Description: "List the vault's tasks from the task ledger: open ones by status, priority, and age, with each task's page, workdir, last touch, and history; counts; and the notes waiting in inbox/tasks/. Pass all to include finished tasks."}, s.tasks)
+	mcp.AddTool(server, &mcp.Tool{Name: "repos", Annotations: ro(),
+		Description: "List the repositories mounted on the vault's project: path, remote, branch, uncommitted changes, and how changes land there (pr: branch and pull request; commit: on the current branch). Read it before changing files in a repository."}, s.repos)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",
 		Description: "Read the vault's filing mode (generic or lyt) and the page types it files. Pass set to prepare a plan that changes it; apply that plan to make the change."}, s.mode)
 	return server

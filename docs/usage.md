@@ -285,17 +285,34 @@ reports the branch, uncommitted changes, and last commit, and a commit counts
 as touching the project. A session started inside a mounted repository uses
 the project's vault.
 
-Create a repository for a project, or mount one that exists:
+Create a repository for a project, clone one from GitHub, or mount one that
+exists:
 
 ```bash
 claude-atlas new-repo sensor-triage paper                     # in the vault's folder, beside the wiki
 claude-atlas new-repo sensor-triage app --at ~/code/sensor-app
+claude-atlas link sensor-triage https://github.com/you/sensor-app        # cloned beside the wiki
+claude-atlas link sensor-triage git@github.com:you/sensor-app.git --at ~/code/sensor-app
 claude-atlas link sensor-triage ~/code/sensor-triage           # an existing repository
 claude-atlas link sensor-triage ~/Documents/cs566-work --init  # a plain folder becomes one first
 claude-atlas link field-notes sensor-triage                    # the page repos/sensor-triage.md
 claude-atlas links sensor-triage
 claude-atlas links                                             # every repository and who uses it
 claude-atlas unlink sensor-triage sensor-triage
+```
+
+**How changes land.** A repository with a remote gets a change policy, kept
+on its page in the atlas as `changes`: `pr` means a session works on a
+branch and opens a pull request, never pushing to the default branch;
+`commit` means it commits on the current branch. `link` asks when it mounts
+or clones a repository with a remote, or takes `--changes pr|commit`; with
+no answer the default is `pr` when there is a remote and `commit` when there
+is none. A session started inside the repository is told the policy at its
+start, and the `repos` tool repeats it. Change it later:
+
+```bash
+claude-atlas edit-link sensor-app --changes commit
+claude-atlas edit-link sensor-app --remote https://github.com/you/sensor-app
 ```
 
 A repository created in the vault's folder gets its own git history, and the
@@ -316,9 +333,11 @@ claude-atlas edit-link Course --path ~/Documents/CS566/Course
 In `view`, `l` shows the project's repositories, one box per repository with
 the page name, the path, what the last refresh found, and the other projects
 that share it. `n` creates one: a name, then a location that defaults to the
-vault's folder. `a` links one that exists, by path with Tab completion or by
-the name of an existing page, and asks before initializing git in a plain
-folder. `e` edits the page's name and path. `u` unlinks after asking. Each
+vault's folder. `a` links one that exists, by path with Tab completion, by
+the name of an existing page, or by a URL, which is cloned to a location you
+confirm; it asks before initializing git in a plain folder, and asks how
+changes should land when the repository has a remote. `e` edits the page's
+name, path, remote, and change policy. `u` unlinks after asking. Each
 action takes effect at once and refreshes the atlas in the background. In
 Obsidian, type `[[` in the `repos` property of a project page and pick a
 page.

@@ -442,3 +442,77 @@ func TestUpdateIntentFields(t *testing.T) {
 		t.Fatalf("clearing: %+v", projects[0].Frontmatter)
 	}
 }
+
+// bareRepo makes a repository with one commit and returns a file:// URL to clone it.
+func bareRepo(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hi"), 0o644)
+	if err := links.InitRepo(dir, name); err != nil {
+		t.Fatal(err)
+	}
+	return "file://" + dir
+}
+
+func TestCloneRepoAndChangePolicy(t *testing.T) {
+	cfg, _ := setup(t)
+	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "real"), vault.Generic, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Register(cfg, filepath.Join(cfg.VaultsDir, "real"), RegisterOptions{Name: "Real"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := bareRepo(t, "upstream")
+	page, err := CloneRepo(cfg, p, url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(p.VaultPath(), "upstream")
+	if page.Path != dir || page.Remote != url || page.Changes != "" || page.Policy() != links.ChangesPR {
+		t.Fatalf("page %+v", page)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "hello.txt")); string(data) != "hi" {
+		t.Fatal("clone should hold the upstream files")
+	}
+	ignore, _ := os.ReadFile(filepath.Join(p.VaultPath(), ".gitignore"))
+	if !strings.Contains(string(ignore), "/upstream/") {
+		t.Fatalf("vault .gitignore:\n%s", ignore)
+	}
+	text, _ := os.ReadFile(page.File)
+	if !strings.Contains(string(text), "remote: "+url) {
+		t.Fatalf("page text:\n%s", text)
+	}
+	set, err := SetChanges(cfg, page, links.ChangesCommit)
+	if err != nil || set.Changes != links.ChangesCommit || set.Policy() != links.ChangesCommit {
+		t.Fatalf("set changes: %+v %v", set, err)
+	}
+	pages, _, _ := links.Walk(cfg.AtlasVault)
+	if got := links.FindByPath(pages, dir); got == nil || got.Changes != links.ChangesCommit || got.Remote != url {
+		t.Fatalf("stored %+v", got)
+	}
+	if _, err := SetChanges(cfg, set, "sometimes"); err == nil {
+		t.Fatal("unknown policy should fail")
+	}
+	empty := ""
+	cleared, err := UpdateLink(cfg, set, LinkEdit{Changes: &empty, Remote: &empty})
+	if err != nil || cleared.Changes != "" || cleared.Remote != "" || cleared.Policy() != links.ChangesCommit {
+		t.Fatalf("cleared %+v %v", cleared, err)
+	}
+	if _, err := CloneRepo(cfg, p, url, ""); err == nil {
+		t.Fatal("cloning onto an existing folder should fail")
+	}
+	if _, err := CloneRepo(cfg, p, "https://nowhere.invalid/x.git", filepath.Join(cfg.VaultsDir, "gone")); err == nil {
+		t.Fatal("a failed clone should fail")
+	}
+	// Linking an existing repository records its remote.
+	clone := filepath.Join(cfg.VaultsDir, "second")
+	if err := links.Clone(url, clone); err != nil {
+		t.Fatal(err)
+	}
+	linked, err := AddLink(cfg, p, clone, false)
+	if err != nil || linked.Remote != url || linked.Policy() != links.ChangesPR {
+		t.Fatalf("linked %+v %v", linked, err)
+	}
+}

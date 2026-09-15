@@ -288,39 +288,79 @@ func AddLink(cfg *home.Config, p *tree.Project, target string, initGit bool) (li
 	return page, nil
 }
 
-// NewRepo creates a git repository for a project's deliverables and mounts it. With no
-// location it goes in the vault's root, beside the wiki, and the vault ignores it so
-// the two histories stay apart.
-func NewRepo(cfg *home.Config, p *tree.Project, name, at string) (links.Page, error) {
-	name = links.CleanName(name)
-	if name == "" {
-		return links.Page{}, errors.New("the repository needs a name")
-	}
+// repoDir decides where a new or cloned repository goes: at, or a folder of that name
+// in the vault's root, beside the wiki. Inside the vault it must sit beside the wiki,
+// and the vault's git ignores it so the two histories stay apart.
+func repoDir(p *tree.Project, name, at string) (string, error) {
 	dir := filepath.Join(p.VaultPath(), name)
 	if at != "" {
 		abs, err := filepath.Abs(home.Expand(at))
 		if err != nil {
-			return links.Page{}, err
+			return "", err
 		}
 		dir = abs
 	}
 	if _, err := os.Stat(dir); err == nil {
 		if entries, _ := os.ReadDir(dir); len(entries) > 0 {
-			return links.Page{}, fmt.Errorf("%s already exists; link it instead", home.Display(dir))
+			return "", fmt.Errorf("%s already exists; link it instead", home.Display(dir))
 		}
 	}
 	if rel, err := filepath.Rel(p.VaultPath(), dir); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
 		if rel == "." || strings.HasPrefix(rel, vault.WikiDir+"/") || rel == vault.WikiDir || strings.HasPrefix(rel, ".") {
-			return links.Page{}, fmt.Errorf("a repository goes beside the wiki, not in %s", home.Display(dir))
+			return "", fmt.Errorf("a repository goes beside the wiki, not in %s", home.Display(dir))
 		}
 		if _, err := vault.Ignore(p.VaultPath(), "/"+filepath.ToSlash(rel)+"/", time.Now()); err != nil {
-			return links.Page{}, err
+			return "", err
 		}
+	}
+	return dir, nil
+}
+
+// NewRepo creates a git repository for a project's deliverables and mounts it.
+func NewRepo(cfg *home.Config, p *tree.Project, name, at string) (links.Page, error) {
+	name = links.CleanName(name)
+	if name == "" {
+		return links.Page{}, errors.New("the repository needs a name")
+	}
+	dir, err := repoDir(p, name, at)
+	if err != nil {
+		return links.Page{}, err
 	}
 	if err := links.CreateRepo(dir, name); err != nil {
 		return links.Page{}, err
 	}
 	return AddLink(cfg, p, dir, false)
+}
+
+// CloneRepo clones a repository from url, into at or beside the wiki, and mounts it.
+// The page records the remote; changes defaults to pull requests until set.
+func CloneRepo(cfg *home.Config, p *tree.Project, url, at string) (links.Page, error) {
+	url = strings.TrimSpace(url)
+	name := links.NameFromURL(url)
+	if name == "" {
+		return links.Page{}, fmt.Errorf("cannot tell a repository name from %q", url)
+	}
+	dir, err := repoDir(p, name, at)
+	if err != nil {
+		return links.Page{}, err
+	}
+	if err := links.Clone(url, dir); err != nil {
+		return links.Page{}, err
+	}
+	page, err := AddLink(cfg, p, dir, false)
+	if err != nil {
+		return links.Page{}, err
+	}
+	if page.Remote == "" {
+		remote := url
+		return UpdateLink(cfg, page, LinkEdit{Remote: &remote})
+	}
+	return page, nil
+}
+
+// SetChanges records how claude-atlas sessions land changes in a repository.
+func SetChanges(cfg *home.Config, page links.Page, policy string) (links.Page, error) {
+	return UpdateLink(cfg, page, LinkEdit{Changes: &policy})
 }
 
 // RemoveLink drops a folder from a project page, by path or page name. The page and the
@@ -346,11 +386,14 @@ func RemoveLink(cfg *home.Config, p *tree.Project, target string) error {
 	return SetLinks(cfg, p, keep)
 }
 
-// LinkEdit changes a link page. Empty fields are unchanged.
+// LinkEdit changes a repository page. Empty fields are unchanged; Remote and Changes
+// point at "" to clear.
 type LinkEdit struct {
-	Name string
-	Kind string // links.Repo or links.Materials
-	Path string
+	Name    string
+	Kind    string // links.Repo or links.Materials
+	Path    string
+	Remote  *string
+	Changes *string // links.ChangesPR, links.ChangesCommit, or ""
 }
 
 // UpdateLink renames a link page, moves it between repos/ and materials/, or points it
@@ -412,8 +455,23 @@ func UpdateLink(cfg *home.Config, page links.Page, edit LinkEdit) (links.Page, e
 			return page, err
 		}
 	}
+	fields := map[string]any{}
 	if updated.Path != page.Path {
-		if err := tree.UpdateFrontmatter(updated.File, map[string]any{"path": updated.Path}); err != nil {
+		fields["path"] = updated.Path
+	}
+	if edit.Remote != nil && *edit.Remote != page.Remote {
+		updated.Remote = strings.TrimSpace(*edit.Remote)
+		fields["remote"] = updated.Remote
+	}
+	if edit.Changes != nil && *edit.Changes != page.Changes {
+		if *edit.Changes != "" && !contains(links.Policies, *edit.Changes) {
+			return page, fmt.Errorf("changes must be %s, %s, or empty", links.ChangesPR, links.ChangesCommit)
+		}
+		updated.Changes = *edit.Changes
+		fields["changes"] = updated.Changes
+	}
+	if len(fields) > 0 {
+		if err := tree.UpdateFrontmatter(updated.File, fields); err != nil {
 			return page, err
 		}
 	}

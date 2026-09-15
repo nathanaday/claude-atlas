@@ -5,7 +5,7 @@ Knowledge vaults for Claude Code, and one view across all of them.
 [![License: MIT](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](.claude-plugin/plugin.json)
-[![Version](https://img.shields.io/badge/version-0.5.1-d97745.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.6.0-d97745.svg)](.claude-plugin/plugin.json)
 
 ## About
 
@@ -109,9 +109,11 @@ and a task's work happens there. A course project keeps its papers and decks
 in one; a codebase is one, with the wiki as the knowledge behind it.
 
 Every link is a git repository. Create one beside the wiki in the vault's
-folder, ignored by the vault's own git, or anywhere on the machine, or mount
-one that exists. Folders of sources you ingest from need no link; the vault
-remembers where it staged from.
+folder, ignored by the vault's own git, or anywhere on the machine; clone one
+from GitHub; or mount one that exists. A repository with a remote carries a
+choice of how a session lands its changes, pull requests or commits, and the
+session is told at its start. Folders of sources you ingest from need no
+link; the vault remembers where it staged from.
 
 ## Inside a vault
 

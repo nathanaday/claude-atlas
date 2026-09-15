@@ -24,8 +24,9 @@ true.
 
 Follow the plan. If the plan names a skill, run that skill; its procedure
 governs, and this page records the outcome. In a repository, files change
-with the ordinary tools; the vault's `wiki/` changes only through `plan` and
-`apply`. Keep a decision the user should be able to find later with the
+with the ordinary tools, and the repository's change policy from `repos`
+decides how they land: a branch and a pull request, or commits on the
+current branch. The vault's `wiki/` changes only through `plan` and `apply`. Keep a decision the user should be able to find later with the
 `save` skill.
 
 ## Write progress

@@ -60,11 +60,11 @@ The atlas:
   show NAME              everything the atlas knows about a project
   edit NAME [flags]      change a project's name, purpose, category, priority, state, or vault
   remove NAME            remove a project from the atlas; the vault stays on disk
-  link NAME PATH|PAGE    mount a git repository on a project; --init makes a plain folder one first
+  link NAME PATH|URL     mount a git repository on a project, or clone one from a URL; --init makes a plain folder one first
   new-repo NAME REPO     create a repository for a project's deliverables and mount it; --at DIR places it
   unlink NAME PATH|PAGE  remove that link; the repository and its page are untouched
   links [NAME]           a project's repositories, or every one and the projects that use it
-  edit-link PAGE [flags] rename a repository's page or point it at a folder that moved
+  edit-link PAGE [flags] rename a repository's page, point it elsewhere, or set how changes land: --changes pr|commit
   relate NAME OTHER      record that two projects belong together
   unrelate NAME OTHER    remove that
   refresh                read every vault and rewrite Overview.md, Tree.md, and categories/
@@ -421,6 +421,8 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 			return vaults.AddLink(cfg, p, target, initGit)
 		},
 		NewRepo:    func(p *tree.Project, name, at string) (links.Page, error) { return vaults.NewRepo(cfg, p, name, at) },
+		CloneRepo:  func(p *tree.Project, url, at string) (links.Page, error) { return vaults.CloneRepo(cfg, p, url, at) },
+		SetChanges: func(page links.Page, policy string) (links.Page, error) { return vaults.SetChanges(cfg, page, policy) },
 		RemoveLink: func(p *tree.Project, target string) error { return vaults.RemoveLink(cfg, p, target) },
 		Sources: func(p *tree.Project) []string {
 			v, err := vault.Open(p.VaultPath())
@@ -1183,12 +1185,17 @@ func relName(projects []*tree.Project, rel string) string {
 func (e *env) link(args []string) (int, error) {
 	fs := newFlags("link", e.stderr)
 	initGit := fs.Bool("init", false, "make a plain folder a git repository first, with one commit of what it holds")
+	at := fs.String("at", "", "with a URL: where to clone (default: a folder of the repository's name in the vault's root)")
+	changes := fs.String("changes", "", "how claude-atlas lands changes there: pr or commit (asked when the repository has a remote)")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) != 2 {
-		return 2, errors.New("usage: claude-atlas link NAME PATH|PAGE [--init]")
+		return 2, errors.New("usage: claude-atlas link NAME PATH|PAGE|URL [--init] [--at DIR] [--changes pr|commit]")
+	}
+	if *changes != "" && *changes != links.ChangesPR && *changes != links.ChangesCommit {
+		return 2, errors.New("--changes must be pr or commit")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
@@ -1199,17 +1206,24 @@ func (e *env) link(args []string) (int, error) {
 		return 1, err
 	}
 	before, _, _ := links.Walk(cfg.AtlasVault)
-	page, err := vaults.AddLink(cfg, p, positional[1], *initGit)
-	var notRepo *vaults.NotRepoError
-	if errors.As(err, &notRepo) && e.console.Interactive() {
-		ok, cerr := e.console.Confirm(fmt.Sprintf("%s is not a git repository. Initialize one there, with one commit of what it holds?", home.Display(notRepo.Path)), true)
-		if cerr != nil {
-			return 1, cerr
+	var page links.Page
+	target := positional[1]
+	if links.IsRemoteURL(target) {
+		e.console.Say("  cloning %s …", target)
+		page, err = vaults.CloneRepo(cfg, p, target, *at)
+	} else {
+		page, err = vaults.AddLink(cfg, p, target, *initGit)
+		var notRepo *vaults.NotRepoError
+		if errors.As(err, &notRepo) && e.console.Interactive() {
+			ok, cerr := e.console.Confirm(fmt.Sprintf("%s is not a git repository. Initialize one there, with one commit of what it holds?", home.Display(notRepo.Path)), true)
+			if cerr != nil {
+				return 1, cerr
+			}
+			if !ok {
+				return 1, vaults.ErrCancelled
+			}
+			page, err = vaults.AddLink(cfg, p, target, true)
 		}
-		if !ok {
-			return 1, vaults.ErrCancelled
-		}
-		page, err = vaults.AddLink(cfg, p, positional[1], true)
 	}
 	if err != nil {
 		return 1, err
@@ -1218,14 +1232,45 @@ func (e *env) link(args []string) (int, error) {
 	if links.FindByPath(before, page.Path) == nil {
 		pageNote += " (new)"
 	}
+	if page, err = e.settleChanges(cfg, page, *changes); err != nil {
+		return 1, err
+	}
 	pageOut, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
 	e.console.Step(console.OK, "linked", fmt.Sprintf("%s (%s) → %s", page.Name, home.Display(page.Path), p.Name))
+	if page.Remote != "" {
+		e.console.Step(console.OK, "remote", page.Remote)
+	}
+	e.console.Step(console.OK, "changes", page.Policy()+"  "+links.PolicyText(page.Policy()))
 	e.console.Step(console.OK, "page", pageNote)
 	e.console.Step(console.OK, "refreshed", home.Display(pageOut))
 	return 0, nil
+}
+
+// settleChanges records how changes land in a repository: the flag, else the user's
+// answer when the repository has a remote and the page says nothing yet, else the
+// default. A repository with no remote lands commits; there is nothing to ask.
+func (e *env) settleChanges(cfg *home.Config, page links.Page, flag string) (links.Page, error) {
+	switch {
+	case flag != "":
+		return vaults.SetChanges(cfg, page, flag)
+	case page.Changes != "" || page.Remote == "" || !e.console.Interactive():
+		return page, nil
+	}
+	e.console.Say("  %s has a remote, %s. How should claude-atlas land its changes there?", page.Name, page.Remote)
+	e.console.Say("    pr      work on a branch and open a pull request; never push to the default branch")
+	e.console.Say("    commit  commit on the current branch")
+	pr, err := e.console.Confirm("Pull requests?", true)
+	if err != nil {
+		return page, err
+	}
+	policy := links.ChangesCommit
+	if pr {
+		policy = links.ChangesPR
+	}
+	return vaults.SetChanges(cfg, page, policy)
 }
 
 func (e *env) newRepo(args []string) (int, error) {
@@ -1305,8 +1350,16 @@ func (e *env) links(args []string) (int, error) {
 		e.console.Say("%s has no repositories; mount one with `claude-atlas link %s PATH` or create one with `claude-atlas new-repo %s NAME`", p.Name, p.Rel, p.Rel)
 		return 0, nil
 	}
+	pages, _, _ := links.Walk(cfg.AtlasVault)
 	for _, l := range p.Linked {
 		e.console.Say("  %-10s %s", l.Kind, linkLine(l, state))
+		if page := links.FindByPath(pages, l.Path); page != nil && page.Kind == links.Repo && l.Path != "" {
+			line := "changes: " + page.Policy()
+			if page.Remote != "" {
+				line += " · remote " + page.Remote
+			}
+			e.console.Say("  %-10s %s", "", line)
+		}
 	}
 	return 0, nil
 }
@@ -1352,6 +1405,13 @@ func (e *env) allLinks(cfg *home.Config) (int, error) {
 		}
 		e.console.Say("  %-10s %-20s %s", kind, page.Name, home.Display(page.Path))
 		e.console.Say("  %-10s %-20s %s", "", "", facts+" · "+used)
+		if page.Kind == links.Repo {
+			line := "changes: " + page.Policy()
+			if page.Remote != "" {
+				line += " · remote " + page.Remote
+			}
+			e.console.Say("  %-10s %-20s %s", "", "", line)
+		}
 	}
 	return 0, nil
 }
@@ -1360,12 +1420,19 @@ func (e *env) editLink(args []string) (int, error) {
 	fs := newFlags("edit-link", e.stderr)
 	name := fs.String("name", "", "new page name")
 	path := fs.String("path", "", "the repository the page points at")
+	remote := fs.String("remote", "", "the repository's remote URL; \"\" clears it")
+	changes := fs.String("changes", "", "how changes land: pr or commit; \"\" returns to the default")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
-	if len(positional) != 1 || (*name == "" && *path == "") {
-		return 2, errors.New("usage: claude-atlas edit-link PAGE [--name N] [--path DIR]")
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if len(positional) != 1 || len(set) == 0 {
+		return 2, errors.New("usage: claude-atlas edit-link PAGE [--name N] [--path DIR] [--remote URL] [--changes pr|commit]")
+	}
+	if *changes != "" && *changes != links.ChangesPR && *changes != links.ChangesCommit {
+		return 2, errors.New("--changes must be pr or commit")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
@@ -1379,7 +1446,14 @@ func (e *env) editLink(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	updated, err := vaults.UpdateLink(cfg, *page, vaults.LinkEdit{Name: *name, Path: *path})
+	edit := vaults.LinkEdit{Name: *name, Path: *path}
+	if set["remote"] {
+		edit.Remote = remote
+	}
+	if set["changes"] {
+		edit.Changes = changes
+	}
+	updated, err := vaults.UpdateLink(cfg, *page, edit)
 	if err != nil {
 		return 1, err
 	}
@@ -1388,6 +1462,9 @@ func (e *env) editLink(args []string) (int, error) {
 		return 1, err
 	}
 	e.console.Step(console.OK, "edited", fmt.Sprintf("%s → %s (%s, %s)", page.Rel(), updated.Rel(), updated.Kind, home.Display(updated.Path)))
+	if updated.Kind == links.Repo {
+		e.console.Step(console.OK, "changes", updated.Policy()+"  "+links.PolicyText(updated.Policy()))
+	}
 	e.console.Step(console.OK, "refreshed", home.Display(out))
 	return 0, nil
 }

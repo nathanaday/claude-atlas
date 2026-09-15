@@ -57,6 +57,25 @@ func (r Repo) Init() error {
 	return err
 }
 
+// Clone clones url into Dir, which must not exist or must be empty.
+func (r Repo) Clone(url string) error {
+	if err := os.MkdirAll(filepath.Dir(r.Dir), 0o755); err != nil {
+		return err
+	}
+	parent := Repo{Dir: filepath.Dir(r.Dir)}
+	_, err := parent.run("clone", "--quiet", url, r.Dir)
+	return err
+}
+
+// RemoteURL is the fetch URL of origin, or "" when there is none.
+func (r Repo) RemoteURL() string {
+	out, err := r.run("remote", "get-url", "origin")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
 // IsRepo reports whether Dir itself is the top level of a working tree.
 // A vault inside another repository does not count: its history must be its own.
 func (r Repo) IsRepo() bool {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -146,10 +147,23 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 		t.Fatal(err)
 	}
 	text = out.String()
-	for _, want := range []string{"linked to the project V", "Open tasks: 1", "<vault-context>"} {
+	for _, want := range []string{"linked to the project V", "Open tasks: 1", "<vault-context>", "In code, changes land as commits on the current branch. The repos tool says the same."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in repo session:\n%s", want, text)
 		}
+	}
+	// With a remote and no policy, the session is told to open pull requests.
+	pages, _, _ := links.Walk(cfg.AtlasVault)
+	if page := links.FindByPath(pages, repo); page != nil {
+		remote := "https://github.com/you/code"
+		if _, err := vaults.UpdateLink(cfg, *page, vaults.LinkEdit{Remote: &remote}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out.Reset()
+	SessionStart(strings.NewReader(`{"cwd":"`+filepath.Join(repo, "src")+`"}`), &out, e, false, now)
+	if !strings.Contains(out.String(), "changes land as pull requests") {
+		t.Fatalf("policy line:\n%s", out.String())
 	}
 	out.Reset()
 	SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, e, true, now)

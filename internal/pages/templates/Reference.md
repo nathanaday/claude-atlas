@@ -196,6 +196,12 @@ claude-atlas new-repo my-project paper
 claude-atlas new-repo my-project app --at ~/code/app
 ```
 
+> Clone a repository from GitHub and mount it, beside the wiki or where `--at` says. When a repository has a remote, the command asks how claude-atlas should land changes there: pull requests, or commits on the current branch. `--changes pr|commit` answers up front.
+
+```bash
+claude-atlas link my-project https://github.com/you/my-project
+```
+
 > Mount a repository that exists. A plain folder is refused until you agree to initialize a repository there; `--init` agrees up front.
 
 ```bash
@@ -228,10 +234,14 @@ claude-atlas links
 claude-atlas unlink my-project my-project
 ```
 
-> Rename a page or point it at a repository that moved. Every project that links it is rewritten.
+> Rename a page, point it at a repository that moved, set its remote, or change how changes land there. Every project that links it is rewritten.
 
 ```bash
 claude-atlas edit-link my-project --name "My project" --path ~/code/my-project
+```
+
+```bash
+claude-atlas edit-link my-project --changes commit
 ```
 
 ## Relating projects
