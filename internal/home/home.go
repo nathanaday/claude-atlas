@@ -16,7 +16,6 @@ const (
 	EnvHome        = "CLAUDE_ATLAS_HOME"
 	defaultHome    = "~/.claude-atlas"
 	DefaultVaults  = "~/Documents/Vaults"
-	DefaultAtlas   = "~/Documents/Atlas"
 
 	// DefaultPluginID is the claude-atlas plugin as Claude Code names it.
 	DefaultPluginID = "claude-atlas@nathanaday-claude-atlas"
@@ -51,11 +50,8 @@ type LaunchConfig struct {
 
 // Config is the contents of config.json. Paths are absolute.
 type Config struct {
-	Schema    string `json:"schema"`
-	VaultsDir string `json:"vaults_dir"`
-	// AtlasVault is the atlas vault's root. Optional; Task 9 removes it once the
-	// registry replaces the atlas vault.
-	AtlasVault string       `json:"atlas_vault,omitempty"`
+	Schema     string       `json:"schema"`
+	VaultsDir  string       `json:"vaults_dir"`
 	Plugin     PluginConfig `json:"plugin"`
 	ClaudeCode LaunchConfig `json:"claude_code"`
 	// Heat is nil in a config written before the section existed; NewDays reads it.
@@ -64,14 +60,6 @@ type Config struct {
 	Vaults []string `json:"vaults,omitempty"`
 	// Repos holds repository paths outside their project's folder, keyed by RepoKey.
 	Repos map[string]string `json:"repos,omitempty"`
-}
-
-// TreeRoot is the directory of nodes inside the atlas vault, or "" when there is none.
-func (c *Config) TreeRoot() string {
-	if c.AtlasVault == "" {
-		return ""
-	}
-	return filepath.Join(c.AtlasVault, "tree")
 }
 
 // RepoKey is the Repos map key for a repository named name under project projectID.
@@ -220,7 +208,6 @@ func (h Home) Load() (*Config, error) {
 		return nil, fmt.Errorf("%s: unsupported schema %q", h.ConfigPath(), cfg.Schema)
 	}
 	cfg.VaultsDir = Expand(cfg.VaultsDir)
-	cfg.AtlasVault = Expand(cfg.AtlasVault)
 	for i, v := range cfg.Vaults {
 		cfg.Vaults[i] = Expand(v)
 	}

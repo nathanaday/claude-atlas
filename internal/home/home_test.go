@@ -30,7 +30,6 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatal("load before setup should fail")
 	}
 	cfg := h.Default("~/Docs/Vaults")
-	cfg.AtlasVault = "~/Documents/Atlas"
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -39,10 +38,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	userHome, _ := os.UserHomeDir()
-	if back.VaultsDir != filepath.Join(userHome, "Docs", "Vaults") || back.AtlasVault != filepath.Join(userHome, "Documents", "Atlas") {
+	if back.VaultsDir != filepath.Join(userHome, "Docs", "Vaults") {
 		t.Fatalf("got %+v", back)
 	}
-	if back.Plugin.ID == "" || back.TreeRoot() != filepath.Join(userHome, "Documents", "Atlas", "tree") {
+	if back.Plugin.ID == "" {
 		t.Fatalf("got %+v", back)
 	}
 }
@@ -57,9 +56,6 @@ func TestConfigV2FieldsAndV1Upgrade(t *testing.T) {
 	loaded, err := h.Load()
 	if err != nil || loaded.Schema != ConfigSchema {
 		t.Fatalf("v1 config loads as v2: %+v %v", loaded, err)
-	}
-	if loaded.TreeRoot() != "" {
-		t.Fatalf("no atlas vault, no tree root: %q", loaded.TreeRoot())
 	}
 	if !loaded.AddVault("~/Elsewhere/side") || loaded.AddVault("~/Elsewhere/side") {
 		t.Fatal("AddVault dedupes")

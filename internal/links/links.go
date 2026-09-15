@@ -1,26 +1,20 @@
-// Package links inspects the folders a project points at besides its vault: git
-// repositories and directories of static material. Atlas only reads them.
+// Package links inspects the git repositories a project points at besides its vault.
+// Atlas only reads them.
 package links
 
 import (
 	"bytes"
-	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
 )
 
-const (
-	Repo      = "repo"
-	Materials = "materials"
-)
+const Repo = "repo"
 
-// Link is the derived view of one linked folder.
+// Link is the derived view of one linked repository.
 type Link struct {
 	Kind  string `json:"kind"`
 	Name  string `json:"name,omitempty"` // the link page, when the folder has one
@@ -31,28 +25,14 @@ type Link struct {
 	Branch     string `json:"branch,omitempty"`
 	LastCommit string `json:"last_commit,omitempty"`
 	Dirty      *int   `json:"dirty,omitempty"`
-	// Materials facts.
-	Files  *int   `json:"files,omitempty"`
-	Bytes  *int64 `json:"bytes,omitempty"`
-	Newest string `json:"newest,omitempty"`
 }
 
 // Touched is the latest date the link shows activity on, if any.
 func (l Link) Touched() (time.Time, bool) {
-	for _, s := range []string{l.LastCommit, l.Newest} {
-		if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
-			return t, true
-		}
+	if t, err := time.ParseInLocation("2006-01-02", l.LastCommit, time.Local); err == nil {
+		return t, true
 	}
 	return time.Time{}, false
-}
-
-// DetectKind says what a path is: a repo when it is a directory holding .git, else materials.
-func DetectKind(path string) string {
-	if _, err := os.Stat(filepath.Join(home.Expand(path), ".git")); err == nil {
-		return Repo
-	}
-	return Materials
 }
 
 // Inspect derives the facts for one linked path.
@@ -65,23 +45,11 @@ func Inspect(kind, path string) Link {
 		return link
 	}
 	if !info.IsDir() {
-		if kind == Repo {
-			link.Error = "not a directory"
-			return link
-		}
-		// A single file is material too: one file, its size, its date.
-		link.OK = true
-		one, size := 1, info.Size()
-		link.Files, link.Bytes, link.Newest = &one, &size, info.ModTime().Format("2006-01-02")
+		link.Error = "not a directory"
 		return link
 	}
 	link.OK = true
-	switch kind {
-	case Repo:
-		inspectRepo(&link, abs)
-	default:
-		inspectMaterials(&link, abs)
-	}
+	inspectRepo(&link, abs)
 	return link
 }
 
@@ -117,52 +85,4 @@ func inspectRepo(link *Link, dir string) {
 		}
 		link.Dirty = &n
 	}
-}
-
-func inspectMaterials(link *Link, dir string) {
-	files, size := 0, int64(0)
-	var newest time.Time
-	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if path != dir && strings.HasPrefix(d.Name(), ".") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasPrefix(d.Name(), ".") {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		files++
-		size += info.Size()
-		if info.ModTime().After(newest) {
-			newest = info.ModTime()
-		}
-		return nil
-	})
-	link.Files = &files
-	link.Bytes = &size
-	if files > 0 {
-		link.Newest = newest.Format("2006-01-02")
-	}
-}
-
-// HumanBytes renders a size the way a file manager would.
-func HumanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return strconv.FormatInt(n, 10) + " B"
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return strconv.FormatFloat(float64(n)/float64(div), 'f', 1, 64) + " " + string("KMGTPE"[exp]) + "B"
 }
