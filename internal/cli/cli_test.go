@@ -839,3 +839,87 @@ func TestStubCommand(t *testing.T) {
 		t.Fatalf("usage exit %d", code)
 	}
 }
+
+// TestNewProjectInARepository covers a project that lives inside a code repository: the
+// folder is REPO/atlas, and the repository is the project's first repository.
+func TestNewProjectInARepository(t *testing.T) {
+	h, vaults := setup(t)
+	root := filepath.Dir(vaults)
+	host := filepath.Join(root, "code")
+	if err := os.MkdirAll(host, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(host, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := gitx.Repo{Dir: host}
+	if err := repo.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Commit("initial"); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := h.run("new-project", "Notes", "--in", host, "--tags", "work"); code != 0 {
+		t.Fatalf("new-project --in exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if out := h.out.String(); !strings.Contains(out, "created") || !strings.Contains(out, "registered") {
+		t.Fatalf("new-project --in output:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(host, "atlas", ".claude-atlas.json")); err != nil {
+		t.Fatalf("the project should sit at REPO/atlas: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(host, "atlas", ".git")); err == nil {
+		t.Fatal("the project must not have its own git repository")
+	}
+
+	if code := h.run("show", "Notes"); code != 0 || !strings.Contains(h.out.String(), "code") || !strings.Contains(h.out.String(), "this project lives in it") {
+		t.Fatalf("show exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if !strings.Contains(h.out.String(), "work") {
+		t.Fatalf("the tags reached the identity file:\n%s", h.out.String())
+	}
+	if code := h.run("repos", "Notes"); code != 0 || !strings.Contains(h.out.String(), "code") || !strings.Contains(h.out.String(), "changes: commit") {
+		t.Fatalf("repos exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if !strings.Contains(h.out.String(), "this project lives in it") {
+		t.Fatalf("repos marks the host repository too:\n%s", h.out.String())
+	}
+	if code := h.run("unlink", "Notes", "code"); code != 1 || !strings.Contains(h.err.String(), "lives in") {
+		t.Fatalf("unlink the host exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("edit-repo", "Notes", "code", "--changes", "pr"); code != 0 {
+		t.Fatalf("edit-repo exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("repos", "Notes"); code != 0 || !strings.Contains(h.out.String(), "changes: pr") {
+		t.Fatalf("repos after the edit: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("link", "Notes", host); code != 1 || !strings.Contains(h.err.String(), "lives in") {
+		t.Fatalf("link the host exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+
+	if code := h.run("new-project", "Other", "--in", host); code != 1 || !strings.Contains(h.err.String(), "already exists") {
+		t.Fatalf("a second project in the same repository: exit %d\n%s", code, h.err.String())
+	}
+	if code := h.run("new-project", filepath.Join("sub", "dir"), "--in", host); code != 2 {
+		t.Fatalf("a path-like name with --in: exit %d\n%s", code, h.err.String())
+	}
+
+	// A repository with no commits of its own takes a project the same way.
+	fresh := filepath.Join(root, "fresh")
+	if err := os.MkdirAll(fresh, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (gitx.Repo{Dir: fresh}).Init(); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("new-project", "--in", fresh); code != 0 {
+		t.Fatalf("new-project --in a fresh repository: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("show", "fresh"); code != 0 || !strings.Contains(h.out.String(), "this project lives in it") {
+		t.Fatalf("the project takes the repository's name: exit %d\n%s", code, h.out.String())
+	}
+}

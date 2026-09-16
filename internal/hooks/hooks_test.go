@@ -381,3 +381,59 @@ func TestSessionStartNamesAV1Vault(t *testing.T) {
 		t.Fatalf("silent without a vault:\n%s", out.String())
 	}
 }
+
+// TestSessionStartInsideAHostRepository covers a project that lives at REPO/atlas: a
+// session in the code finds the vault through the repository the project lives in.
+func TestSessionStartInsideAHostRepository(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	now := time.Now()
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := h.Default(filepath.Join(root, "Vaults"))
+	if err := os.MkdirAll(h.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	code := filepath.Join(root, "code")
+	src := filepath.Join(code, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := gitx.Repo{Dir: code}
+	if err := repo.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Commit("initial"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := vault.InitIn(code, vault.Options{Kind: vault.Project, Name: "Notes"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AddVault(res.Root)
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	e := env(map[string]string{home.EnvHome: h.Root})
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+src+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"this folder is the repository code of the project Notes", res.Root, SearchSentence} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+}

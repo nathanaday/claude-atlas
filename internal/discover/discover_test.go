@@ -104,3 +104,57 @@ func TestVaultThroughARepository(t *testing.T) {
 		t.Fatalf("a home with no config: %v %v %v", m, c, err)
 	}
 }
+
+// TestAFolderInsideTheHostRepositoryFindsTheProject covers a project that lives at
+// REPO/atlas: nothing links the repository, so the match comes from the folder itself.
+func TestAFolderInsideTheHostRepositoryFindsTheProject(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := h.Default(filepath.Join(root, "Vaults"))
+	if err := os.MkdirAll(h.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	code := filepath.Join(root, "code")
+	src := filepath.Join(code, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := gitx.Repo{Dir: code}
+	if err := repo.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Commit("initial"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := vault.InitIn(code, vault.Options{Kind: vault.Project, Name: "Notes"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AddVault(res.Root)
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	m, c, err := Vault(h, src)
+	if err != nil || m == nil || len(c) != 0 {
+		t.Fatalf("inside the host repository: %+v %+v %v", m, c, err)
+	}
+	if m.Project.Name != "Notes" || m.Repo.Name != "code" || m.Repo.Path != code {
+		t.Fatalf("match: %+v %+v", m.Project, m.Repo)
+	}
+	if repos, err := Repos(h, res.Root); err != nil || len(repos) != 1 || repos[0].Name != "code" {
+		t.Fatalf("repos: %+v %v", repos, err)
+	}
+}

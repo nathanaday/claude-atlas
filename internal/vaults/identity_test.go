@@ -10,6 +10,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
@@ -49,6 +50,56 @@ func fixtureEntries(t *testing.T) (*home.Config, home.Home, registry.Entry, regi
 		t.Fatalf("fixture missing entries: %+v", ix.Entries)
 	}
 	return cfg, h, project, kb
+}
+
+// initRepo makes a git repository at dir with one commit, the way a code repository a
+// project moves into looks.
+func initRepo(t *testing.T, dir string) string {
+	t.Helper()
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := gitx.Repo{Dir: dir}
+	if err := repo.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Commit("initial"); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// fixtureInRepo makes a code repository with a project at REPO/atlas and returns the
+// config, the home, the repository's path, and the project's scanned entry.
+func fixtureInRepo(t *testing.T) (*home.Config, home.Home, string, registry.Entry) {
+	t.Helper()
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults")}
+	code := initRepo(t, filepath.Join(root, "code"))
+	res, err := vault.InitIn(code, vault.Options{Kind: vault.Project, Name: "Notes"}, identityNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AddVault(res.Root)
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ix.ByPath(res.Root)
+	if e == nil || e.Error != "" {
+		t.Fatalf("the project was not scanned: %+v", e)
+	}
+	return cfg, h, code, *e
 }
 
 // refreshEntry re-scans and returns the entry named id, so a test sees what the last
@@ -485,5 +536,71 @@ func TestAddCreateCloneRemoveAndEditRepos(t *testing.T) {
 	}
 	if _, err := EditRepo(h, cfg, kb, "x", RepoEdit{}, identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
 		t.Fatalf("edit on kb: %v", err)
+	}
+}
+
+// TestTheHostRepositoryCannotBeLinkedOrRemoved covers the repository a project lives in:
+// the scan derives it, so nothing may link it again or drop it, and an edit of its change
+// policy writes the identity entry the file does not have yet.
+func TestTheHostRepositoryCannotBeLinkedOrRemoved(t *testing.T) {
+	cfg, h, code, project := fixtureInRepo(t)
+	if len(project.Repos) != 1 || project.Repos[0].Name != "code" {
+		t.Fatalf("the host repository should be listed: %+v", project.Repos)
+	}
+
+	if _, _, err := AddRepo(h, cfg, project, code, false, identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
+		t.Fatalf("link the host: %v", err)
+	}
+	if _, _, err := CreateRepo(h, cfg, project, "code", "", identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
+		t.Fatalf("create a repository named after the host: %v", err)
+	}
+	bare := filepath.Join(t.TempDir(), "code.git")
+	if out, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %s", out)
+	}
+	if _, _, err := CloneRepo(h, cfg, project, bare, "", identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
+		t.Fatalf("clone into the host's name: %v", err)
+	}
+	if err := RemoveRepo(h, cfg, project, "code", identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
+		t.Fatalf("unlink the host: %v", err)
+	}
+
+	// The identity file names the host only when something about it is recorded.
+	v, err := vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Repos) != 0 {
+		t.Fatalf("the identity file should name no repository yet: %+v", v.Config.Repos)
+	}
+	updated, err := EditRepo(h, cfg, project, "code", RepoEdit{Changes: strPtr(links.ChangesPR)}, identityNow)
+	if err != nil || updated.Name != "code" || updated.Changes != links.ChangesPR {
+		t.Fatalf("edit the host's change policy: %+v %v", updated, err)
+	}
+	v, err = vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Repos) != 1 || v.Config.Repos[0] != (vault.Repo{Name: "code", Changes: links.ChangesPR}) {
+		t.Fatalf("identity repos: %+v", v.Config.Repos)
+	}
+
+	// A second edit changes that entry; it does not add another.
+	project = refreshEntry(t, cfg, project.ID)
+	url := "git@example.com:me/code.git"
+	if _, err := EditRepo(h, cfg, project, "code", RepoEdit{Remote: &url}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	v, err = vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Repos) != 1 || v.Config.Repos[0].Remote != url || v.Config.Repos[0].Changes != links.ChangesPR {
+		t.Fatalf("identity repos after a second edit: %+v", v.Config.Repos)
+	}
+
+	// The host's folder is the repository's; there is no separate one to point at.
+	if _, err := EditRepo(h, cfg, project, "code", RepoEdit{Path: t.TempDir()}, identityNow); err == nil || !strings.Contains(err.Error(), "no separate path") {
+		t.Fatalf("edit the host's path: %v", err)
 	}
 }

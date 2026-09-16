@@ -153,6 +153,28 @@ func requireProject(e registry.Entry) error {
 	return nil
 }
 
+// hostName is the name of the repository a project lives in, or "" when the project is
+// its own repository. The scan derives it; no identity file records it.
+func hostName(e registry.Entry) string {
+	if e.Host == "" {
+		return ""
+	}
+	return filepath.Base(e.Host)
+}
+
+// isHost reports whether name is the repository the project lives in.
+func isHost(e registry.Entry, name string) bool {
+	host := hostName(e)
+	return host != "" && strings.EqualFold(links.CleanName(name), host)
+}
+
+// hostRepoError is what a caller reads when it tries to link, create, clone, or drop the
+// repository the project lives in. The project's folder sits inside it, so it is already
+// the project's first repository and nothing may add or remove it.
+func hostRepoError(name string) error {
+	return fmt.Errorf("%s is the repository this project lives in", name)
+}
+
 // hasRepo reports whether e's identity file already names a repository name.
 func hasRepo(e registry.Entry, name string) bool {
 	for _, r := range e.Repos {
@@ -181,6 +203,9 @@ func alreadyHasRepo(e registry.Entry, name string) error {
 // unique on e, and a path that sits inside the vault must sit under repos/. recordRepo
 // checks the name again against the identity file, which is the one that decides.
 func checkRepoTarget(e registry.Entry, name, path string) error {
+	if isHost(e, name) {
+		return hostRepoError(name)
+	}
 	if hasRepo(e, name) {
 		return alreadyHasRepo(e, name)
 	}
@@ -305,6 +330,9 @@ func RemoveRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, no
 	if err := requireProject(e); err != nil {
 		return err
 	}
+	if isHost(e, name) {
+		return hostRepoError(name)
+	}
 	if !hasRepo(e, name) {
 		return fmt.Errorf("%s has no repository named %q", e.Name, name)
 	}
@@ -350,6 +378,9 @@ func EditRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, edit
 	}
 	newPath := ""
 	if edit.Path != "" {
+		if isHost(e, name) {
+			return vault.Repo{}, errors.New("the repository this project lives in has no separate path")
+		}
 		abs, err := filepath.Abs(home.Expand(edit.Path))
 		if err != nil {
 			return vault.Repo{}, err
@@ -366,19 +397,32 @@ func EditRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, edit
 		}
 		newPath = abs
 	}
+	apply := func(r *vault.Repo) {
+		if edit.Remote != nil {
+			r.Remote = *edit.Remote
+		}
+		if edit.Changes != nil {
+			r.Changes = *edit.Changes
+		}
+	}
 	var updated vault.Repo
 	if err := vault.UpdateConfig(e.Path, "edit repository "+name, now, func(c *vault.Config) error {
+		found := false
 		for i := range c.Repos {
 			if c.Repos[i].Name != name {
 				continue
 			}
-			if edit.Remote != nil {
-				c.Repos[i].Remote = *edit.Remote
-			}
-			if edit.Changes != nil {
-				c.Repos[i].Changes = *edit.Changes
-			}
+			found = true
+			apply(&c.Repos[i])
 			updated = c.Repos[i]
+		}
+		// The host repository is derived, so the identity file names it only once an edit
+		// has something to record about it.
+		if !found && isHost(e, name) {
+			repo := vault.Repo{Name: name}
+			apply(&repo)
+			c.Repos = append(c.Repos, repo)
+			updated = repo
 		}
 		return nil
 	}); err != nil {

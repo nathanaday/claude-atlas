@@ -83,6 +83,10 @@ type Entry struct {
 	Grants  []Grant    `json:"grants,omitempty"`
 	Mounts  []Mount    `json:"mounts,omitempty"`
 	Repos   []Repo     `json:"repos,omitempty"`
+	// Host is the repository a project lives in, for a project at REPO/atlas; "" for a
+	// vault that is its own repository. The scan derives it from the folder, and Repos
+	// lists it first.
+	Host string `json:"host,omitempty"`
 	// MountedBy lists the projects that mount a knowledge base, with their effective access.
 	MountedBy []Ref `json:"mounted_by,omitempty"`
 	// Error is set for a vault the atlas knows but could not read: a v1 identity file, one
@@ -326,6 +330,7 @@ func buildEntry(root string, cfg vault.Config) Entry {
 		e.Grants = append(e.Grants, Grant{ID: g.ID, Name: g.Name, Access: g.Access})
 	}
 	if cfg.Kind == vault.Project {
+		e.Host = vault.HostRepo(root)
 		for _, m := range cfg.Mounts {
 			e.Mounts = append(e.Mounts, Mount{ID: m.ID, Name: m.Name, Access: m.Access})
 		}
@@ -362,6 +367,7 @@ func resolve(ix *Index, cfg *home.Config) {
 			m.Effective = Effective(m.Access, GrantedAccess(*kb, e.ID))
 			kb.MountedBy = append(kb.MountedBy, Ref{ID: e.ID, Name: e.Name, Access: m.Effective})
 		}
+		host := takeHost(e)
 		for j := range e.Repos {
 			r := &e.Repos[j]
 			dir := e.RepoDir(r.Name)
@@ -374,6 +380,9 @@ func resolve(ix *Index, cfg *home.Config) {
 				continue
 			}
 			r.Error = "no folder; link it with claude-atlas link"
+		}
+		if host != nil {
+			e.Repos = append([]Repo{*host}, e.Repos...)
 		}
 	}
 	for i := range ix.Entries {
@@ -390,6 +399,30 @@ func resolve(ix *Index, cfg *home.Config) {
 			g.Error = "no project with id " + g.ID
 		}
 	}
+}
+
+// takeHost is the repository a project lives in, pulled out of the identity list: the
+// host's folder, with the change policy and the remote an identity entry of that name
+// records for it. Nothing stores the path, so a clone answers the same way. It returns
+// nil for a project that is its own repository.
+func takeHost(e *Entry) *Repo {
+	if e.Host == "" {
+		return nil
+	}
+	host := Repo{Name: filepath.Base(e.Host), Path: e.Host, Changes: links.ChangesCommit}
+	var rest []Repo
+	for _, r := range e.Repos {
+		if strings.EqualFold(r.Name, host.Name) {
+			if r.Changes != "" {
+				host.Changes = r.Changes
+			}
+			host.Remote = r.Remote
+			continue
+		}
+		rest = append(rest, r)
+	}
+	e.Repos = rest
+	return &host
 }
 
 // GrantedAccess is what a knowledge base grants a project: open grants write to everyone;

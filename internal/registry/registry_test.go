@@ -10,6 +10,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -391,5 +392,103 @@ func TestFindAmbiguousIDPrefix(t *testing.T) {
 	}}
 	if _, err := ix.Find("abcdefgh"); !errors.Is(err, ErrAmbiguous) {
 		t.Fatalf("find ambiguous id prefix: %v", err)
+	}
+}
+
+// initRepo makes a git repository at dir with one commit, the way a code repository a
+// project moves into looks.
+func initRepo(t *testing.T, dir string) string {
+	t.Helper()
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := gitx.Repo{Dir: dir}
+	if err := repo.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Commit("initial"); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestAProjectInsideARepositoryListsItsHost proves the scan derives the host repository
+// from the folder: the project lists it first, and an identity entry of the same name
+// only lends it a change policy and a remote.
+func TestAProjectInsideARepositoryListsItsHost(t *testing.T) {
+	root := t.TempDir()
+	code := initRepo(t, filepath.Join(root, "code"))
+	res, err := vault.InitIn(code, vault.Options{Kind: vault.Project, Name: "Notes"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults"), Vaults: []string{res.Root}}
+
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ix.ByPath(res.Root)
+	if e == nil || e.Error != "" {
+		t.Fatalf("the project was not scanned: %+v", e)
+	}
+	if e.Host != code {
+		t.Fatalf("host %q, want %q", e.Host, code)
+	}
+	if len(e.Repos) != 1 {
+		t.Fatalf("repos %+v", e.Repos)
+	}
+	if e.Repos[0].Name != "code" || e.Repos[0].Path != code || e.Repos[0].Changes != links.ChangesCommit || e.Repos[0].Error != "" {
+		t.Fatalf("the host repository: %+v", e.Repos[0])
+	}
+
+	if err := vault.UpdateConfig(res.Root, "edit repository code", now, func(c *vault.Config) error {
+		c.Repos = []vault.Repo{{Name: "code", Changes: links.ChangesPR, Remote: "git@example.com:me/code.git"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ix, err = Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e = ix.ByPath(res.Root)
+	if e == nil || len(e.Repos) != 1 {
+		t.Fatalf("the identity entry must not add a second repository: %+v", e)
+	}
+	if e.Repos[0].Changes != links.ChangesPR || e.Repos[0].Remote != "git@example.com:me/code.git" || e.Repos[0].Path != code {
+		t.Fatalf("the host repository after the edit: %+v", e.Repos[0])
+	}
+
+	// A project that is its own repository has no host and lists only what it records.
+	plain := filepath.Join(cfg.VaultsDir, "projects", "cs566")
+	if _, err := vault.Init(plain, vault.Options{Kind: vault.Project, Name: "cs566"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.UpdateConfig(plain, "add repository hw", now, func(c *vault.Config) error {
+		c.Repos = []vault.Repo{{Name: "hw"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ix, err = Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	standalone := ix.ByPath(plain)
+	if standalone == nil || standalone.Host != "" {
+		t.Fatalf("a standalone project has no host: %+v", standalone)
+	}
+	if len(standalone.Repos) != 1 || standalone.Repos[0].Name != "hw" || standalone.Repos[0].Error == "" {
+		t.Fatalf("a standalone project's repositories are unchanged: %+v", standalone.Repos)
 	}
 }

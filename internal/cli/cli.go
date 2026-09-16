@@ -47,6 +47,7 @@ Usage:
 Vaults:
   setup                     install the plugin and create your first project
   new-project NAME|PATH     create a project: tasks, questions, notes, repositories
+                            --in REPO puts it inside a code repository, at REPO/atlas
   new-knowledge NAME|PATH   create a knowledge base: sources, entities, concepts
   adopt [PATH]              make an existing Obsidian or claude-obsidian vault one of these
   open-vault [NAME|PATH]    open a vault in Obsidian; with no name, the one you are in
@@ -444,13 +445,14 @@ func (e *env) newProject(args []string) (int, error) {
 	fs := newFlags("new-project", e.stderr)
 	name := fs.String("name", "", "display name (default: the folder's name)")
 	tags := fs.String("tags", "", "comma-separated tags, e.g. usc,fall")
+	in := fs.String("in", "", "create the project inside this git repository, at REPO/atlas/")
 	mode := modeFlag(fs)
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) > 1 {
-		return 2, errors.New("usage: claude-atlas new-project NAME|PATH [--name N] [--tags a,b] [--mode generic|lyt]")
+		return 2, errors.New("usage: claude-atlas new-project NAME|PATH [--name N] [--tags a,b] [--mode generic|lyt] [--in REPO]")
 	}
 	opts := vault.Options{Kind: vault.Project, Name: *name}
 	if *mode != "" {
@@ -461,6 +463,17 @@ func (e *env) newProject(args []string) (int, error) {
 	var edit vaults.Edit
 	if list := splitTags(*tags); len(list) > 0 {
 		edit.Tags = &list
+	}
+	if *in != "" {
+		// With --in the folder is REPO/atlas, so the positional is the project's name.
+		// With none, the project takes the repository's name.
+		if len(positional) == 1 {
+			if strings.ContainsAny(positional[0], `/\`) {
+				return 2, errors.New("with --in, NAME is the project's name; the folder is REPO/atlas")
+			}
+			opts.Name = positional[0]
+		}
+		return e.createVaultIn(*in, opts, edit)
 	}
 	if len(positional) == 0 {
 		if !e.console.Interactive() {
@@ -524,6 +537,23 @@ func (e *env) createVault(arg string, opts vault.Options, edit vaults.Edit) (int
 		return 1, err
 	}
 	if _, err := vaults.Create(path, opts, e.console, true); err != nil {
+		return 1, err
+	}
+	if err := vaults.EditIdentity(registry.Entry{Path: path, Kind: opts.Kind}, edit, time.Now()); err != nil {
+		return 1, err
+	}
+	return e.finishVault(cfg, path)
+}
+
+// createVaultIn makes a project inside the git repository at repoRoot, at REPO/atlas, and
+// finishes it the way createVault does.
+func (e *env) createVaultIn(repoRoot string, opts vault.Options, edit vaults.Edit) (int, error) {
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	path, err := vaults.CreateIn(repoRoot, opts, e.console)
+	if err != nil {
 		return 1, err
 	}
 	if err := vaults.EditIdentity(registry.Entry{Path: path, Kind: opts.Kind}, edit, time.Now()); err != nil {
@@ -1317,7 +1347,7 @@ func (e *env) show(args []string) (int, error) {
 		row("Mount", mountLine(entry, m))
 	}
 	for _, r := range entry.Repos {
-		row("Repo", repoLine(r))
+		row("Repo", repoLine(entry, r))
 	}
 	state := entry.State
 	if state == nil {
@@ -1381,8 +1411,9 @@ func mountLine(project registry.Entry, m registry.Mount) string {
 // kbPath is the folder a project reaches a mount through, as the user sees it.
 func kbPath(name string) string { return vault.KbDir + "/" + name }
 
-// repoLine renders one repository: its name, its folder, how changes land, its remote.
-func repoLine(r registry.Repo) string {
+// repoLine renders one repository: its name, its folder, how changes land, its remote,
+// and, for the repository the project lives in, that it is the host.
+func repoLine(e registry.Entry, r registry.Repo) string {
 	where := home.Display(r.Path)
 	if r.Path == "" {
 		where = r.Error
@@ -1390,6 +1421,9 @@ func repoLine(r registry.Repo) string {
 	line := fmt.Sprintf("%-20s %s  changes: %s", r.Name, where, links.Policy(r.Changes, r.Remote))
 	if r.Remote != "" {
 		line += " · remote " + r.Remote
+	}
+	if e.Host != "" && r.Path == e.Host {
+		line += "  (this project lives in it)"
 	}
 	return line
 }
@@ -1840,7 +1874,7 @@ func (e *env) repos(args []string) (int, error) {
 			return 0, nil
 		}
 		for _, r := range entry.Repos {
-			c.Say("  %s", repoLine(r))
+			c.Say("  %s", repoLine(entry, r))
 		}
 		return 0, nil
 	}
@@ -1851,7 +1885,7 @@ func (e *env) repos(args []string) (int, error) {
 		}
 		c.Say("%s", p.Name)
 		for _, r := range p.Repos {
-			c.Say("  %s", repoLine(r))
+			c.Say("  %s", repoLine(p, r))
 			shown++
 		}
 	}
