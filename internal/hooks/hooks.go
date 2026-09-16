@@ -102,7 +102,7 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 		}
 	}
 	if match != nil && match.Project.Path == v.Root {
-		policy = fmt.Sprintf("This folder is the repository %s. In it, %s. The repos tool says the same.", match.Repo.Name, links.PolicyText(links.Policy(match.Repo.Changes, match.Repo.Remote)))
+		policy = policyLine(match.Project, match.Repo)
 	}
 	switch env("CLAUDE_ATLAS_SESSION_CONTEXT") {
 	case "0":
@@ -160,6 +160,17 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	}
 	_, err = io.WriteString(w, b.String())
 	return err
+}
+
+// policyLine tells a session how changes land in the repository it sits in. The vault of
+// a project that lives at REPO/atlas is itself inside that repository, so the line names
+// the project there, not the folder.
+func policyLine(project registry.Entry, repo registry.Repo) string {
+	text := links.PolicyText(links.Policy(repo.Changes, repo.Remote))
+	if project.Host != "" && repo.Path == project.Host {
+		return fmt.Sprintf("This project lives in the repository %s. In it, %s. The repos tool says the same.", repo.Name, text)
+	}
+	return fmt.Sprintf("This folder is the repository %s. In it, %s. The repos tool says the same.", repo.Name, text)
 }
 
 // knowledgeBaseLine names a knowledge base's own access and the projects that mount it.

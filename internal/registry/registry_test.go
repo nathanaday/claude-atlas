@@ -492,3 +492,33 @@ func TestAProjectInsideARepositoryListsItsHost(t *testing.T) {
 		t.Fatalf("a standalone project's repositories are unchanged: %+v", standalone.Repos)
 	}
 }
+
+// TestTheHostsNameIsCleanedLikeALinkedOne holds the host's name to the rule every linked
+// repository's name follows: a folder whose name carries a character Obsidian refuses
+// takes the cleaned name, so nothing can name the same folder twice.
+func TestTheHostsNameIsCleanedLikeALinkedOne(t *testing.T) {
+	root := t.TempDir()
+	code := initRepo(t, filepath.Join(root, "code#1"))
+	res, err := vault.InitIn(code, vault.Options{Kind: vault.Project, Name: "Notes"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults"), Vaults: []string{res.Root}}
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ix.ByPath(res.Root)
+	if e == nil || len(e.Repos) != 1 {
+		t.Fatalf("the project was not scanned: %+v", e)
+	}
+	if e.Repos[0].Name != "code-1" || e.Repos[0].Path != code {
+		t.Fatalf("the host repository: %+v", e.Repos[0])
+	}
+	if got := HostName(code); got != "code-1" {
+		t.Fatalf("HostName %q", got)
+	}
+	if got := HostName(filepath.Join(root, "...")); got != "..." {
+		t.Fatalf("a name cleaning leaves nothing of stands: %q", got)
+	}
+}

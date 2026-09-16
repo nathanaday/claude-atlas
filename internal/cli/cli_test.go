@@ -907,6 +907,9 @@ func TestNewProjectInARepository(t *testing.T) {
 	if code := h.run("new-project", filepath.Join("sub", "dir"), "--in", host); code != 2 {
 		t.Fatalf("a path-like name with --in: exit %d\n%s", code, h.err.String())
 	}
+	if code := h.run("new-project", "Other", "--in", host, "--name", "Another"); code != 2 || !strings.Contains(h.err.String(), "give the name once") {
+		t.Fatalf("NAME and --name together: exit %d\n%s", code, h.err.String())
+	}
 
 	// A repository with no commits of its own takes a project the same way.
 	fresh := filepath.Join(root, "fresh")
@@ -921,5 +924,20 @@ func TestNewProjectInARepository(t *testing.T) {
 	}
 	if code := h.run("show", "fresh"); code != 0 || !strings.Contains(h.out.String(), "this project lives in it") {
 		t.Fatalf("the project takes the repository's name: exit %d\n%s", code, h.out.String())
+	}
+
+	// With no positional, --name is the project's name.
+	named := filepath.Join(root, "named")
+	if err := os.MkdirAll(named, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (gitx.Repo{Dir: named}).Init(); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("new-project", "--in", named, "--name", "Named Notes"); code != 0 {
+		t.Fatalf("new-project --in --name: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("show", "Named Notes"); code != 0 {
+		t.Fatalf("show the named project: exit %d\n%s", code, h.err.String())
 	}
 }

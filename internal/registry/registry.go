@@ -409,7 +409,7 @@ func takeHost(e *Entry) *Repo {
 	if e.Host == "" {
 		return nil
 	}
-	host := Repo{Name: filepath.Base(e.Host), Path: e.Host, Changes: links.ChangesCommit}
+	host := Repo{Name: HostName(e.Host), Path: e.Host, Changes: links.ChangesCommit}
 	var rest []Repo
 	for _, r := range e.Repos {
 		if strings.EqualFold(r.Name, host.Name) {
@@ -423,6 +423,17 @@ func takeHost(e *Entry) *Repo {
 	}
 	e.Repos = rest
 	return &host
+}
+
+// HostName is the repository name a host folder takes: the folder's name, cleaned the
+// way a linked repository's name is, so a name that carries a character Obsidian refuses
+// cannot name the same folder twice. The raw name stands when cleaning leaves nothing.
+func HostName(host string) string {
+	base := filepath.Base(host)
+	if name := links.CleanName(base); name != "" {
+		return name
+	}
+	return base
 }
 
 // GrantedAccess is what a knowledge base grants a project: open grants write to everyone;

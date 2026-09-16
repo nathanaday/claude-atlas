@@ -159,13 +159,17 @@ func hostName(e registry.Entry) string {
 	if e.Host == "" {
 		return ""
 	}
-	return filepath.Base(e.Host)
+	return registry.HostName(e.Host)
 }
 
-// isHost reports whether name is the repository the project lives in.
+// isHost reports whether name is the repository the project lives in: the name the scan
+// derives, or the folder's own name before it was cleaned.
 func isHost(e registry.Entry, name string) bool {
 	host := hostName(e)
-	return host != "" && strings.EqualFold(links.CleanName(name), host)
+	if host == "" {
+		return false
+	}
+	return strings.EqualFold(name, host) || strings.EqualFold(links.CleanName(name), host)
 }
 
 // hostRepoError is what a caller reads when it tries to link, create, clone, or drop the
@@ -370,6 +374,11 @@ func EditRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, edit
 	if err := requireProject(e); err != nil {
 		return vault.Repo{}, err
 	}
+	// The host's name is derived, so an edit of it takes the name the scan derived,
+	// whatever the caller typed; the identity entry must fold back into that row.
+	if isHost(e, name) {
+		name = hostName(e)
+	}
 	if !hasRepo(e, name) {
 		return vault.Repo{}, fmt.Errorf("%s has no repository named %q", e.Name, name)
 	}
@@ -421,8 +430,10 @@ func EditRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, edit
 		if !found && isHost(e, name) {
 			repo := vault.Repo{Name: name}
 			apply(&repo)
-			c.Repos = append(c.Repos, repo)
 			updated = repo
+			if repo != (vault.Repo{Name: name}) {
+				c.Repos = append(c.Repos, repo)
+			}
 		}
 		return nil
 	}); err != nil {

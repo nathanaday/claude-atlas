@@ -436,4 +436,18 @@ func TestSessionStartInsideAHostRepository(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
+
+	// In the vault itself the nearest identity file wins, and the host still matches.
+	// The folder there is the vault, not the repository, so the policy line says so.
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+res.Root+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	text = out.String()
+	if !strings.Contains(text, "This project lives in the repository code. In it, changes land as commits on the current branch.") {
+		t.Errorf("the policy line in the vault:\n%s", text)
+	}
+	if strings.Contains(text, "This folder is the repository") {
+		t.Errorf("the vault folder is not the repository:\n%s", text)
+	}
 }

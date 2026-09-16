@@ -78,14 +78,15 @@ func initRepo(t *testing.T, dir string) string {
 	return dir
 }
 
-// fixtureInRepo makes a code repository with a project at REPO/atlas and returns the
-// config, the home, the repository's path, and the project's scanned entry.
-func fixtureInRepo(t *testing.T) (*home.Config, home.Home, string, registry.Entry) {
+// fixtureInRepo makes a code repository of that folder name with a project at REPO/atlas
+// and returns the config, the home, the repository's path, and the project's scanned
+// entry.
+func fixtureInRepo(t *testing.T, folder string) (*home.Config, home.Home, string, registry.Entry) {
 	t.Helper()
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
 	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults")}
-	code := initRepo(t, filepath.Join(root, "code"))
+	code := initRepo(t, filepath.Join(root, folder))
 	res, err := vault.InitIn(code, vault.Options{Kind: vault.Project, Name: "Notes"}, identityNow)
 	if err != nil {
 		t.Fatal(err)
@@ -543,7 +544,7 @@ func TestAddCreateCloneRemoveAndEditRepos(t *testing.T) {
 // the scan derives it, so nothing may link it again or drop it, and an edit of its change
 // policy writes the identity entry the file does not have yet.
 func TestTheHostRepositoryCannotBeLinkedOrRemoved(t *testing.T) {
-	cfg, h, code, project := fixtureInRepo(t)
+	cfg, h, code, project := fixtureInRepo(t, "code")
 	if len(project.Repos) != 1 || project.Repos[0].Name != "code" {
 		t.Fatalf("the host repository should be listed: %+v", project.Repos)
 	}
@@ -565,13 +566,20 @@ func TestTheHostRepositoryCannotBeLinkedOrRemoved(t *testing.T) {
 		t.Fatalf("unlink the host: %v", err)
 	}
 
-	// The identity file names the host only when something about it is recorded.
+	// The identity file names the host only when something about it is recorded, so an
+	// edit that records nothing writes no entry and makes no commit.
+	if _, err := EditRepo(h, cfg, project, "code", RepoEdit{Remote: strPtr("")}, identityNow); err != nil {
+		t.Fatal(err)
+	}
 	v, err := vault.Open(project.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(v.Config.Repos) != 0 {
 		t.Fatalf("the identity file should name no repository yet: %+v", v.Config.Repos)
+	}
+	if subject := lastCommitSubject(t, project.Path); !strings.Contains(subject, "initialize") {
+		t.Fatalf("an edit that records nothing commits: %q", subject)
 	}
 	updated, err := EditRepo(h, cfg, project, "code", RepoEdit{Changes: strPtr(links.ChangesPR)}, identityNow)
 	if err != nil || updated.Name != "code" || updated.Changes != links.ChangesPR {
@@ -602,5 +610,38 @@ func TestTheHostRepositoryCannotBeLinkedOrRemoved(t *testing.T) {
 	// The host's folder is the repository's; there is no separate one to point at.
 	if _, err := EditRepo(h, cfg, project, "code", RepoEdit{Path: t.TempDir()}, identityNow); err == nil || !strings.Contains(err.Error(), "no separate path") {
 		t.Fatalf("edit the host's path: %v", err)
+	}
+}
+
+// TestAHostNameIsCleanedBeforeItIsCompared covers a repository folder whose name
+// CleanName rewrites: without cleaning, a link of the same folder takes another name and
+// the project ends up with two rows for one folder.
+func TestAHostNameIsCleanedBeforeItIsCompared(t *testing.T) {
+	cfg, h, code, project := fixtureInRepo(t, "code#1")
+	if len(project.Repos) != 1 || project.Repos[0].Name != "code-1" || project.Repos[0].Path != code {
+		t.Fatalf("the host repository: %+v", project.Repos)
+	}
+	if _, _, err := AddRepo(h, cfg, project, code, false, identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
+		t.Fatalf("link the host folder: %v", err)
+	}
+	if err := RemoveRepo(h, cfg, project, "code-1", identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
+		t.Fatalf("unlink the host by its cleaned name: %v", err)
+	}
+
+	// An edit takes the derived name, whatever the caller typed, so the entry folds back
+	// into the host's row instead of adding a second one.
+	if _, err := EditRepo(h, cfg, project, "code#1", RepoEdit{Changes: strPtr(links.ChangesPR)}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Repos) != 1 || v.Config.Repos[0].Name != "code-1" {
+		t.Fatalf("identity repos: %+v", v.Config.Repos)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+	if len(project.Repos) != 1 || project.Repos[0].Changes != links.ChangesPR || project.Repos[0].Path != code {
+		t.Fatalf("one row after the edit: %+v", project.Repos)
 	}
 }

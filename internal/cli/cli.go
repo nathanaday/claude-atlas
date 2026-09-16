@@ -466,10 +466,13 @@ func (e *env) newProject(args []string) (int, error) {
 	}
 	if *in != "" {
 		// With --in the folder is REPO/atlas, so the positional is the project's name.
-		// With none, the project takes the repository's name.
+		// With no positional and no --name, the project takes the repository's name.
 		if len(positional) == 1 {
 			if strings.ContainsAny(positional[0], `/\`) {
 				return 2, errors.New("with --in, NAME is the project's name; the folder is REPO/atlas")
+			}
+			if *name != "" && *name != positional[0] {
+				return 2, errors.New("give the name once: as NAME or as --name, not both")
 			}
 			opts.Name = positional[0]
 		}

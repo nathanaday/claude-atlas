@@ -51,14 +51,14 @@ func CreateIn(repoRoot string, opts vault.Options, c *console.Console) (string, 
 	if err != nil {
 		return "", err
 	}
+	path := filepath.Join(host, vault.InRepoDir)
+	if err := CheckNewPath(path); err != nil {
+		return "", err
+	}
 	// InitIn refuses a folder that is not a repository too; here the refusal comes before
 	// the preview, so nothing describes a project the repository cannot hold.
 	if !links.IsRepo(host) {
 		return "", fmt.Errorf("%s is not the top level of a git repository", home.Display(host))
-	}
-	path := filepath.Join(host, vault.InRepoDir)
-	if err := CheckNewPath(path); err != nil {
-		return "", err
 	}
 	if opts.Mode == "" {
 		opts.Mode = vault.Generic
