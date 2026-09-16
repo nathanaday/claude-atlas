@@ -127,9 +127,29 @@ func (r Repo) InsideOtherRepo() bool {
 	return !r.IsRepo() && strings.TrimSpace(out) != ""
 }
 
-// HasHead reports whether at least one commit exists.
-func (r Repo) HasHead() bool {
+// hasCommit reports whether the repository holds any commit at all.
+func (r Repo) hasCommit() bool {
 	_, err := r.run("rev-parse", "--verify", "-q", "HEAD")
+	return err == nil
+}
+
+// HasHead reports whether there is history to work with. With a prefix, only a commit that
+// touched it counts: a repository whose commits never reached the prefix has none there.
+func (r Repo) HasHead() bool {
+	if !r.hasCommit() {
+		return false
+	}
+	if r.Prefix == "" {
+		return true
+	}
+	commits, err := r.Log(1)
+	return err == nil && len(commits) > 0
+}
+
+// Ignored reports whether the repository's ignore rules cover path. A directory needs a
+// trailing slash, because a rule that ends in one matches directories only.
+func (r Repo) Ignored(path string) bool {
+	_, err := r.run("check-ignore", "-q", "--", r.in(path))
 	return err == nil
 }
 
@@ -256,7 +276,7 @@ type Commit struct {
 
 // Log returns the newest n commits, or all of them when n is 0.
 func (r Repo) Log(n int) ([]Commit, error) {
-	if !r.HasHead() {
+	if !r.hasCommit() {
 		return nil, nil
 	}
 	args := []string{"log", "--format=%H%x00%aI%x00%s%x00%b%x1e"}
@@ -292,7 +312,7 @@ func parseLog(out string) []Commit {
 
 // LogFollow lists the commits that touched one path, newest first, across renames.
 func (r Repo) LogFollow(path string) ([]Commit, error) {
-	if !r.HasHead() {
+	if !r.hasCommit() {
 		return nil, nil
 	}
 	out, err := r.run("log", "--follow", "--format=%H%x00%aI%x00%s%x00%b%x1e", "--", r.in(path))
@@ -320,13 +340,25 @@ func trailers(body string) map[string]string {
 }
 
 // RevertNoCommit applies the inverse of sha to the index and tree without committing.
-// A conflict aborts the revert and returns an error.
+// A conflict undoes the attempt and returns an error.
 func (r Repo) RevertNoCommit(sha string) error {
 	if _, err := r.run("revert", "--no-commit", sha); err != nil {
-		r.run("revert", "--abort")
+		r.undoRevert()
 		return err
 	}
 	return nil
+}
+
+// undoRevert puts the tree back after a revert failed. With a prefix it restores only the
+// files under it and then drops the sequencer state, because `git revert --abort` takes no
+// pathspec: it would reset the whole tree and throw away work the user staged outside.
+func (r Repo) undoRevert() {
+	if r.Prefix == "" {
+		r.run("revert", "--abort")
+		return
+	}
+	r.run("checkout", "HEAD", "--", r.Prefix)
+	r.run("revert", "--quit")
 }
 
 // ShowFile returns the content of path at rev.

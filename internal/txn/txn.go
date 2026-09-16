@@ -650,7 +650,7 @@ func requireHistory(repo gitx.Repo) error {
 	return nil
 }
 
-// commitManualEdits records whatever changed outside atlas so the tree is clean.
+// commitManualEdits records whatever changed in the vault by hand so the tree is clean.
 func commitManualEdits(repo gitx.Repo, now time.Time) (string, error) {
 	entries, err := repo.Status()
 	if err != nil {
@@ -667,7 +667,7 @@ func commitManualEdits(repo gitx.Repo, now time.Time) (string, error) {
 	if len(entries) != 1 {
 		noun = "files"
 	}
-	return repo.Commit(vault.CommitMessage("manual", fmt.Sprintf("%d %s changed outside atlas", len(entries), noun), id))
+	return repo.Commit(vault.CommitMessage("manual", fmt.Sprintf("%d %s changed by hand", len(entries), noun), id))
 }
 
 // Apply writes the plan as one commit. The plan is consumed whether or not it succeeds.

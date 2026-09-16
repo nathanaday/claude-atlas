@@ -211,6 +211,94 @@ func TestPrefixScopesEveryCommand(t *testing.T) {
 	}
 }
 
+func TestHasHeadIsScopedToThePrefix(t *testing.T) {
+	whole := repo(t)
+	scoped := Repo{Dir: whole.Dir, Prefix: "atlas/"}
+	if whole.HasHead() || scoped.HasHead() {
+		t.Fatal("a repository without a commit has no history")
+	}
+	write(t, whole, "src/main.go", "package main\n")
+	if err := whole.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := whole.Commit("code"); err != nil {
+		t.Fatal(err)
+	}
+	if !whole.HasHead() {
+		t.Fatal("the repository has a commit")
+	}
+	if scoped.HasHead() {
+		t.Fatal("no commit touched atlas/, so the vault has no history there")
+	}
+	write(t, whole, "atlas/wiki/index.md", "# index\n")
+	if err := scoped.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scoped.Commit("vault"); err != nil {
+		t.Fatal(err)
+	}
+	if !scoped.HasHead() {
+		t.Fatal("a commit touched atlas/")
+	}
+}
+
+func TestIgnoredReadsTheIgnoreRules(t *testing.T) {
+	r := repo(t)
+	write(t, r, ".gitignore", "build/\n")
+	if !r.Ignored("build/") || r.Ignored("atlas/") {
+		t.Fatal("Ignored answers from the ignore rules")
+	}
+	scoped := Repo{Dir: r.Dir, Prefix: "build/"}
+	if !scoped.Ignored("out.txt") {
+		t.Fatal("Ignored takes a path under the prefix")
+	}
+}
+
+func TestRevertNoCommitCleansUpOnlyThePrefix(t *testing.T) {
+	whole := repo(t)
+	write(t, whole, "main.go", "package main\n")
+	write(t, whole, "atlas/A.md", "one\n")
+	if err := whole.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := whole.Commit("base"); err != nil {
+		t.Fatal(err)
+	}
+	scoped := Repo{Dir: whole.Dir, Prefix: "atlas/"}
+	write(t, whole, "atlas/A.md", "two\n")
+	scoped.AddAll()
+	target, err := scoped.Commit("two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, whole, "atlas/A.md", "three\n")
+	scoped.AddAll()
+	if _, err := scoped.Commit("three"); err != nil {
+		t.Fatal(err)
+	}
+	// Work the user staged outside the vault, which the cleanup must not touch.
+	write(t, whole, "other.go", "package main // staged\n")
+	if err := whole.Add("other.go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := scoped.RevertNoCommit(target); err == nil {
+		t.Fatal("reverting an overtaken commit conflicts")
+	}
+	staged, err := whole.ShowFile("", "other.go")
+	if err != nil || string(staged) != "package main // staged\n" {
+		t.Fatalf("the staged file must survive: %q %v", staged, err)
+	}
+	if dirty, _ := scoped.Dirty(); dirty {
+		t.Fatal("the vault must be back at HEAD")
+	}
+	if _, err := os.Stat(filepath.Join(whole.Dir, ".git", "REVERT_HEAD")); err == nil {
+		t.Fatal("the revert must leave no state behind")
+	}
+	if data, _ := os.ReadFile(filepath.Join(whole.Dir, "atlas/A.md")); string(data) != "three\n" {
+		t.Fatalf("A.md %q", data)
+	}
+}
+
 func TestNestedRepoIsNotARepo(t *testing.T) {
 	r := repo(t)
 	inner := Repo{Dir: filepath.Join(r.Dir, "vault")}

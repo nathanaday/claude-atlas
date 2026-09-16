@@ -181,13 +181,17 @@ func (v *Vault) Name() string { return v.Config.Name }
 // Path joins a vault-relative path onto the root.
 func (v *Vault) Path(rel string) string { return filepath.Join(v.Root, filepath.FromSlash(rel)) }
 
-// Repo is the vault's git repository: the vault itself, or the host repository scoped to
-// the vault's folder.
-func (v *Vault) Repo() gitx.Repo {
-	if host := HostRepo(v.Root); host != "" {
+// Repo is the vault's git repository.
+func (v *Vault) Repo() gitx.Repo { return RepoAt(v.Root) }
+
+// RepoAt is the git repository of the vault at root: the vault itself, or the repository
+// that holds it, scoped to the vault's folder. Every vault command in this package goes
+// through it, so none can miss the prefix.
+func RepoAt(root string) gitx.Repo {
+	if host := HostRepo(root); host != "" {
 		return gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
 	}
-	return gitx.Repo{Dir: v.Root}
+	return gitx.Repo{Dir: root}
 }
 
 // HostRepo is the working tree that holds a vault inside a repository: root is named
@@ -519,12 +523,17 @@ func InitIn(repoRoot string, opts Options, now time.Time) (*InitResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !(gitx.Repo{Dir: host}).IsRepo() {
+	whole := gitx.Repo{Dir: host}
+	if !whole.IsRepo() {
 		return nil, fmt.Errorf("%s is not the top level of a git repository", host)
 	}
 	if opts.Kind != Project {
 		return nil, errors.New("only a project lives inside a repository")
 	}
+	if whole.Ignored(InRepoDir + "/") {
+		return nil, fmt.Errorf("%s ignores %s/; remove that rule from .gitignore first", host, InRepoDir)
+	}
+	repo := gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
 	if strings.TrimSpace(opts.Name) == "" {
 		opts.Name = filepath.Base(host)
 	}
@@ -543,7 +552,6 @@ func InitIn(repoRoot string, opts Options, now time.Time) (*InitResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	repo := gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
 	if err := repo.AddAll(); err != nil {
 		return nil, err
 	}
@@ -948,7 +956,7 @@ func Ignore(root, pattern string, now time.Time) (bool, error) {
 	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
 		return false, err
 	}
-	repo := gitx.Repo{Dir: root}
+	repo := RepoAt(root)
 	if !repo.IsRepo() {
 		return true, nil
 	}
@@ -1179,12 +1187,13 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 		return nil, err
 	}
 	res.Kind = cfg.Kind
-	var repo gitx.Repo
-	if host := HostRepo(abs); host != "" {
-		// A vault inside a repository: that repository holds its history.
-		repo = gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
+	repo := RepoAt(abs)
+	if repo.Prefix != "" {
+		// The repository that holds the vault holds its history too.
+		if cfg.Kind != Project {
+			return nil, fmt.Errorf("%s: only a project lives inside a repository", abs)
+		}
 	} else {
-		repo = gitx.Repo{Dir: abs}
 		if repo.InsideOtherRepo() {
 			return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
 		}

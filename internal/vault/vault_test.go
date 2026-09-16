@@ -138,6 +138,16 @@ func TestInitInRefusals(t *testing.T) {
 	if HostRepo(filepath.Join(t.TempDir(), "atlas")) != "" {
 		t.Fatal("a folder named atlas outside a repository is not inside one")
 	}
+	ignoring := filepath.Join(t.TempDir(), "ignoring")
+	os.MkdirAll(ignoring, 0o755)
+	gitx.Repo{Dir: ignoring}.Init()
+	os.WriteFile(filepath.Join(ignoring, ".gitignore"), []byte("atlas/\n"), 0o644)
+	if _, err := InitIn(ignoring, Options{Kind: Project}, now); err == nil || !strings.Contains(err.Error(), "ignores atlas/") {
+		t.Fatalf("an ignored folder: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ignoring, InRepoDir)); err == nil {
+		t.Fatal("a refusal must write nothing")
+	}
 }
 
 func TestIdentityFile(t *testing.T) {
@@ -504,6 +514,13 @@ func TestAdoptAcceptsAClonedProjectInsideARepository(t *testing.T) {
 	v, _ := Open(root)
 	if v.Repo().Dir != clone || v.Name() != "Notes" {
 		t.Fatalf("%+v", v.Repo())
+	}
+	// Only a project lives inside a repository, whatever the caller asks for.
+	other := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(filepath.Join(other, InRepoDir, WikiDir), 0o755)
+	gitx.Repo{Dir: other}.Init()
+	if _, err := Adopt(filepath.Join(other, InRepoDir), Options{Kind: Knowledge}, now); err == nil || !strings.Contains(err.Error(), "only a project lives inside a repository") {
+		t.Fatalf("a knowledge base inside a repository: %v", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -194,7 +195,7 @@ func TestApplyCommitsManualEditsFirstAndDetectsConflicts(t *testing.T) {
 		t.Fatal("hand edits should be committed first")
 	}
 	ops, _ := History(v, 3, false)
-	if ops[1].Kind != "manual" || !strings.Contains(ops[1].Summary, "1 file changed outside atlas") {
+	if ops[1].Kind != "manual" || !strings.Contains(ops[1].Summary, "1 file changed by hand") {
 		t.Fatalf("history %+v", ops)
 	}
 	if !strings.Contains(read(t, v, vault.HotPage), "hand edit") {
@@ -280,15 +281,22 @@ func TestUndoRevertsAnOperation(t *testing.T) {
 	}
 }
 
-func TestAnOperationInsideARepositoryCommitsOnlyTheVault(t *testing.T) {
+// inRepoVault makes a project at REPO/atlas inside a repository that already holds code.
+// It returns the vault and the whole repository, which the tests use to watch the code.
+func inRepoVault(t *testing.T) (*vault.Vault, gitx.Repo) {
+	t.Helper()
 	needGit(t)
 	repoRoot := filepath.Join(t.TempDir(), "code")
 	os.MkdirAll(repoRoot, 0o755)
 	host := gitx.Repo{Dir: repoRoot}
-	host.Init()
+	if err := host.Init(); err != nil {
+		t.Fatal(err)
+	}
 	os.WriteFile(filepath.Join(repoRoot, "main.go"), []byte("package main\n"), 0o644)
 	host.AddAll()
-	host.Commit("code")
+	if _, err := host.Commit("code"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := vault.InitIn(repoRoot, vault.Options{Kind: vault.Project, Name: "Notes"}, now); err != nil {
 		t.Fatal(err)
 	}
@@ -296,8 +304,39 @@ func TestAnOperationInsideARepositoryCommitsOnlyTheVault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Half-written code outside the vault, and a hand edit inside it.
+	return v, host
+}
+
+// outsideTheVault lists the whole repository's changes as "<code> <path>", sorted.
+func outsideTheVault(host gitx.Repo) string {
+	entries, _ := host.Status()
+	var out []string
+	for _, e := range entries {
+		out = append(out, e.Code+" "+e.Path)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
+}
+
+// staged is a path's content in the index: an empty revision makes `git show :path`.
+func staged(t *testing.T, host gitx.Repo, path string) string {
+	t.Helper()
+	data, err := host.ShowFile("", path)
+	if err != nil {
+		t.Fatalf("index %s: %v", path, err)
+	}
+	return string(data)
+}
+
+func TestAnOperationInsideARepositoryCommitsOnlyTheVault(t *testing.T) {
+	v, host := inRepoVault(t)
+	repoRoot := host.Dir
+	// Half-written code outside the vault, staged code next to it, and a hand edit inside.
 	os.WriteFile(filepath.Join(repoRoot, "main.go"), []byte("package main // half\n"), 0o644)
+	os.WriteFile(filepath.Join(repoRoot, "other.go"), []byte("package main // staged\n"), 0o644)
+	if err := host.Add("other.go"); err != nil {
+		t.Fatal(err)
+	}
 	os.WriteFile(v.Path("wiki/hot.md"), []byte("# hot\n\nby hand\n"), 0o644)
 	page := "---\ntype: concept\ntitle: A\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# A\n\ntext\n"
 	plan, err := Prepare(v, Request{Kind: Save, Summary: "add A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: []byte(page)}}}, now)
@@ -322,8 +361,11 @@ func TestAnOperationInsideARepositoryCommitsOnlyTheVault(t *testing.T) {
 	if res.ManualCommit == "" {
 		t.Fatal("the hand edit must be committed first")
 	}
-	if st, _ := host.Status(); len(st) != 1 || st[0].Path != "main.go" {
-		t.Fatalf("main.go must stay as it was: %+v", st)
+	if outside := outsideTheVault(host); outside != " M main.go,A  other.go" {
+		t.Fatalf("the code must stay as it was: %q", outside)
+	}
+	if staged(t, host, "other.go") != "package main // staged\n" {
+		t.Fatal("the staged file must keep its staged content")
 	}
 	ops, err := History(v, 0, false)
 	if err != nil {
@@ -340,6 +382,56 @@ func TestAnOperationInsideARepositoryCommitsOnlyTheVault(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(repoRoot, "main.go")); string(data) != "package main // half\n" {
 		t.Fatalf("undo touched the code: %q", data)
+	}
+	if staged(t, host, "other.go") != "package main // staged\n" {
+		t.Fatal("undo must leave the staged file alone")
+	}
+}
+
+func TestAConflictingUndoInsideARepositoryLeavesTheCodeAlone(t *testing.T) {
+	v, host := inRepoVault(t)
+	first, err := Prepare(v, Request{Kind: Save, Summary: "add A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: mkpage("A", "# A\n\none\n")}}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := Apply(v, first, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A later operation overtakes the page, so undoing the first one conflicts.
+	second, err := Prepare(v, Request{Kind: Markdown, Summary: "edit A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Replace, Content: mkpage("A", "# A\n\ntwo\n")}}}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(v, second, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	// Code the user staged, and code they are still writing.
+	os.WriteFile(filepath.Join(host.Dir, "other.go"), []byte("package main // staged\n"), 0o644)
+	if err := host.Add("other.go"); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(host.Dir, "main.go"), []byte("package main // half\n"), 0o644)
+	if _, err := UndoOperation(v, applied.OperationID, now.Add(time.Hour)); err == nil {
+		t.Fatal("undoing an overtaken operation must fail")
+	}
+	if staged(t, host, "other.go") != "package main // staged\n" {
+		t.Fatal("a failed undo must not discard the staged code")
+	}
+	if data, _ := os.ReadFile(filepath.Join(host.Dir, "main.go")); string(data) != "package main // half\n" {
+		t.Fatalf("a failed undo must not touch the code: %q", data)
+	}
+	if outside := outsideTheVault(host); outside != " M main.go,A  other.go" {
+		t.Fatalf("the code must stay as it was: %q", outside)
+	}
+	if dirty, _ := v.Repo().Dirty(); dirty {
+		t.Fatal("the vault must be back at HEAD")
+	}
+	if read(t, v, "wiki/concepts/A.md") != string(mkpage("A", "# A\n\ntwo\n")) {
+		t.Fatal("the page must keep the content the later operation wrote")
+	}
+	if _, err := os.Stat(filepath.Join(host.Dir, ".git", "REVERT_HEAD")); err == nil {
+		t.Fatal("a failed revert must leave no state behind")
 	}
 }
 
