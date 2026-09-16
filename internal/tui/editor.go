@@ -44,6 +44,13 @@ type Hooks struct {
 	CloneRepo  func(registry.Entry, string, string) (vault.Repo, string, error)
 	RemoveRepo func(registry.Entry, string) error
 	EditRepo   func(registry.Entry, string, vaults.RepoEdit) (vault.Repo, error)
+	// The mount calls: mount a knowledge base on a project with an access and a mount name
+	// (empty means write and the knowledge base's name); unmount by knowledge base id, name,
+	// or mount name; grant a project write or read on a knowledge base; revoke by project id.
+	Mount   func(project, kb registry.Entry, access, name string) (vault.Mount, error)
+	Unmount func(project registry.Entry, target string) error
+	Grant   func(kb, project registry.Entry, access string) error
+	Revoke  func(kb registry.Entry, projectID string) error
 	// Tasks reads a project's task ledger and the notes waiting in inbox/tasks/; Plant
 	// plants a task in its vault.
 	Tasks func(registry.Entry) (tasks.Ledger, []string, error)

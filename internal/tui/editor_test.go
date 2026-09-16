@@ -78,6 +78,18 @@ func atlasFixture(t *testing.T) (*home.Config, home.Home, Hooks) {
 		EditRepo: func(e registry.Entry, name string, edit vaults.RepoEdit) (vault.Repo, error) {
 			return vaults.EditRepo(h, cfg, e, name, edit, testNow)
 		},
+		Mount: func(project, kb registry.Entry, access, name string) (vault.Mount, error) {
+			return vaults.Mount(project, kb, access, name, testNow)
+		},
+		Unmount: func(project registry.Entry, target string) error {
+			return vaults.Unmount(project, target, testNow)
+		},
+		Grant: func(kb, project registry.Entry, access string) error {
+			return vaults.Grant(kb, project, access, testNow)
+		},
+		Revoke: func(kb registry.Entry, projectID string) error {
+			return vaults.RevokeID(kb, projectID, testNow)
+		},
 		Sources: func(e registry.Entry) []string {
 			v, err := vault.Open(e.Path)
 			if err != nil {

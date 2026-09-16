@@ -181,7 +181,7 @@ func TestHintsFollowTheCursor(t *testing.T) {
 		t.Fatalf("global hints wrong:\n%s", out)
 	}
 	v = pressV(v, tea.KeyDown) // welcome
-	if hints := v.treeHints(); !strings.Contains(hints, "o Obsidian · c Claude · i ingest · t tasks · l repos · e edit") {
+	if hints := v.treeHints(); !strings.Contains(hints, "o Obsidian · c Claude · i ingest · t tasks · l repos · m mounts · e edit") {
 		t.Fatalf("project hints missing: %q", hints)
 	}
 	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown) // ai-ml

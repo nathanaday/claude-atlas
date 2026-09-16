@@ -206,6 +206,7 @@ type view struct {
 	add       *model // the add-vault or adopt screen while open
 	ingest    *ingestScreen
 	links     *linksScreen
+	mounts    *mountsScreen
 	tasks     *tasksScreen
 	changed   bool
 	collapsed map[string]bool // folder paths folded by the user
@@ -548,6 +549,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.links != nil {
 			v.links.width = msg.Width
 		}
+		if v.mounts != nil {
+			v.mounts.width = msg.Width
+		}
 		if v.tasks != nil {
 			v.tasks.width = msg.Width
 		}
@@ -595,6 +599,10 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.links.reload(v.items)
 			v.links.status = "refreshed"
 		}
+		if v.mounts != nil {
+			v.mounts.reload(v.items)
+			v.mounts.status = "refreshed"
+		}
 		if v.tasks != nil {
 			v.tasks.reload(v.items)
 			v.tasks.status = "refreshed"
@@ -615,6 +623,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if v.links != nil {
 			return v.updateLinks(msg)
+		}
+		if v.mounts != nil {
+			return v.updateMounts(msg)
 		}
 		if v.tasks != nil {
 			return v.updateTasks(msg)
@@ -649,7 +660,7 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "T":
 			return v.openTasks(nil)
 		}
-		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" || key == "l" || key == "t" {
+		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" || key == "l" || key == "m" || key == "t" {
 			var item *Item
 			if v.detail != nil {
 				item = v.detail
@@ -666,6 +677,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v.openEditor(item)
 			case "l":
 				return v.openLinks(item)
+			case "m":
+				return v.openMounts(item)
 			case "t":
 				return v.openTasks(item)
 			case "i":
@@ -864,6 +877,45 @@ func (v view) updateLinks(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, cmd
 }
 
+// openMounts shows what a project mounts.
+func (v view) openMounts(item *Item) (tea.Model, tea.Cmd) {
+	if v.hooks.Load == nil || v.hooks.Mount == nil {
+		v.errMsg = "mounts are not available here"
+		return v, nil
+	}
+	if item.Entry.Kind != vault.Project {
+		v.errMsg = "a knowledge base is mounted by projects; press m on a project"
+		return v, nil
+	}
+	s := newMounts(v.hooks, item.Entry, v.items, v.width)
+	v.mounts = &s
+	return v, nil
+}
+
+// updateMounts forwards keys to the mounts screen; after an action it refreshes every
+// vault in the background so the facts catch up, and keeps the screen open.
+func (v view) updateMounts(msg tea.Msg) (tea.Model, tea.Cmd) {
+	s, cmd := v.mounts.update(msg)
+	if s.closed {
+		v.mounts = nil
+		v.reloadKeeping(s.entry.Path)
+		return v, nil
+	}
+	v.mounts = &s
+	if s.changed {
+		v.mounts.changed = false
+		v.changed = true
+		v.focus = s.entry.Path
+		v.reloadKeeping(s.entry.Path)
+		v.mounts.reload(v.items)
+		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
+			v.mounts.status += " · refreshing…"
+			return v, tea.Batch(cmd, refreshCmd)
+		}
+	}
+	return v, cmd
+}
+
 // openTasks shows a project's open tasks, or every project's when item is nil.
 func (v view) openTasks(item *Item) (tea.Model, tea.Cmd) {
 	if v.hooks.Tasks == nil {
@@ -1045,6 +1097,9 @@ func (v view) View() string {
 	if v.links != nil {
 		return v.links.view()
 	}
+	if v.mounts != nil {
+		return v.mounts.view()
+	}
 	if v.tasks != nil {
 		return v.tasks.view()
 	}
@@ -1086,7 +1141,7 @@ func vaultKeys(e registry.Entry) string {
 	if e.Kind == vault.Project {
 		keys += " · i ingest · t tasks · l repos"
 	}
-	return keys + " · e edit"
+	return keys + " · m mounts · e edit"
 }
 
 // treeHints lists the keys that do something for the row under the cursor.

@@ -775,6 +775,18 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 		EditRepo: func(en registry.Entry, name string, edit vaults.RepoEdit) (vault.Repo, error) {
 			return vaults.EditRepo(e.home, cfg, en, name, edit, time.Now())
 		},
+		Mount: func(project, kb registry.Entry, access, name string) (vault.Mount, error) {
+			return vaults.Mount(project, kb, access, name, time.Now())
+		},
+		Unmount: func(project registry.Entry, target string) error {
+			return vaults.Unmount(project, target, time.Now())
+		},
+		Grant: func(kb, project registry.Entry, access string) error {
+			return vaults.Grant(kb, project, access, time.Now())
+		},
+		Revoke: func(kb registry.Entry, projectID string) error {
+			return vaults.RevokeID(kb, projectID, time.Now())
+		},
 		Tasks: func(en registry.Entry) (tasks.Ledger, []string, error) {
 			v, err := vault.Open(en.Path)
 			if err != nil {
