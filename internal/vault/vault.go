@@ -527,6 +527,9 @@ func InitIn(repoRoot string, opts Options, now time.Time) (*InitResult, error) {
 	if !whole.IsRepo() {
 		return nil, fmt.Errorf("%s is not the top level of a git repository", host)
 	}
+	if err := whole.CheckIdle(); err != nil {
+		return nil, err
+	}
 	if opts.Kind != Project {
 		return nil, errors.New("only a project lives inside a repository")
 	}
@@ -969,6 +972,9 @@ func Ignore(root, pattern string, now time.Time) (bool, error) {
 	if !repo.IsRepo() {
 		return true, nil
 	}
+	if err := repo.CheckIdle(); err != nil {
+		return true, err
+	}
 	if err := repo.Add(".gitignore"); err != nil {
 		return true, err
 	}
@@ -1197,6 +1203,9 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	}
 	res.Kind = cfg.Kind
 	repo := RepoAt(abs)
+	if err := repo.CheckIdle(); err != nil {
+		return nil, err
+	}
 	if repo.Prefix != "" {
 		// The repository that holds the vault holds its history too. Only a project that
 		// already has its identity file takes this path, which is what a clone of one

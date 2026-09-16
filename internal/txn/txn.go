@@ -1006,6 +1006,7 @@ func UndoOperation(v *vault.Vault, operationID string, now time.Time) (*Result, 
 	if err := repo.RevertNoCommit(op.Commit); err != nil {
 		return nil, fmt.Errorf("cannot undo %s: later changes overlap it (%v); repair by hand or with a repair operation", operationID, err)
 	}
+	defer repo.ClearRevert()
 	logData, _ := os.ReadFile(v.Path(vault.LogPage))
 	entry := fmt.Sprintf("## %s — %s\n\nUndid %s: %s\n", now.Format("2006-01-02"), res.OperationID, op.ID, op.Summary)
 	if err := writeAtomic(v.Path(vault.LogPage), prependLog(logData, entry, now)); err != nil {
@@ -1019,7 +1020,6 @@ func UndoOperation(v *vault.Vault, operationID string, now time.Time) (*Result, 
 	if err != nil {
 		return nil, err
 	}
-	repo.ClearRevert()
 	res.ChangedPaths, _ = repo.ChangedPaths(res.Commit)
 	sort.Strings(res.ChangedPaths)
 	return res, nil

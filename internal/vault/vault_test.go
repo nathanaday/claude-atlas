@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -941,5 +942,53 @@ func TestUpdateConfigInsideARepositoryCommitsOnlyTheIdentityFile(t *testing.T) {
 	}
 	if out, _ := host.Status(); len(out) != 2 {
 		t.Fatalf("the code must stay as the user left it: %+v", out)
+	}
+}
+
+func TestInitInWaitsOutAMergeInTheHost(t *testing.T) {
+	needGit(t)
+	host := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(host, 0o755)
+	git := func(args ...string) error {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		cmd.Dir = host
+		return cmd.Run()
+	}
+	whole := gitx.Repo{Dir: host}
+	if err := whole.Init(); err != nil {
+		t.Fatal(err)
+	}
+	write := func(text string) { os.WriteFile(filepath.Join(host, "code.txt"), []byte(text), 0o644) }
+	write("base\n")
+	whole.AddAll()
+	if _, err := whole.Commit("base"); err != nil {
+		t.Fatal(err)
+	}
+	if err := git("checkout", "-q", "-b", "other"); err != nil {
+		t.Fatal(err)
+	}
+	write("other\n")
+	whole.AddAll()
+	whole.Commit("other")
+	if err := git("checkout", "-q", "main"); err != nil {
+		t.Fatal(err)
+	}
+	write("main\n")
+	whole.AddAll()
+	whole.Commit("main")
+	if err := git("merge", "other"); err == nil {
+		t.Fatal("the merge must conflict")
+	}
+	if _, err := InitIn(host, Options{Kind: Project, Name: "Notes"}, now); err == nil || !strings.Contains(err.Error(), "merge") {
+		t.Fatalf("InitIn during a merge: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(host, InRepoDir)); err == nil {
+		t.Fatal("InitIn must write nothing during a merge")
+	}
+	if err := git("merge", "--abort"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InitIn(host, Options{Kind: Project, Name: "Notes"}, now); err != nil {
+		t.Fatal(err)
 	}
 }

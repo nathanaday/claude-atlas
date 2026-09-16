@@ -261,7 +261,8 @@ func (r Repo) Commit(message string) (string, error) {
 // records the working tree of every tracked file under the prefix, so a page the user
 // changed by hand and never staged would land in the commit. The tree is built instead in
 // a temporary index that starts at HEAD, and plumbing writes the commit, which runs no
-// hooks.
+// hooks. It records the working tree of the staged paths, which is what the engine
+// staged a moment before, and it allows an empty commit; no caller reaches either case.
 func (r Repo) commitPrefix(message string) (string, error) {
 	hasHead := r.hasCommit()
 	paths, err := r.stagedPaths(hasHead)
