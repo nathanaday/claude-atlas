@@ -573,6 +573,13 @@ func InitIn(repoRoot string, opts Options, now time.Time) (*InitResult, error) {
 // writeMissing writes template, identity, and ledger files that do not exist yet.
 // With overwrite set (a fresh init) every file is written.
 func writeMissing(root string, cfg Config, now time.Time, overwrite bool) ([]string, error) {
+	// A settings file the merge cannot read stops the pass before it writes anything, so a
+	// refused upgrade leaves the vault as it was.
+	if !overwrite {
+		if err := checkSettings(root, cfg.Kind); err != nil {
+			return nil, err
+		}
+	}
 	var written []string
 	put := func(rel string, data []byte) error {
 		if !overwrite {
@@ -998,24 +1005,50 @@ var settingsMerges = map[string]func(settings map[string]any) bool{
 	AppFile:        newNotesInWiki,
 }
 
-// mergeSettings applies merge to an existing Obsidian settings file, keeping every other
-// setting, and writes the template when there is none. It reports whether the file changed.
-func mergeSettings(root, rel string, template []byte, merge func(map[string]any) bool) (bool, error) {
-	path := filepath.Join(root, filepath.FromSlash(rel))
-	existing, err := os.ReadFile(path)
+// checkSettings reads every Obsidian settings file the vault holds and refuses one that
+// is not a JSON object.
+func checkSettings(root string, kind Kind) error {
+	for _, rel := range TemplateFiles(kind) {
+		if _, ok := settingsMerges[rel]; !ok {
+			continue
+		}
+		if _, _, err := readSettings(root, rel); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readSettings parses an existing Obsidian settings file. It reports whether the file is
+// there; an empty one parses as no settings at all.
+func readSettings(root, rel string) (map[string]any, bool, error) {
+	existing, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 	if errors.Is(err, os.ErrNotExist) {
-		return true, writeFile(root, rel, template)
+		return nil, false, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	settings := map[string]any{}
 	if len(bytes.TrimSpace(existing)) > 0 {
 		var holds map[string]any
 		if err := json.Unmarshal(existing, &holds); err != nil || holds == nil {
-			return false, fmt.Errorf("%s is not a JSON object; Obsidian wrote it, so fix or remove the file, then try again", rel)
+			return nil, true, fmt.Errorf("%s is not a JSON object; Obsidian wrote it, so fix or remove the file, then try again", rel)
 		}
 		settings = holds
+	}
+	return settings, true, nil
+}
+
+// mergeSettings applies merge to an existing Obsidian settings file, keeping every other
+// setting, and writes the template when there is none. It reports whether the file changed.
+func mergeSettings(root, rel string, template []byte, merge func(map[string]any) bool) (bool, error) {
+	settings, found, err := readSettings(root, rel)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return true, writeFile(root, rel, template)
 	}
 	if !merge(settings) {
 		return false, nil
@@ -1024,7 +1057,7 @@ func mergeSettings(root, rel string, template []byte, merge func(map[string]any)
 	if err != nil {
 		return false, err
 	}
-	return true, os.WriteFile(path, append(data, '\n'), 0o644)
+	return true, os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), append(data, '\n'), 0o644)
 }
 
 // enableSnippet turns on the vault's CSS snippet.

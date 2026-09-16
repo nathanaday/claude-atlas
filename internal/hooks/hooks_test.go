@@ -32,14 +32,27 @@ func newVault(t *testing.T) *vault.Vault {
 	return v
 }
 
-func env(values map[string]string) Env {
-	return func(k string) string { return values[k] }
+// env answers CLAUDE_ATLAS_HOME with a temp path that does not exist, so a test that
+// names no home reads no atlas at all instead of the developer's ~/.claude-atlas.
+func env(t *testing.T, values map[string]string) Env {
+	t.Helper()
+	noAtlas := filepath.Join(t.TempDir(), "no-atlas")
+	return func(k string) string {
+		if k == home.EnvHome && values[k] == "" {
+			return noAtlas
+		}
+		return values[k]
+	}
 }
 
 func TestSessionStart(t *testing.T) {
 	v := newVault(t)
+	e := env(t, nil)
+	if _, err := os.Stat(e(home.EnvHome)); !os.IsNotExist(err) {
+		t.Fatalf("the default test home must not exist on disk: %v", err)
+	}
 	var out bytes.Buffer
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Path("wiki")+`"}`), &out, env(nil), true, time.Now()); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Path("wiki")+`"}`), &out, e, true, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -52,24 +65,24 @@ func TestSessionStart(t *testing.T) {
 		t.Fatal("frontmatter should be stripped")
 	}
 	out.Reset()
-	SessionStart(strings.NewReader(`{"cwd":"`+t.TempDir()+`"}`), &out, env(nil), true, time.Now())
+	SessionStart(strings.NewReader(`{"cwd":"`+t.TempDir()+`"}`), &out, env(t, nil), true, time.Now())
 	if out.Len() != 0 {
 		t.Fatal("silent outside a vault")
 	}
 	out.Reset()
-	SessionStart(strings.NewReader(`{"cwd":"/nowhere"}`), &out, env(map[string]string{vault.EnvVault: v.Root, "CLAUDE_ATLAS_SESSION_CONTEXT": "0"}), true, time.Now())
+	SessionStart(strings.NewReader(`{"cwd":"/nowhere"}`), &out, env(t, map[string]string{vault.EnvVault: v.Root, "CLAUDE_ATLAS_SESSION_CONTEXT": "0"}), true, time.Now())
 	if !strings.Contains(out.String(), "claude-atlas project") || strings.Contains(out.String(), "<vault-context>") {
 		t.Fatalf("env vault with context off:\n%s", out.String())
 	}
 	os.MkdirAll(v.Path(".vault-meta"), 0o755)
 	os.WriteFile(v.Path(".vault-meta/inflight.json"), []byte(`{"operation_id":"save-x","paths":[]}`), 0o644)
 	out.Reset()
-	SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, time.Now())
+	SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(t, nil), false, time.Now())
 	if !strings.Contains(out.String(), "WARNING: operation save-x was interrupted") {
 		t.Fatalf("recovery warning:\n%s", out.String())
 	}
 	out.Reset()
-	Stop(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil))
+	Stop(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(t, nil))
 	if !strings.Contains(out.String(), `"systemMessage"`) || !strings.Contains(out.String(), "save-x") {
 		t.Fatalf("stop:\n%s", out.String())
 	}
@@ -125,7 +138,7 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 	os.MkdirAll(v.Path("inbox/tasks"), 0o755)
 	os.WriteFile(v.Path("inbox/tasks/idea.md"), []byte("An idea."), 0o644)
 	var out bytes.Buffer
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, now); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(t, nil), false, now); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -157,7 +170,7 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	e := env(map[string]string{home.EnvHome: h.Root})
+	e := env(t, map[string]string{home.EnvHome: h.Root})
 	if err := SessionStart(strings.NewReader(`{"cwd":"`+outside+`"}`), &out, e, true, now); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +227,7 @@ func TestSessionStartInAKnowledgeBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, env(nil), true, now); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, env(t, nil), true, now); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -237,7 +250,7 @@ func TestSessionStartInAKnowledgeBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, env(nil), false, now); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, env(t, nil), false, now); err != nil {
 		t.Fatal(err)
 	}
 	text = out.String()
@@ -299,7 +312,7 @@ func TestSessionStartListsMountsAndMountedBy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	e := env(map[string]string{home.EnvHome: h.Root})
+	e := env(t, map[string]string{home.EnvHome: h.Root})
 	report, err := lint.Run(kbRoot, lint.Options{AsOf: now})
 	if err != nil {
 		t.Fatal(err)
@@ -409,7 +422,7 @@ func TestSessionStartCountsStubsAndWantedPages(t *testing.T) {
 	now := time.Now()
 
 	var out bytes.Buffer
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, now); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(t, nil), false, now); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "Stubs:") || strings.Contains(out.String(), "Wanted:") {
@@ -427,7 +440,7 @@ func TestSessionStartCountsStubsAndWantedPages(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, now); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(t, nil), false, now); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -444,7 +457,7 @@ func TestSessionStartCountsStubsAndWantedPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, now); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(t, nil), false, now); err != nil {
 		t.Fatal(err)
 	}
 	text = out.String()
@@ -458,7 +471,7 @@ func TestSessionStartNamesAV1Vault(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, "wiki"), 0o755)
 	os.WriteFile(filepath.Join(root, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
 	var out bytes.Buffer
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+filepath.Join(root, "wiki")+`"}`), &out, env(nil), true, time.Now()); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+filepath.Join(root, "wiki")+`"}`), &out, env(t, nil), true, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -468,7 +481,7 @@ func TestSessionStartNamesAV1Vault(t *testing.T) {
 		}
 	}
 	out.Reset()
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+t.TempDir()+`"}`), &out, env(nil), true, time.Now()); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+t.TempDir()+`"}`), &out, env(t, nil), true, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if out.Len() != 0 {
@@ -520,7 +533,7 @@ func TestSessionStartInsideAHostRepository(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	e := env(map[string]string{home.EnvHome: h.Root})
+	e := env(t, map[string]string{home.EnvHome: h.Root})
 	if err := SessionStart(strings.NewReader(`{"cwd":"`+src+`"}`), &out, e, false, now); err != nil {
 		t.Fatal(err)
 	}

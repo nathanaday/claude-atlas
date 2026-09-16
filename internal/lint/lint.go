@@ -1235,6 +1235,8 @@ func sortFindings(r *Report) {
 	sort.SliceStable(r.ReadErrors, func(i, j int) bool { return pathLess(r.ReadErrors[i].Path, r.ReadErrors[j].Path) })
 	sort.SliceStable(r.KindErrors, func(i, j int) bool { return pathLess(r.KindErrors[i].Path, r.KindErrors[j].Path) })
 	sort.SliceStable(r.MountErrors, func(i, j int) bool { return pathLess(r.MountErrors[i].Path, r.MountErrors[j].Path) })
+	// A wanted title and a stub path are each unique, and pathLess breaks a case-insensitive
+	// tie on the exact string, so the map order these come from never reaches the report.
 	sort.SliceStable(r.WantedPages, func(i, j int) bool { return pathLess(r.WantedPages[i].Title, r.WantedPages[j].Title) })
 	sort.SliceStable(r.Stubs, func(i, j int) bool { return pathLess(r.Stubs[i].Path, r.Stubs[j].Path) })
 }

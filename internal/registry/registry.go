@@ -222,7 +222,7 @@ func Scan(cfg *home.Config) (*Index, error) {
 				if aerr != nil {
 					abs = path
 				}
-				found[abs] = true
+				found[realPath(abs)] = true
 				scanRoot(ix, abs)
 				return fs.SkipDir
 			}
@@ -248,10 +248,11 @@ func Scan(cfg *home.Config) (*Index, error) {
 		if err != nil {
 			abs = v
 		}
-		if found[abs] {
+		key := realPath(abs)
+		if found[key] {
 			continue
 		}
-		found[abs] = true
+		found[key] = true
 		info, err := os.Stat(abs)
 		if err != nil || !info.IsDir() {
 			fail(ix, abs, "not found; run claude-atlas remove PATH to forget it", ReasonMissing)
@@ -265,6 +266,16 @@ func Scan(cfg *home.Config) (*Index, error) {
 	sortEntries(ix.Entries)
 	resolve(ix, cfg)
 	return ix, nil
+}
+
+// realPath is the dedupe key of a vault root: two spellings of one folder, one of them
+// through a symlink, resolve to the same key and yield one entry. A path that cannot be
+// resolved, such as a registered folder that is gone, keeps its own spelling.
+func realPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }
 
 // markerFileExists reports whether root carries the identity file, readable or not.

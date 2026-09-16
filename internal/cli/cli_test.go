@@ -835,6 +835,21 @@ func TestStubCommand(t *testing.T) {
 	if code := h.run("stub", "welcome", "Nowhere"); code != 1 || !strings.Contains(h.err.String(), "nothing in the wiki links to") {
 		t.Fatalf("unlinked title exit %d\n%s", code, h.err.String())
 	}
+	// Two empty pages of one name: a run with no titles skips that candidate, says why,
+	// and does not also report that there was nothing to stub.
+	os.MkdirAll(filepath.Join(welcome, "wiki", "concepts", "notes"), 0o755)
+	os.MkdirAll(filepath.Join(welcome, "wiki", "concepts", "other"), 0o755)
+	os.WriteFile(filepath.Join(welcome, "wiki", "concepts", "Linker.md"), []byte("---\ntitle: Linker\ntype: concept\nstatus: developing\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Linker\n\nSee [a](notes/Three.md) and [b](other/Three.md).\n"), 0o644)
+	os.WriteFile(filepath.Join(welcome, "wiki", "concepts", "notes", "Three.md"), nil, 0o644)
+	os.WriteFile(filepath.Join(welcome, "wiki", "concepts", "other", "Three.md"), nil, 0o644)
+	code := h.run("stub", "welcome")
+	out := h.out.String()
+	if code != 0 || !strings.Contains(out, "skipped") || !strings.Contains(out, "two empty pages are named Three") {
+		t.Fatalf("skipped candidate exit %d\n%s%s", code, out, h.err.String())
+	}
+	if strings.Contains(out, "nothing to stub") || strings.Contains(out, "committed") {
+		t.Fatalf("only skips, so no commit and no nothing-to-stub line:\n%s", out)
+	}
 	if code := h.run("stub"); code != 2 {
 		t.Fatalf("usage exit %d", code)
 	}

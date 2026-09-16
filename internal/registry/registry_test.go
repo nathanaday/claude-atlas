@@ -431,6 +431,41 @@ func TestByPathFollowsASymlinkedAncestor(t *testing.T) {
 	}
 }
 
+// A vault the scan finds and the config also lists, under a spelling that reaches it
+// through a symlink, is one vault: the scan dedupes on the resolved path, so ByPath can
+// never find two entries for one folder.
+func TestScanDedupesAVaultRegisteredThroughASymlink(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
+	real := filepath.Join(cfg.VaultsDir, "projects", "cs566")
+	if _, err := vault.Init(real, vault.Options{Kind: vault.Project, Name: "cs566"}, now); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "cs566-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	cfg.Vaults = []string{link}
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ix.Entries) != 1 {
+		t.Fatalf("one vault, %d entries: %+v", len(ix.Entries), ix.Entries)
+	}
+	if ix.Entries[0].Path != real {
+		t.Fatalf("the entry keeps the scanned path: %s", ix.Entries[0].Path)
+	}
+	for _, path := range []string{real, link} {
+		if e := ix.ByPath(path); e == nil || e.Name != "cs566" {
+			t.Fatalf("ByPath(%s): %+v", path, e)
+		}
+	}
+}
+
 // initRepo makes a git repository at dir with one commit, the way a code repository a
 // project moves into looks.
 func initRepo(t *testing.T, dir string) string {

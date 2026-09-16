@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -354,17 +355,41 @@ func TestUpgradeFillsAnEmptySettingsFileAndRefusesANonObject(t *testing.T) {
 			if _, err := Init(root, Options{Kind: Project}, now); err != nil {
 				t.Fatal(err)
 			}
+			// A .gitignore missing a template line is what an upgrade would merge first,
+			// before it reads the settings; a refusal must leave it alone too.
+			ignore := filepath.Join(root, ".gitignore")
+			if err := os.WriteFile(ignore, []byte("# claude-atlas runtime state\n.vault-meta/\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			repo := gitx.Repo{Dir: root}
+			if err := repo.AddAll(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.Commit(CommitMessage("manual", "the user's ignore file", NewOperationID("manual", now))); err != nil {
+				t.Fatal(err)
+			}
 			app := filepath.Join(root, filepath.FromSlash(AppFile))
 			if err := os.WriteFile(app, []byte(c.text), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			_, err := Upgrade(root, now)
+			before, err := repo.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Upgrade(root, now)
 			if c.refuse {
 				if err == nil || !strings.Contains(err.Error(), AppFile) || !strings.Contains(err.Error(), "is not a JSON object") {
 					t.Fatalf("upgrade: %v", err)
 				}
 				if data, _ := os.ReadFile(app); string(data) != c.text {
 					t.Fatalf("the file stays as the user left it: %q", data)
+				}
+				after, err := repo.Status()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(before, after) {
+					t.Fatalf("a refused upgrade wrote something:\nbefore %+v\nafter  %+v", before, after)
 				}
 				return
 			}
