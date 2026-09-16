@@ -15,3 +15,7 @@ coverage.*
 # OS
 .DS_Store
 Thumbs.db
+
+# Local scratch: git worktrees and the superpowers plan workspaces
+.worktrees/
+.superpowers/
