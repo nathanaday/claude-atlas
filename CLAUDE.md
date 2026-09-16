@@ -11,7 +11,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 
 | Thing | Location |
 |---|---|
-| v2: knowledge bases, projects, mounts, access (phases 1–4 built: kinds, the registry, mounts, the view's mount keys) | `docs/v2-design.md` |
+| v2: knowledge bases, projects, mounts, access (phases 1–5 built: kinds, the registry, mounts, the view's mount keys, projects inside repositories) | `docs/v2-design.md` |
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side before v2 (superseded by `v2-design.md`) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
@@ -113,12 +113,12 @@ never goes inside another vault (`vaults.CheckNewPath`).
   `$CLAUDE_ATLAS_BIN`. `plugin.json` and `marketplace.json` carry the version
   the binary should match; `status` and `doctor` warn on a mismatch.
 - Every write path goes through `txn.Prepare` and `txn.Apply`. `vault.Init`,
-  `vault.Adopt`, `vault.Upgrade`, and `vault.UpdateConfig` are the only code
-  that writes vault files directly, and only before or outside an operation.
-  The template includes the vault's CSS snippet and an appearance file that
-  enables it; upgrade merges the snippet into an existing appearance file. The
-  symlinks under a project's `kb/`, which `mount` and `refresh` create, are
-  local state git ignores.
+  `vault.InitIn`, `vault.Adopt`, `vault.Upgrade`, and `vault.UpdateConfig` are
+  the only code that writes vault files directly, and only before or outside
+  an operation. The template includes the vault's CSS snippet and an
+  appearance file that enables it; upgrade merges the snippet into an
+  existing appearance file. The symlinks under a project's `kb/`, which
+  `mount` and `refresh` create, are local state git ignores.
 - A vault has a kind, `knowledge` or `project` (`vault.Kind`, in the v2
   identity file with an `id` and a `name`). A knowledge base has no inbox,
   ideas, tasks, questions, or sessions; `txn`, the tools, lint, and the hook
@@ -136,6 +136,14 @@ never goes inside another vault (`vaults.CheckNewPath`).
   has its path in the atlas config, and a path inside the vault but outside
   `repos/` is refused. Sessions learn the policy from the hook and the `repos`
   tool.
+- A project may live inside a repository at `REPO/atlas/` (`new-project NAME
+  --in REPO`). `vault.HostRepo` detects the layout from the filesystem;
+  nothing stores it. Every git command the engine runs there takes the
+  pathspec `atlas/` (`gitx.Repo.Prefix`), so an operation never commits code
+  outside the vault. The host repository is the project's first repository in
+  the registry (`Entry.Host`), without an entry in the identity file; `link`,
+  `new-repo`, and `unlink` refuse its name, and `edit-repo` sets its change
+  policy.
 - A kind bounds a plan's writes (`txn.allowed`). Reserved everywhere:
   `wiki/log.md`, both ledgers, `wiki/tasks/tasks.md` and its old path
   `wiki/tasks/index.md`, `.git`, `.vault-meta`, `.obsidian`, `.raw` except

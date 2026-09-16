@@ -1,7 +1,8 @@
 # Atlas v2: knowledge bases and projects
 
-Status: designed 2026-09-14. Phases 1–4 are built (kinds; the registry;
-mounts and access; the mount and grant keys in `view`). Phases 5–7 are not.
+Status: designed 2026-09-14. Phases 1–5 are built (kinds; the registry;
+mounts and access; the mount and grant keys in `view`; projects inside
+repositories). Phases 6 and 7 are not.
 This is a new version of the project. Existing vaults migrate by hand;
 nothing here keeps compatibility with the v1 identity file, the v1 layout,
 or the atlas vault.
@@ -342,7 +343,8 @@ findings come from its own lint.
 By default a project is its own git repository and mounts repositories, as
 today. As an option, `new-project NAME --in REPO` creates the project at
 `REPO/atlas/`, tracked by the repository's git, so a clone on a machine with
-atlas installed is ready to work.
+atlas installed is ready to work. The layout is detected, not stored: the
+root is named `atlas`, has no `.git`, and its parent has one (`vault.HostRepo`).
 
 - The vault root is `REPO/atlas/`; its git repository is `REPO`. Every git
   command the engine runs takes the pathspec `atlas/`. The manual-edits
@@ -540,3 +542,7 @@ check runs in phase 7 against a project with a mount.
 - `skills/wiki-lint/SKILL.md`'s category table is missing `task_errors`,
   `kind_errors`, and `mount_errors`. That is phase 6 work, with the rest of
   the skills, since a skill change needs a plugin version bump.
+- The add screen has no "in repository" option; the TUI's repository rows
+  carry no host mark, though the CLI's `show` and `repos` do.
+- `adopt` on an in-repository project that moved to a different repository
+  keeps working, because nothing stores the layout.

@@ -10,7 +10,7 @@ one command, so scripts and muscle memory both work:
 
 | In `view` | Command |
 |---|---|
-| `n` new project, `N` new knowledge base | `new-project NAME`, `new-knowledge NAME` |
+| `n` new project, `N` new knowledge base | `new-project NAME [--in REPO]`, `new-knowledge NAME` |
 | `a` adopt a vault | `adopt PATH` |
 | Enter on a vault | `show NAME` |
 | `o` open in Obsidian | `open-vault NAME` |
@@ -449,6 +449,23 @@ When a grant's project is gone, `revoke KB PROJECT` cannot find it by name;
 
 A `[[link]]` in a project page resolves to a knowledge base page through the
 mount, in Obsidian, in the graph, in backlinks, and in lint.
+
+### A project inside a repository
+
+`new-project NAME --in REPO` creates the project at `REPO/atlas/`, tracked by
+the repository's own git instead of a git repository of its own. Every wiki
+commit takes the pathspec `atlas/`, so the repository's git tracks only
+`atlas/` and lands on the current branch. Under a `changes: pr` policy, set
+with `edit-repo NAME REPO --changes pr`, the wiki rides the same pull request
+as the code. A clone of the repository is registered with `adopt REPO/atlas
+--as project`. `link` and `unlink` do not apply to the host repository: it is
+already the project's first repository, and neither command changes it.
+
+```bash
+claude-atlas new-project --in ~/code/webapp        # the project takes the repository's name
+claude-atlas edit-repo webapp webapp --changes pr
+claude-atlas adopt ~/code/webapp/atlas --as project   # a clone, on another machine
+```
 
 ## Adopt an existing vault
 

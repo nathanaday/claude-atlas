@@ -1137,7 +1137,7 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "plan", Annotations: ro(),
 		Description: "Validate a set of file changes against the vault and hold them as a plan. Returns a plan_id, a preview of creates, replaces, and deletes, and warnings such as links that do not resolve. Nothing is written. Show the preview to the user before apply."}, s.plan)
 	mcp.AddTool(server, &mcp.Tool{Name: "apply",
-		Description: "Apply a held plan as one git commit and write its log entry. Hand edits made outside atlas are committed first, so the operation can always be undone exactly. The plan is consumed."}, s.apply)
+		Description: "Apply a held plan as one git commit and write its log entry. Edits made by hand are committed first, so the operation can always be undone exactly. The plan is consumed."}, s.apply)
 	mcp.AddTool(server, &mcp.Tool{Name: "undo",
 		Description: "Revert one applied operation as a new commit. Fails if later changes overlap it."}, s.undo)
 	mcp.AddTool(server, &mcp.Tool{Name: "history", Annotations: ro(),

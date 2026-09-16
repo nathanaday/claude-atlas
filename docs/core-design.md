@@ -182,8 +182,8 @@ not as errors, because a plan can create the target in the same operation.
 
 1. Take the vault lock (`flock` on `.vault-meta/lock`).
 2. If `inflight.json` exists, recover first (step 7), then continue.
-3. If `git status` is dirty, commit everything as `manual: edits outside atlas`.
-   The tree is now clean, so every later change is ours.
+3. If `git status` is dirty, commit everything as `manual: N files changed by
+   hand`. The tree is now clean, so every later change is ours.
 4. Check every `base_sha256` against the file. A mismatch aborts with
    `conflict` and names the path. The model re-reads and plans again.
 5. Write `inflight.json` listing the operation id and the target paths.
