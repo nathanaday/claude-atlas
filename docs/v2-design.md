@@ -546,3 +546,10 @@ check runs in phase 7 against a project with a mount.
   names the repository, so a session is not left guessing.
 - `adopt` on an in-repository project that moved to a different repository
   keeps working, because nothing stores the layout.
+- An in-repository project whose identity file is damaged is repaired by
+  hand: `adopt` refuses it and names `new-project --in`.
+- The CLI staging screen and the TUI count a file a mounted knowledge base
+  captured as still waiting (`capture/stage.go` passes no mounts); the
+  `status` and `inbox` tools count it right.
+- The hook's `projectMounts` and the server's `mountPaths` build the same
+  map; one shared helper later.

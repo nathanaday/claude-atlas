@@ -230,10 +230,12 @@ make install
 ```
 
 `make install` stamps the binary with the same version, so `doctor` and
-`status` can tell when the two drift. 1.0.0 is the first v2 release. Uncommitted skill edits can be tried
+`status` can tell when the two drift. Uncommitted skill edits can be tried
 with `claude --plugin-dir .` from inside a vault. End-to-end by hand:
 `claude -p "..."` inside a vault with
 `--allowedTools "mcp__plugin_claude-atlas_atlas__*,Read,Grep,Glob,Skill"`.
+
+1.0.0 is the first v2 release.
 
 ## Open questions
 
