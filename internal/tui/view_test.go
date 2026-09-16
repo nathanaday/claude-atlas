@@ -744,6 +744,50 @@ func TestTasksTabHostsTheBoard(t *testing.T) {
 	}
 }
 
+func TestContinueATaskFromTheTasksTab(t *testing.T) {
+	ledgers := map[string]*tasks.Ledger{
+		"/v/p3": {Tasks: []tasks.Record{{Task: tasks.Task{ID: "task-20260901-aaaa", Path: "wiki/tasks/x.md",
+			Title: "Fix it", Status: "active", Priority: "high", Workdir: "/code/p3"}}}},
+	}
+	var launched []string
+	op := Opener{ClaudeIn: func(vault, dir, prompt string) (*exec.Cmd, error) {
+		launched = append(launched, vault+"|"+dir+"|"+prompt)
+		return exec.Command("true"), nil
+	}}
+	var planted []string
+	v := keyV(newView(sample(), op, taskHooks(ledgers, &planted)), "T")
+	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	v = next.(view)
+	want := "/v/p3|/code/p3|" + claudecode.TaskPrompt("task-20260901-aaaa")
+	if cmd == nil || len(launched) != 1 || launched[0] != want {
+		t.Fatalf("c on the Tasks tab: %v cmd=%v", launched, cmd)
+	}
+	next, _ = v.Update(claudeDoneMsg{name: "Fix it"})
+	v = next.(view)
+	if v.tasksTab == nil || v.tasksTab.status != "back from Claude Code" {
+		t.Fatalf("the board says the session ended: %+v", v.tasksTab)
+	}
+}
+
+func TestTheProblemsTabGoesWithItsLastVault(t *testing.T) {
+	entries := entriesOf(sample())
+	hooks := Hooks{
+		Load:    func() ([]registry.Entry, error) { return entries, nil },
+		Refresh: func() error { return nil },
+	}
+	v := findVault(t, newView(sample(), Opener{}, hooks), "old-notes")
+	if v.tab != tabProblems || !strings.Contains(v.View(), "Problems") {
+		t.Fatalf("the cursor starts on the Problems tab: tab=%d", v.tab)
+	}
+	entries = entriesOf(sample()[:5]) // the problem is adopted, so the scan no longer reports it
+	next, _ := v.Update(refreshedMsg{})
+	v = next.(view)
+	out := v.View()
+	if v.tab != tabProjects || strings.Contains(out, "Problems") {
+		t.Fatalf("the tab goes away with its last vault: tab=%d\n%s", v.tab, out)
+	}
+}
+
 func TestProblemsTabAdoptsAndExplains(t *testing.T) {
 	var got []AddVault
 	hooks := Hooks{

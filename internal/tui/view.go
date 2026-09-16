@@ -187,7 +187,7 @@ func (v *view) current() *Item {
 // tabs lists the tabs the bar shows: Problems only while there is one.
 func (v view) tabs() []tab {
 	out := []tab{tabProjects, tabKnowledge, tabTasks}
-	if len(v.boards[2].items) > 0 {
+	if len(v.boards[boardOf(tabProblems)].items) > 0 {
 		out = append(out, tabProblems)
 	}
 	return out
@@ -250,7 +250,7 @@ func (v *view) rebuild(path string) {
 			v.tab = boardTab(i)
 		}
 	}
-	if v.tab == tabProblems && len(v.boards[2].items) == 0 {
+	if v.tab == tabProblems && len(v.boards[boardOf(tabProblems)].items) == 0 {
 		v.tab = tabProjects
 	}
 	for i := range v.boards {
@@ -263,6 +263,9 @@ func (v *view) rebuild(path string) {
 
 func (v view) Init() tea.Cmd { return nil }
 
+// bodyHeight is how many lines the body may take. The eight it reserves are the blank
+// line, the tab bar, the caption, a blank line, the "more lines" line, a blank line, and
+// the two hint lines.
 func (v view) bodyHeight() int { return max(5, v.height-8) }
 
 func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -657,7 +660,7 @@ func (v view) openTasks(item *Item) (tea.Model, tea.Cmd) {
 		v.errMsg = "tasks are not available here"
 		return v, nil
 	}
-	if item != nil && item.Entry.Kind != vault.Project {
+	if item.Entry.Kind != vault.Project {
 		v.errMsg = "a knowledge base has no tasks"
 		return v, nil
 	}
@@ -673,11 +676,7 @@ func (v view) updateTasks(msg tea.Msg) (tea.Model, tea.Cmd) {
 	s, cmd := v.tasks.update(msg)
 	if s.closed {
 		v.tasks = nil
-		path := ""
-		if s.item != nil {
-			path = s.item.Entry.Path
-		}
-		v.reload(path)
+		v.reload(s.item.Entry.Path)
 		return v, nil
 	}
 	v.tasks = &s
@@ -914,7 +913,7 @@ func (v view) View() string {
 		b.WriteString(v.footer())
 		return b.String()
 	}
-	bd := v.boards[boardOf(v.tab)]
+	bd := v.board()
 	if len(bd.items) == 0 {
 		b.WriteString("  " + dim.Render(empties[v.tab]) + "\n")
 	}
@@ -953,7 +952,10 @@ func vaultKeys(e registry.Entry) string {
 // boardHints lists the keys for the vault under the cursor.
 func (v view) boardHints() string {
 	hints := "↑↓ move"
-	bd := v.boards[boardOf(v.tab)]
+	bd := v.board()
+	if bd == nil {
+		return hints
+	}
 	it := bd.current()
 	if it == nil {
 		return hints

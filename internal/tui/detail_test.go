@@ -100,8 +100,11 @@ func TestMountLineSaysWhatTheLinkIs(t *testing.T) {
 	if got := mountLine(p, gone, "x", 40); got != "╌╌╌╌▶ no knowledge base with id x" {
 		t.Fatalf("gone: %q", got)
 	}
-	if got := mountLine(p, m, "a-very-long-knowledge-base-name", 12); !strings.Contains(got, "a-very-long…") {
-		t.Fatalf("clipped: %q", got)
+	// A long name gives way to the access and the link text, so the whole line fits.
+	big := registry.Mount{ID: "kb3", Name: "a-very-long-knowledge-base-name", Access: "read", Effective: "read", Path: "/v/big/wiki"}
+	long := strings.TrimPrefix(stripANSI(mountLine(p, big, "a-very-long-knowledge-base-name", 40)), arrowOut)
+	if !strings.Contains(long, "a-very-long") || !strings.Contains(long, "…") || len([]rune(long)) > 40 {
+		t.Fatalf("clipped: %q is %d runes", long, len([]rune(long)))
 	}
 }
 

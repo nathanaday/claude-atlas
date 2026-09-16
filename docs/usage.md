@@ -23,7 +23,7 @@ one command, so scripts and muscle memory both work:
 | `e` then `r` forget | `remove NAME` |
 | `m` mounts: on a project `a` mount, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant by name | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
 | `R` refresh | `refresh` |
-| `←` `→` switch tabs; Enter expands a vault in place | — |
+| `←` `→` switch tabs | — |
 | — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
 
 ## Create a vault

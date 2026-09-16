@@ -76,7 +76,8 @@ func less(a, b registry.Entry) bool {
 }
 
 // reload takes the vaults again, drops the expansions of vaults that are gone, keeps the
-// cursor on the same vault, and lays out.
+// cursor on the same vault, and lays out. The board keeps pointers into the slice it is
+// given, so the caller keeps that slice.
 func (b *board) reload(items []Item) {
 	keep := ""
 	if it := b.current(); it != nil {

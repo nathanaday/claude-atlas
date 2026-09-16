@@ -149,16 +149,27 @@ func mountLine(project registry.Entry, m registry.Mount, kbName string, width in
 	if m.Effective != m.Access {
 		access += fmt.Sprintf(" (%s not granted)", m.Access)
 	}
-	text := knowledgeSt.Render(clip(kbName, width))
+	as := ""
 	if m.Name != kbName {
-		text += dim.Render(" as kb/" + m.Name)
+		as = " as kb/" + m.Name
 	}
-	text += "   " + dim.Render(access)
+	link := ""
 	switch vaults.MountState(project, m) {
 	case vaults.MountMissing:
-		text += errSt.Render(" · link missing")
+		link = " · link missing"
 	case vaults.MountWrong:
-		text += errSt.Render(" · link wrong")
+		link = " · link wrong"
+	}
+	// The name gives way to what follows it: the mount name, the three spaces, the access,
+	// and the link text.
+	budget := max(8, width-len([]rune(as))-3-len([]rune(access))-len([]rune(link)))
+	text := knowledgeSt.Render(clip(kbName, budget))
+	if as != "" {
+		text += dim.Render(as)
+	}
+	text += "   " + dim.Render(access)
+	if link != "" {
+		text += errSt.Render(link)
 	}
 	return arrowOut + text
 }
