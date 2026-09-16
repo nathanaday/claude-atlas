@@ -326,6 +326,35 @@ func fileState(v *vault.Vault, rel string) (string, int, bool, error) {
 	return sha(data), len(data), true, nil
 }
 
+// capturedIn reports whether a content hash is recorded in the vault's own source ledger
+// or in a mounted knowledge base's. Knowledge enters through a project, so a source a
+// knowledge base captured may leave the project's inbox. The mounts' ledgers load once, on
+// the first inbox delete; a mount whose ledger cannot be read holds nothing.
+func capturedIn(own *ledger.Ledger, mounts map[string]string, now time.Time) func(sum string) bool {
+	var mounted []*ledger.Ledger
+	loaded := false
+	return func(sum string) bool {
+		if id, _ := own.FindBySHA(sum); id != "" {
+			return true
+		}
+		if !loaded {
+			loaded = true
+			for _, wiki := range mounts {
+				root := filepath.Dir(wiki)
+				if l, err := ledger.Load(filepath.Join(root, filepath.FromSlash(vault.LedgerPath)), now); err == nil {
+					mounted = append(mounted, l)
+				}
+			}
+		}
+		for _, l := range mounted {
+			if id, _ := l.FindBySHA(sum); id != "" {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // Prepare validates a request against the vault's current state and returns a plan.
 func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 	if err := v.Repo().CheckIdle(); err != nil {
@@ -354,6 +383,7 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	captured := capturedIn(led, req.Mounts, now)
 	for _, w := range req.Writes {
 		p, err := normalizePath(w.Path)
 		if err != nil {
@@ -395,7 +425,7 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 			}
 		}
 		if req.Kind == Ingest && strings.HasPrefix(p, vault.InboxDir+"/") {
-			if id, _ := led.FindBySHA(current); id == "" {
+			if !captured(current) {
 				return nil, fmt.Errorf("%s has not been captured; capture it before removing it from the inbox", p)
 			}
 		}

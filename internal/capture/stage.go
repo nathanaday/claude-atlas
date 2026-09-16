@@ -110,7 +110,9 @@ func knownHashes(v *vault.Vault, now time.Time) (map[string]bool, error) {
 			known[s.ContentSHA256] = true
 		}
 	}
-	files, err := ListInbox(v, now)
+	// No mounts: staging asks what this vault holds, and a knowledge base's copy is not
+	// the project's.
+	files, err := ListInbox(v, nil, now)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +134,7 @@ func PlanStage(v *vault.Vault, sources []string, now time.Time) (*StagePlan, err
 	}
 	plan := &StagePlan{Vault: v.Root, New: []Staged{}, Unchanged: []string{}, Skipped: []Skip{}}
 	taken := map[string]bool{}
-	files, _ := ListInbox(v, now)
+	files, _ := ListInbox(v, nil, now)
 	for _, f := range files {
 		taken[strings.ToLower(f.Path)] = true
 		if !f.Captured {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
+	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -47,7 +48,7 @@ func TestListAndCapture(t *testing.T) {
 	os.MkdirAll(v.Path("inbox/notes"), 0o755)
 	os.WriteFile(v.Path("inbox/notes/a.md"), []byte("# a"), 0o644)
 	os.WriteFile(v.Path("inbox/.hidden"), []byte("x"), 0o644)
-	files, err := ListInbox(v, now)
+	files, err := ListInbox(v, nil, now)
 	if err != nil || len(files) != 2 || files[0].Path != "inbox/notes/a.md" || files[1].Kind != "pdf" || files[1].Captured {
 		t.Fatalf("list %+v %v", files, err)
 	}
@@ -84,7 +85,7 @@ func TestListAndCapture(t *testing.T) {
 	if err != nil || len(again.Sources) != 1 || !again.Sources[0].AlreadyCaptured || again.Commit != "" {
 		t.Fatalf("second capture %+v %v", again, err)
 	}
-	files, _ = ListInbox(v, now)
+	files, _ = ListInbox(v, nil, now)
 	if !files[1].Captured || files[1].SourceID != pdf.SourceID {
 		t.Fatalf("list after %+v", files)
 	}
@@ -192,6 +193,41 @@ func TestCaptureFromAProjectIntoAKnowledgeBase(t *testing.T) {
 	}
 	if _, err := CaptureFrom(kb, kb, []string{"paper.md"}, via, now); err == nil || !strings.Contains(err.Error(), "project") {
 		t.Fatalf("source must be a project: %v", err)
+	}
+}
+
+func TestAMountedKnowledgeBasesCaptureFreesTheProjectsInboxFile(t *testing.T) {
+	project := newVault(t)
+	kb := newKnowledgeVault(t)
+	os.WriteFile(project.Path("inbox/paper.md"), []byte("# paper"), 0o644)
+	// The mount folder and the knowledge base's own name differ, so the report names the
+	// knowledge base, not the folder it is mounted as.
+	mounts := map[string]string{"notes": kb.Path(vault.WikiDir)}
+	via := ledger.Via{ID: project.Config.ID, Name: project.Name()}
+	if _, err := CaptureFrom(kb, project, []string{"paper.md"}, via, now); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := ListInbox(project, mounts, now)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("list %+v %v", files, err)
+	}
+	if f := files[0]; !f.Captured || f.CapturedIn != "kb" || f.SourceID == "" || !strings.HasPrefix(f.StoredPath, ".raw/captured/") {
+		t.Fatalf("inbox file %+v", f)
+	}
+	alone, err := ListInbox(project, nil, now)
+	if err != nil || alone[0].Captured || alone[0].CapturedIn != "" || alone[0].SourceID != "" {
+		t.Fatalf("the project's own ledger holds nothing: %+v %v", alone, err)
+	}
+
+	del := txn.Request{Kind: txn.Ingest, Summary: "file the paper in the knowledge base",
+		Writes: []txn.Write{{Path: "inbox/paper.md", Mode: txn.Delete}}, Mounts: mounts}
+	if _, err := txn.Prepare(project, del, now); err != nil {
+		t.Fatalf("an ingest may remove a file the knowledge base captured: %v", err)
+	}
+	del.Mounts = nil
+	if _, err := txn.Prepare(project, del, now); err == nil || !strings.Contains(err.Error(), "has not been captured") {
+		t.Fatalf("with no mount only the project's own ledger counts: %v", err)
 	}
 }
 

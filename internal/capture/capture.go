@@ -29,7 +29,9 @@ const MaxFileBytes = txn.MaxWriteSize
 const WarnFileBytes = 50 << 20
 
 // InboxFile describes one file waiting in inbox/. Area is "tasks" for a note under
-// inbox/tasks/, which the task-plant skill handles rather than ingest.
+// inbox/tasks/, which the task-plant skill handles rather than ingest. CapturedIn names
+// the mounted knowledge base that captured the file, when this vault did not; StoredPath
+// is then relative to that knowledge base's root.
 type InboxFile struct {
 	Path       string `json:"path"`
 	Area       string `json:"area,omitempty"`
@@ -37,6 +39,7 @@ type InboxFile struct {
 	Kind       string `json:"kind"`
 	SHA256     string `json:"sha256"`
 	Captured   bool   `json:"captured"`
+	CapturedIn string `json:"captured_in,omitempty"`
 	SourceID   string `json:"source_id,omitempty"`
 	StoredPath string `json:"stored_path,omitempty"`
 }
@@ -89,12 +92,48 @@ func storedPath(sum, name string) string {
 	return vault.CapturedDir + "/" + sum + ext
 }
 
-// ListInbox walks inbox/ and says which files already have a captured copy.
-func ListInbox(v *vault.Vault, now time.Time) ([]InboxFile, error) {
+// mountedLedger is one mounted knowledge base's source ledger, under the knowledge base's
+// own name.
+type mountedLedger struct {
+	name   string
+	ledger *ledger.Ledger
+}
+
+// mountLedgers loads the source ledger of every mounted knowledge base, in mount-name
+// order so a hash two of them hold answers the same way every time. A knowledge base is
+// named by its identity file, or by the mount when that file cannot be read; one whose
+// ledger cannot be read is left out.
+func mountLedgers(mounts map[string]string, now time.Time) []mountedLedger {
+	names := make([]string, 0, len(mounts))
+	for name := range mounts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []mountedLedger
+	for _, name := range names {
+		root := filepath.Dir(mounts[name])
+		led, err := ledger.Load(filepath.Join(root, filepath.FromSlash(vault.LedgerPath)), now)
+		if err != nil {
+			continue
+		}
+		who := name
+		if cfg, ok := vault.ReadConfig(root); ok && cfg.Name != "" {
+			who = cfg.Name
+		}
+		out = append(out, mountedLedger{name: who, ledger: led})
+	}
+	return out
+}
+
+// ListInbox walks inbox/ and says which files already have a captured copy, here or in one
+// of the mounted knowledge bases (a mount name to that knowledge base's wiki path). A
+// source a knowledge base captured is captured: the project's ingest may remove it.
+func ListInbox(v *vault.Vault, mounts map[string]string, now time.Time) ([]InboxFile, error) {
 	led, err := ledger.Load(v.Path(vault.LedgerPath), now)
 	if err != nil {
 		return nil, err
 	}
+	mounted := mountLedgers(mounts, now)
 	root := v.Path(vault.InboxDir)
 	var files []InboxFile
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -124,6 +163,13 @@ func ListInbox(v *vault.Vault, now time.Time) ([]InboxFile, error) {
 		}
 		if id, rec := led.FindBySHA(sum); id != "" {
 			f.Captured, f.SourceID, f.StoredPath = true, id, rec.Origin.Locator
+		} else {
+			for _, m := range mounted {
+				if id, rec := m.ledger.FindBySHA(sum); id != "" {
+					f.Captured, f.SourceID, f.StoredPath, f.CapturedIn = true, id, rec.Origin.Locator, m.name
+					break
+				}
+			}
 		}
 		files = append(files, f)
 		return nil

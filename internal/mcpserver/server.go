@@ -430,7 +430,7 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 		out.Pages = report.Summary.PagesScanned
 	}
 	if v.Config.Kind == vault.Project {
-		if files, err := capture.ListInbox(v, s.opts.Now()); err == nil {
+		if files, err := capture.ListInbox(v, sess.mounts(), s.opts.Now()); err == nil {
 			for _, f := range files {
 				if !f.Captured {
 					out.InboxWaiting++
@@ -488,14 +488,15 @@ type InboxOut struct {
 }
 
 func (s *Server) inbox(ctx context.Context, req *mcp.CallToolRequest, a VaultArg) (*mcp.CallToolResult, InboxOut, error) {
-	v, err := s.resolve(a.Vault)
+	sess, err := s.open(a.Vault)
 	if err != nil {
 		return nil, InboxOut{}, err
 	}
+	v := sess.target
 	if err := requireProject(v, "inbox"); err != nil {
 		return nil, InboxOut{}, err
 	}
-	files, err := capture.ListInbox(v, s.opts.Now())
+	files, err := capture.ListInbox(v, sess.mounts(), s.opts.Now())
 	if err != nil {
 		return nil, InboxOut{}, err
 	}

@@ -763,6 +763,45 @@ func TestKnowledgeBaseSessionRefusesIngestAndNamesMounts(t *testing.T) {
 	}
 }
 
+// The v2 ingest flow: one capture, into the vault the source belongs to, then that
+// vault's operation, then the project's, which removes the inbox file.
+func TestTheProjectsIngestRemovesAnInboxFileTheKnowledgeBaseCaptured(t *testing.T) {
+	h, _, p, kb := mounted(t)
+	c := connectIn(t, h, p.Root)
+	os.WriteFile(p.Path("inbox/paper.md"), []byte("# A paper\n\nThe claim.\n"), 0o644)
+
+	if msg := c.call("capture", map[string]any{"vault": kb.Root, "paths": []string{"paper.md"}}, nil); msg != "" {
+		t.Fatal(msg)
+	}
+	var list InboxOut
+	if msg := c.call("inbox", nil, &list); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(list.Files) != 1 || !list.Files[0].Captured || list.Files[0].CapturedIn != "kb" {
+		t.Fatalf("the inbox names the knowledge base that captured the file: %+v", list.Files)
+	}
+	var st Status
+	if msg := c.call("status", nil, &st); msg != "" || st.InboxWaiting != 0 {
+		t.Fatalf("a captured file is not waiting: %s %d", msg, st.InboxWaiting)
+	}
+
+	var po PlanOut
+	writes := []map[string]any{{"path": "inbox/paper.md", "mode": "delete"}}
+	if msg := c.call("plan", map[string]any{"kind": "ingest", "summary": "file the paper in kb", "writes": writes}, &po); msg != "" {
+		t.Fatalf("the project's ingest removes the file the knowledge base captured: %q", msg)
+	}
+	var res txn.Result
+	if msg := c.call("apply", map[string]any{"plan_id": po.PlanID}, &res); msg != "" || res.Commit == "" {
+		t.Fatalf("apply: %s %+v", msg, res)
+	}
+	if _, err := os.Stat(p.Path("inbox/paper.md")); err == nil {
+		t.Fatal("the inbox file is gone")
+	}
+	if _, err := os.Stat(kb.Path(".raw/captured")); err != nil {
+		t.Fatal("the knowledge base keeps the captured copy")
+	}
+}
+
 func TestStubIntoAMount(t *testing.T) {
 	h, _, p, kb := mounted(t)
 	linkPage(t, p, "Training", "See [[Backprop]] and [[Attention]].")
