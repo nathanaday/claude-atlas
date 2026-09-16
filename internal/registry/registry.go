@@ -412,7 +412,7 @@ func takeHost(e *Entry) *Repo {
 	host := Repo{Name: HostName(e.Host), Path: e.Host, Changes: links.ChangesCommit}
 	var rest []Repo
 	for _, r := range e.Repos {
-		if strings.EqualFold(r.Name, host.Name) {
+		if strings.EqualFold(r.Name, host.Name) || strings.EqualFold(r.Name, filepath.Base(e.Host)) {
 			if r.Changes != "" {
 				host.Changes = r.Changes
 			}
