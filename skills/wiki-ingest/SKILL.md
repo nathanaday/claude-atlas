@@ -7,7 +7,7 @@ description: "Turn sources into linked, source-cited wiki pages: files waiting i
 
 Turn supplied material into grounded, cross-linked pages without changing the
 source. A project's `inbox/` is the staging area; each vault's `.raw/captured/`
-holds the immutable copy of what that vault ingested. Tools: `status`,
+holds the immutable copy of every source that vault captured. Tools: `status`,
 `mounts`, `inbox`, `capture`, `route`, `plan`, `apply` on the atlas MCP server.
 
 ## Ingest runs in a project session
@@ -45,18 +45,56 @@ project that mounts a knowledge base.
 No network is needed. If the user gives a URL, ask them to save the page into
 `inbox/` (or paste the text). Do not fetch it yourself.
 
-## Capture before reading
+## Choose the vault each source belongs to
 
-Call `capture` with the inbox files in scope. It copies each into the project's
-`.raw/captured/<sha256>.<ext>`, records it in the project's source ledger, and
-commits. Read the captured copy with Read (PDFs included), never the inbox
-original. A file already captured is reported with its existing source id; do
-not capture it again.
+Decide before you capture. A source belongs to one vault, and each knowledge
+base states in `scope` what it holds.
 
-Capture into the project even for a source whose pages will land in a knowledge
-base. The project's ingest operation removes an inbox file only when the
-project's own ledger holds that file; otherwise `plan` answers "… has not been
-captured; capture it before removing it from the inbox".
+- A knowledge base whose `scope` covers the source takes it, and takes the
+  source page and the durable entity and concept pages drawn from it.
+- The project takes a source about the project's own work, and every source no
+  knowledge base's scope covers.
+- Two scopes cover the source, or none of them clearly does: ask the user once,
+  with the scopes listed, then file the rest of the batch without asking again.
+
+The file name, the user's words, and the scopes usually settle it. When they do
+not, skim the inbox file to classify the source, then capture it. Reading the
+inbox file changes nothing; the pages you write cite the captured copy, not the
+inbox path.
+
+One source's pages may still land in both vaults. The source's vault decides
+where the capture and the source page go, not where every page goes.
+
+A mount the project may not write refuses both `capture` and `plan`:
+"`<project> mounts <kb> read-only`". Stop before capturing and tell the user
+which command to run in a terminal:
+
+- the mount's own `access` is `read`: `claude-atlas mount <project> <kb>`
+  without `--read`;
+- `access` is `write` but `effective` is `read`: the knowledge base is guarded,
+  so `claude-atlas grant <kb> <project> --write`.
+
+Do not file that knowledge base's source in the project instead without the
+user's word.
+
+## Capture once, then read the captured copy
+
+Each source is captured once, into the vault it belongs to:
+
+- the project's own source: `capture` with the inbox paths and no `vault`;
+- a knowledge base's source: `capture` with `vault: <the knowledge base's
+  root>` and the same inbox paths.
+
+`capture` copies the file into that vault's `.raw/captured/<sha256>.<ext>`,
+records it in that vault's source ledger, and commits there. A capture into a
+knowledge base records `via`, the project's id and name, and leaves the
+project's inbox file where it is. Read the captured copy with Read (PDFs
+included) for the drafting work.
+
+A file already captured is reported with its existing source id; do not capture
+it again. `inbox` reports such a file as `captured`, and names the knowledge
+base that holds it in `captured_in`; its `stored_path` is relative to that
+vault's root.
 
 Pasted text has no file: quote it in the page and mark its authority
 `synthetic` or `unknown`; there is no ledger record.
@@ -91,39 +129,23 @@ Pasted text has no file: quote it in the page and mark its authority
 7. Prefer updating an existing page over creating a near duplicate.
 
 Parallel workers (the `wiki-ingest` agent) may read and return draft packets
-with proposed paths and content. Give each worker the mounts: per knowledge
-base, its name, the real path of its `wiki/`, its effective access, and its
-scope. The worker returns a target vault with every proposed page. Workers
-never plan or apply; you merge their drafts and apply once per vault.
+with proposed paths and content. Give each worker the captured source's path
+with the root of the vault that holds it, and the mounts: per knowledge base,
+its name, the real path of its `wiki/`, its effective access, and its scope.
+The worker returns a target vault with every proposed page. Workers never plan
+or apply; you merge their drafts and apply once per vault.
 
-## Choose the target vault
+## Where each page goes
 
-One page belongs to one vault.
+One page belongs to one vault, and a source's pages may land in both.
 
-- A knowledge base whose `scope` covers the source takes the source page and
-  the durable entity and concept pages drawn from it.
-- The project takes what is about the project's own work: session and question
-  pages, decisions, and every page no knowledge base's scope covers.
-- Two scopes cover the source, or none of them clearly does: ask the user once,
-  with the scopes listed, then file the rest of the batch without asking again.
-
-For a knowledge base target, call `capture` again with
-`vault: <the knowledge base's root>` and the same inbox paths. It copies the
-file into that knowledge base's `.raw/captured/`, records it in that knowledge
-base's ledger with `via` (the project's id and name), and commits there. The
-project's inbox file is untouched.
-
-A mount the project may not write refuses both `capture` and `plan`:
-"`<project> mounts <kb> read-only`". Stop before capturing and tell the user
-which command to run in a terminal:
-
-- the mount's own `access` is `read`: `claude-atlas mount <project> <kb>`
-  without `--read`;
-- `access` is `write` but `effective` is `read`: the knowledge base is guarded,
-  so `claude-atlas grant <kb> <project> --write`.
-
-Do not file that knowledge base's pages in the project instead without the
-user's word.
+- The source page goes to the vault that captured the source.
+- A durable entity or concept page goes to the knowledge base whose `scope`
+  covers it, when the mount is writable.
+- The project keeps its own work: session and question pages, decisions, and
+  every page no knowledge base's scope covers.
+- A page that already exists anywhere, in the project or in a mount, is a link,
+  not a second page. `route` reports the match.
 
 ## Follow provenance
 
@@ -145,9 +167,8 @@ kind `ingest`, then `apply`. It carries
 - the source page and the entity and concept pages that belong there;
 - that vault's `wiki/index.md` (generic mode) or the relevant MOC (lyt mode);
 - that vault's `wiki/hot.md`, refreshed and under 500 words;
-- `sources`: the source id `capture` returned for that vault, with
-  `ingested: true`, its `pages` as paths under that vault's `wiki/`, and its
-  `authority`.
+- `sources`: the source id `capture` returned, with `ingested: true`, its
+  `pages` as paths under that vault's `wiki/`, and its `authority`.
 
 The project second: `plan` with kind `ingest` and no `vault` argument, then
 `apply`. It carries
@@ -155,14 +176,15 @@ The project second: `plan` with kind `ingest` and no `vault` argument, then
 - the project's own pages and question pages;
 - links to the knowledge base's new pages as `[[Title]]`;
 - the project's `wiki/index.md` or MOC, and its `wiki/hot.md`;
-- `sources`: the project's record for the same file, with `ingested: true` and
-  the pages the project filed; leave `pages` empty when every page went to the
-  knowledge base;
+- `sources`: only for a source the project itself captured, with
+  `ingested: true` and the pages it filed;
 - a `delete` of each ingested file under `inbox/`, so the inbox holds only what
-  is still waiting. The preview shows the removal; the captured copies stay.
+  is still waiting. The preview shows the removal; the captured copy stays in
+  the vault that holds it.
 
-A source that yielded knowledge base pages only still gets this second
-operation; a plan of deletes and a `sources` update alone is allowed.
+An ingest may remove an inbox file that the project or one of its mounted
+knowledge bases has captured. A source whose pages all went to a knowledge base
+still gets this second operation; a plan of deletes alone is allowed.
 
 Change `wiki/overview.md` only when that vault's high-level picture changed.
 Use complete file content for every write. The core writes each vault's log
