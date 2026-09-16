@@ -395,6 +395,42 @@ func TestFindAmbiguousIDPrefix(t *testing.T) {
 	}
 }
 
+// TestByPathFollowsASymlinkedAncestor proves a session that reached the vault through a
+// symlinked parent still finds its entry, and with it its mounts. On macOS /tmp is such
+// a link, and Claude Code hands the hooks and the server the resolved path.
+func TestByPathFollowsASymlinkedAncestor(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "Vaults")
+	if err := os.MkdirAll(filepath.Join(real, "projects", "cs566"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	ix := &Index{Entries: []Entry{
+		{ID: "abcdefgh1111", Kind: vault.Project, Name: "cs566", Path: filepath.Join(real, "projects", "cs566")},
+	}}
+	e := ix.ByPath(filepath.Join(link, "projects", "cs566"))
+	if e == nil {
+		t.Fatal("ByPath through a symlinked parent found nothing")
+	}
+	if e.Name != "cs566" {
+		t.Fatalf("ByPath found %q", e.Name)
+	}
+	// The other direction: the scan recorded the path through the link, and the session
+	// asks with the resolved one.
+	linked := &Index{Entries: []Entry{
+		{ID: "abcdefgh1111", Kind: vault.Project, Name: "cs566", Path: filepath.Join(link, "projects", "cs566")},
+	}}
+	if linked.ByPath(filepath.Join(real, "projects", "cs566")) == nil {
+		t.Fatal("ByPath with a resolved path found nothing")
+	}
+	if ix.ByPath(filepath.Join(link, "projects", "other")) != nil {
+		t.Fatal("ByPath matched a path that is no vault")
+	}
+}
+
 // initRepo makes a git repository at dir with one commit, the way a code repository a
 // project moves into looks.
 func initRepo(t *testing.T, dir string) string {

@@ -497,7 +497,9 @@ func (ix *Index) ByID(id string) *Entry {
 	return nil
 }
 
-// ByPath finds an entry by its root path.
+// ByPath finds an entry by its root path. A path that reaches the vault through a
+// symlinked parent, which is what a session hands the hooks and the server on macOS,
+// where /tmp links to /private/tmp, matches the entry it resolves to.
 func (ix *Index) ByPath(path string) *Entry {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -505,6 +507,15 @@ func (ix *Index) ByPath(path string) *Entry {
 	}
 	for i := range ix.Entries {
 		if ix.Entries[i].Path == abs {
+			return &ix.Entries[i]
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil
+	}
+	for i := range ix.Entries {
+		if entry, err := filepath.EvalSymlinks(ix.Entries[i].Path); err == nil && entry == resolved {
 			return &ix.Entries[i]
 		}
 	}
