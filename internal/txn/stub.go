@@ -17,7 +17,7 @@ import (
 // lands in.
 type StubTitle struct {
 	Title  string `json:"title" jsonschema:"the page's title as the link writes it"`
-	Type   string `json:"type,omitempty" jsonschema:"concept, entity, question, or session; note or moc in lyt mode"`
+	Type   string `json:"type,omitempty" jsonschema:"concept or entity; in a project also question or session; in lyt mode note or moc as well"`
 	Target string `json:"target,omitempty" jsonschema:"a mount name; the stub lands in that knowledge base"`
 }
 
@@ -87,13 +87,12 @@ type candidate struct {
 }
 
 // stubSet is what one lint report offers to stub: the candidates by lowercased title, in
-// the report's order, the empty pages whose file name cannot come from a title, and the
-// titles the set refuses, each with its reason.
+// the report's order, and the reason each title the set refuses cannot be stubbed. A
+// refused title keeps its place in the order, so a run with no titles reports it.
 type stubSet struct {
 	report     *lint.Report
 	candidates map[string]candidate
-	unnameable map[string]string
-	conflicts  map[string]string
+	refused    map[string]string
 	order      []string
 }
 
@@ -105,7 +104,14 @@ func stubCandidates(v *vault.Vault, withEmpty bool, mounts map[string]string, no
 	if err != nil {
 		return nil, err
 	}
-	set := &stubSet{report: report, candidates: map[string]candidate{}, unnameable: map[string]string{}, conflicts: map[string]string{}}
+	return candidatesFrom(v, report, withEmpty)
+}
+
+// candidatesFrom turns one report into the set. It reads each empty page once, for the
+// hash that guards the write; the user may have deleted the page since the report, and
+// then the title is refused rather than the whole run.
+func candidatesFrom(v *vault.Vault, report *lint.Report, withEmpty bool) (*stubSet, error) {
+	set := &stubSet{report: report, candidates: map[string]candidate{}, refused: map[string]string{}}
 	for _, w := range report.WantedPages {
 		key := strings.ToLower(w.Title)
 		set.candidates[key] = candidate{title: w.Title}
@@ -120,19 +126,23 @@ func stubCandidates(v *vault.Vault, withEmpty bool, mounts map[string]string, no
 		}
 		title := vault.PageTitle(s.Path)
 		key := strings.ToLower(title)
-		if vault.SanitizeTitle(title) != title {
-			set.unnameable[key] = title
+		if _, taken := set.refused[key]; taken {
 			continue
 		}
-		if _, taken := set.conflicts[key]; taken {
+		if vault.SanitizeTitle(title) != title {
+			set.refuse(key, title, fmt.Sprintf("the link text %q cannot be a file name; rename the link, then stub it", title))
 			continue
 		}
 		prior, dup := set.candidates[key]
 		if dup && prior.empty != "" {
-			set.conflicts[key] = fmt.Sprintf("two empty pages are named %s: %s, %s; keep one", title, prior.empty, s.Path)
+			set.refuse(key, title, fmt.Sprintf("two empty pages are named %s: %s, %s; keep one", title, prior.empty, s.Path))
 			continue
 		}
 		data, err := os.ReadFile(v.Path(s.Path))
+		if errors.Is(err, os.ErrNotExist) {
+			set.refuse(key, title, fmt.Sprintf("%s disappeared before the stub", s.Path))
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -142,6 +152,16 @@ func stubCandidates(v *vault.Vault, withEmpty bool, mounts map[string]string, no
 		set.candidates[key] = candidate{title: title, empty: s.Path, hash: sha(data)}
 	}
 	return set, nil
+}
+
+// refuse records why a title cannot be stubbed and keeps it among the candidates, so a
+// run with no titles reports it rather than passing it over in silence.
+func (set *stubSet) refuse(key, title, reason string) {
+	if _, known := set.candidates[key]; !known {
+		set.candidates[key] = candidate{title: title}
+		set.order = append(set.order, key)
+	}
+	set.refused[key] = reason
 }
 
 // all lists every candidate as a title, in the report's order.
@@ -156,14 +176,11 @@ func (set *stubSet) all() []StubTitle {
 // find matches a title without regard to case. It says why a title cannot be stubbed.
 func (set *stubSet) find(v *vault.Vault, title string) (candidate, error) {
 	key := strings.ToLower(strings.TrimSpace(title))
-	if reason, taken := set.conflicts[key]; taken {
+	if reason, no := set.refused[key]; no {
 		return candidate{}, errors.New(reason)
 	}
 	if c, ok := set.candidates[key]; ok {
 		return c, nil
-	}
-	if text, unnamed := set.unnameable[key]; unnamed {
-		return candidate{}, fmt.Errorf("the link text %q cannot be a file name; rename the link, then stub it", text)
 	}
 	return candidate{}, notWanted(v, set.report, strings.TrimSpace(title))
 }

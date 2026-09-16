@@ -683,7 +683,7 @@ func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArg
 type StubArgs struct {
 	VaultArg
 	Titles []txn.StubTitle `json:"titles,omitempty" jsonschema:"the pages to stub; omit to stub every wanted page and every empty page a link points to"`
-	Type   string          `json:"type,omitempty" jsonschema:"the type for titles that name none: concept, entity, question, or session; note or moc in lyt mode; default concept, or note in lyt mode"`
+	Type   string          `json:"type,omitempty" jsonschema:"the type for titles that name none: concept or entity; in a project also question or session; in lyt mode note or moc as well; the default is concept, or note in lyt mode"`
 }
 
 // StubOp is one operation a stub call made, in the vault it was committed in.

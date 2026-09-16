@@ -250,6 +250,18 @@ func TestStubLeavesAnUnsanitizableEmptyPageAlone(t *testing.T) {
 	if err != nil || len(res.Stubs) != 1 || res.Stubs[0].Title != "Ordinary" {
 		t.Fatalf("only the ordinary wanted page stubs: %+v %v", res, err)
 	}
+	// The two it left alone are named, so the list is not silent about them.
+	var skipped []string
+	for _, s := range res.Skipped {
+		skipped = append(skipped, s.Title+": "+s.Reason)
+	}
+	want := []string{
+		`a  b: the link text "a  b" cannot be a file name; rename the link, then stub it`,
+		`What?: the link text "What?" cannot be a file name; rename the link, then stub it`,
+	}
+	if strings.Join(skipped, "|") != strings.Join(want, "|") {
+		t.Fatalf("skipped\n got %v\nwant %v", skipped, want)
+	}
 	if data, err := os.ReadFile(v.Path("wiki/What?.md")); err != nil || len(data) != 0 {
 		t.Fatalf("What?.md stays untouched: %q %v", data, err)
 	}
@@ -270,6 +282,65 @@ func TestStubLeavesAnUnsanitizableEmptyPageAlone(t *testing.T) {
 	if _, _, _, err := StubRequest(v, []StubTitle{{Title: "What?"}}, "", nil, now); err == nil ||
 		!strings.Contains(err.Error(), `the link text "What?" cannot be a file name`) {
 		t.Fatalf("refusal for What?: %v", err)
+	}
+}
+
+// The user can delete an empty page while the stub is reading the vault. The candidate is
+// then gone, and a run with no titles reports it instead of failing.
+func TestStubSkipsAnEmptyPageThatDisappeared(t *testing.T) {
+	v := newVault(t)
+	writeFile(t, v, "wiki/concepts/Linker.md", string(mkpage("Linker", "# Linker\n\nSee [[Clicked]] and [[Ordinary]].\n")))
+	writeFile(t, v, "wiki/Clicked.md", "")
+	report, err := lint.Run(v.Root, lint.Options{AsOf: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(v.Path("wiki/Clicked.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	set, err := candidatesFrom(v, report, true)
+	if err != nil {
+		t.Fatalf("a page that is gone is not an error: %v", err)
+	}
+	_, stubbed, skipped, err := set.writes(v, v, set.all(), "concept", true, now)
+	if err != nil || len(stubbed) != 1 || stubbed[0].Title != "Ordinary" {
+		t.Fatalf("the rest still stubs: %+v %v", stubbed, err)
+	}
+	if len(skipped) != 1 || skipped[0] != (Skipped{Title: "Clicked", Reason: "wiki/Clicked.md disappeared before the stub"}) {
+		t.Fatalf("skipped %+v", skipped)
+	}
+	if _, _, _, err := set.writes(v, v, []StubTitle{{Title: "Clicked"}}, "concept", false, now); err == nil ||
+		err.Error() != "wiki/Clicked.md disappeared before the stub" {
+		t.Fatalf("a named title: %v", err)
+	}
+}
+
+// Three pages with one name name the first two: the user keeps one and runs the stub again.
+func TestStubNamesTwoOfThreePagesSharingAName(t *testing.T) {
+	v := newVault(t)
+	writeFile(t, v, "wiki/concepts/Linker.md", string(mkpage("Linker", "# Linker\n\n[a](Three.md), [b](notes/Three.md), [c](other/Three.md)\n")))
+	for _, rel := range []string{"wiki/concepts/Three.md", "wiki/concepts/notes/Three.md", "wiki/concepts/other/Three.md"} {
+		writeFile(t, v, rel, "")
+	}
+	res, err := StubPages(v, nil, "", nil, now)
+	if err != nil || len(res.Stubs) != 0 {
+		t.Fatalf("nothing stubs: %+v %v", res, err)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != "two empty pages are named Three: wiki/concepts/notes/Three.md, wiki/concepts/other/Three.md; keep one" {
+		t.Fatalf("skipped %+v", res.Skipped)
+	}
+}
+
+// Without a wiki to walk, the refusal says the vault could not be read.
+func TestStubSaysWhenItCannotReadTheWiki(t *testing.T) {
+	v := newVault(t)
+	if err := os.RemoveAll(v.Path(vault.WikiDir)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := StubRequest(v, []StubTitle{{Title: "Anything"}}, "", nil, now)
+	if err == nil || !strings.Contains(err.Error(), "cannot read wiki:") {
+		t.Fatalf("no wiki: %v", err)
 	}
 }
 

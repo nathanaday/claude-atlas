@@ -106,14 +106,15 @@ as `plant` does: no preview, one commit, and `undo` reverts it.
 - With titles, each `{title, type}` must name a wanted page or an empty-file
   stub, compared without regard to case. Otherwise it refuses and says why: a
   page exists (with its path), a near match exists (with the suggestion),
-  nothing links to the title, two empty pages carry the name, or the link text
-  cannot be a file name.
+  nothing links to the title, two empty pages carry the name, the link text
+  cannot be a file name, or the empty page has gone since the lint run.
 - One title given twice with two types is refused. Given twice with one type
   it stubs one page.
 - The type defaults to `concept` in generic mode and `note` in lyt mode. It
-  must be a type the mode files: `concept`, `entity`, `question`, or
-  `session` in generic mode, `note` or `moc` in lyt mode. `source` is refused,
-  because a source page needs a captured file and a ledger record.
+  must be a type the vault files (`vault.RoutableTypes`): `concept` or
+  `entity`, in a project also `question` or `session`, and in lyt mode `note`
+  or `moc` as well. `source` is refused, because a source page needs a
+  captured file and a ledger record.
 - The path and the seed content both come from `Vault.RouteFor`: frontmatter
   with `status: seed`, the title, and the type's headings.
 - The file name is the title as first written.
@@ -136,7 +137,7 @@ operation id and commit.
 
 | Surface | Form |
 |---|---|
-| MCP tool `stub` | `titles` (optional list of `{title, type, target}`), `type` (the default for titles that name none: `concept`, `entity`, `question`, or `session`; `note` or `moc` in lyt mode), `vault` |
+| MCP tool `stub` | `titles` (optional list of `{title, type, target}`), `type` (the default for titles that name none: `concept` or `entity`; in a project also `question` or `session`; in lyt mode `note` or `moc` as well), `vault` |
 | CLI | `claude-atlas stub VAULT [TITLE...] [--type T]` |
 | TUI | none; the TUI is a subset of the CLI |
 
@@ -180,9 +181,10 @@ hook timeout is 10 s.
   `"newFileFolderPath": "wiki"`. A click on a placeholder link then creates
   the empty note under `wiki/`, where lint lists it as a stub.
 - `vault.Upgrade` and `vault.Adopt` add both keys to an existing `app.json`
-  only when `newFileLocation` is absent, keeping every other setting. An
-  `app.json` that is not valid JSON stays as it is: the settings are the
-  user's file, so upgrade names the file and stops.
+  only when `newFileLocation` is absent, keeping every other setting. An empty
+  `app.json` holds nothing to lose, so both keys go in. An `app.json` that
+  holds something other than a JSON object stays as it is: the settings are
+  the user's file, so upgrade names the file and stops.
 - Obsidian uses the same setting for a note made with Cmd+N. Such a note
   lands in `wiki/`, and without frontmatter lint reports it as missing
   frontmatter, as it does any hand-made page under `wiki/`.

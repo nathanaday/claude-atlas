@@ -333,25 +333,56 @@ func TestUpgradeAndAdoptMoveTheTaskIndexFromItsOldPath(t *testing.T) {
 	keeps("an ignored", "my ignored notes\n")
 }
 
-// Obsidian's settings are the user's file. A broken one is a problem the user fixes; an
-// upgrade says so and keeps the file.
-func TestUpgradeRefusesABrokenSettingsFile(t *testing.T) {
+// Obsidian's settings are the user's file. An empty one holds nothing to lose, so the
+// upgrade merges its keys into it; a file that holds something else is the user's to fix,
+// and the upgrade names it and stops.
+func TestUpgradeFillsAnEmptySettingsFileAndRefusesANonObject(t *testing.T) {
 	needGit(t)
-	root := filepath.Join(t.TempDir(), "v")
-	if _, err := Init(root, Options{Kind: Project}, now); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name, text string
+		refuse     bool
+	}{
+		{"empty", "", false},
+		{"whitespace", "  \n", false},
+		{"array", "[]", true},
+		{"null", "null", true},
+		{"truncated", "{ \"newFileLocation\": \n", true},
 	}
-	app := filepath.Join(root, filepath.FromSlash(AppFile))
-	broken := "{ \"newFileLocation\": \n"
-	if err := os.WriteFile(app, []byte(broken), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := Upgrade(root, now)
-	if err == nil || !strings.Contains(err.Error(), AppFile) {
-		t.Fatalf("upgrade over broken settings: %v", err)
-	}
-	if data, _ := os.ReadFile(app); string(data) != broken {
-		t.Fatalf("the file stays as the user left it: %q", data)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "v")
+			if _, err := Init(root, Options{Kind: Project}, now); err != nil {
+				t.Fatal(err)
+			}
+			app := filepath.Join(root, filepath.FromSlash(AppFile))
+			if err := os.WriteFile(app, []byte(c.text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Upgrade(root, now)
+			if c.refuse {
+				if err == nil || !strings.Contains(err.Error(), AppFile) || !strings.Contains(err.Error(), "is not a JSON object") {
+					t.Fatalf("upgrade: %v", err)
+				}
+				if data, _ := os.ReadFile(app); string(data) != c.text {
+					t.Fatalf("the file stays as the user left it: %q", data)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("upgrade: %v", err)
+			}
+			var settings map[string]any
+			data, readErr := os.ReadFile(app)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if err := json.Unmarshal(data, &settings); err != nil {
+				t.Fatalf("settings %q: %v", data, err)
+			}
+			if settings["newFileLocation"] != "folder" || settings["newFileFolderPath"] != WikiDir {
+				t.Fatalf("the merged keys: %+v", settings)
+			}
+		})
 	}
 }
 
