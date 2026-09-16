@@ -144,7 +144,7 @@ func TestDetailLinesByKind(t *testing.T) {
 			t.Errorf("project detail missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "Mounts") || strings.Contains(out, "ai-ml") {
+	if strings.Contains(out, "Mounts") {
 		t.Errorf("the connectors carry the mounts:\n%s", out)
 	}
 	kb := registry.Entry{Kind: vault.Knowledge, Name: "papers", Path: "/v/papers", Scope: "papers sources",

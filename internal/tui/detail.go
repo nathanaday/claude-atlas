@@ -298,16 +298,7 @@ func detailLines(e registry.Entry, today time.Time) []string {
 	if t, err := time.Parse("2006-01-02T15:04:05Z", s.GeneratedAt); err == nil {
 		row("Refreshed", t.Local().Format("2006-01-02 15:04"))
 	}
-	var signals []string
-	for _, signal := range refresh.Signals(e, today) {
-		// The connectors already say when a mount's link is missing or wrong
-		// (mountLine); a mount signal here would repeat that.
-		if strings.HasPrefix(signal, "mount ") {
-			continue
-		}
-		signals = append(signals, signal)
-	}
-	if len(signals) > 0 {
+	if signals := refresh.Signals(e, today); len(signals) > 0 {
 		out = append(out, catSt.Render("Signals"))
 		for _, signal := range signals {
 			out = append(out, "  - "+signal)
