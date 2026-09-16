@@ -12,9 +12,12 @@ import (
 	"time"
 )
 
-// Repo is a git working tree rooted at Dir.
+// Repo is a git working tree rooted at Dir. Prefix is the path inside it that the caller
+// owns, with a trailing slash ("atlas/"), or "" for the whole tree: every command is
+// scoped to it, and every path a method takes or returns is relative to it.
 type Repo struct {
-	Dir string
+	Dir    string
+	Prefix string
 }
 
 // Available reports whether the git command is on PATH.
@@ -46,6 +49,27 @@ func (r Repo) run(args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %s", args[0], detail)
 	}
 	return stdout.String(), nil
+}
+
+// in returns p under Prefix.
+func (r Repo) in(p string) string {
+	return r.Prefix + p
+}
+
+// out strips Prefix from p. It returns false when p does not carry the prefix.
+func (r Repo) out(p string) (string, bool) {
+	if r.Prefix == "" {
+		return p, true
+	}
+	return strings.CutPrefix(p, r.Prefix)
+}
+
+// pathspec is the argument that scopes a command to Prefix, or "." for the whole tree.
+func (r Repo) pathspec() string {
+	if r.Prefix != "" {
+		return r.Prefix
+	}
+	return "."
 }
 
 // Init creates a repository at Dir with main as its first branch.
@@ -126,7 +150,11 @@ type Entry struct {
 
 // Status lists every changed or untracked path. Untracked directories are expanded to files.
 func (r Repo) Status() ([]Entry, error) {
-	out, err := r.run("status", "--porcelain=v1", "-z", "-uall")
+	args := []string{"status", "--porcelain=v1", "-z", "-uall"}
+	if r.Prefix != "" {
+		args = append(args, "--", r.pathspec())
+	}
+	out, err := r.run(args...)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +170,11 @@ func (r Repo) Status() ([]Entry, error) {
 			// A rename carries the source path in the next field.
 			i++
 		}
-		entries = append(entries, Entry{Code: code, Path: path})
+		stripped, ok := r.out(path)
+		if !ok {
+			continue
+		}
+		entries = append(entries, Entry{Code: code, Path: stripped})
 	}
 	return entries, nil
 }
@@ -155,7 +187,7 @@ func (r Repo) Dirty() (bool, error) {
 
 // AddAll stages every change in the tree, deletions included.
 func (r Repo) AddAll() error {
-	_, err := r.run("add", "-A", "--", ".")
+	_, err := r.run("add", "-A", "--", r.pathspec())
 	return err
 }
 
@@ -164,7 +196,11 @@ func (r Repo) Add(paths ...string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	_, err := r.run(append([]string{"add", "-A", "--"}, paths...)...)
+	args := []string{"add", "-A", "--"}
+	for _, p := range paths {
+		args = append(args, r.in(p))
+	}
+	_, err := r.run(args...)
 	return err
 }
 
@@ -177,9 +213,13 @@ func (r Repo) identityArgs() []string {
 }
 
 // Commit records the index with message and returns the new commit. It falls back to a
-// local identity when the user has none configured, and skips commit hooks.
+// local identity when the user has none configured, and skips commit hooks. With a
+// prefix, it commits only the working tree under it and leaves the index outside alone.
 func (r Repo) Commit(message string) (string, error) {
 	args := append(r.identityArgs(), "commit", "-q", "--no-verify", "-m", message)
+	if r.Prefix != "" {
+		args = append(args, "--", r.Prefix)
+	}
 	if _, err := r.run(args...); err != nil {
 		return "", err
 	}
@@ -191,13 +231,17 @@ func (r Repo) RestoreFromHead(paths ...string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	_, err := r.run(append([]string{"checkout", "HEAD", "--"}, paths...)...)
+	args := []string{"checkout", "HEAD", "--"}
+	for _, p := range paths {
+		args = append(args, r.in(p))
+	}
+	_, err := r.run(args...)
 	return err
 }
 
 // Tracked reports whether HEAD contains path.
 func (r Repo) Tracked(path string) bool {
-	_, err := r.run("cat-file", "-e", "HEAD:"+path)
+	_, err := r.run("cat-file", "-e", "HEAD:"+r.in(path))
 	return err == nil
 }
 
@@ -218,6 +262,9 @@ func (r Repo) Log(n int) ([]Commit, error) {
 	args := []string{"log", "--format=%H%x00%aI%x00%s%x00%b%x1e"}
 	if n > 0 {
 		args = append(args, fmt.Sprintf("-n%d", n))
+	}
+	if r.Prefix != "" {
+		args = append(args, "--", r.Prefix)
 	}
 	out, err := r.run(args...)
 	if err != nil {
@@ -248,7 +295,7 @@ func (r Repo) LogFollow(path string) ([]Commit, error) {
 	if !r.HasHead() {
 		return nil, nil
 	}
-	out, err := r.run("log", "--follow", "--format=%H%x00%aI%x00%s%x00%b%x1e", "--", path)
+	out, err := r.run("log", "--follow", "--format=%H%x00%aI%x00%s%x00%b%x1e", "--", r.in(path))
 	if err != nil {
 		return nil, err
 	}
@@ -284,11 +331,12 @@ func (r Repo) RevertNoCommit(sha string) error {
 
 // ShowFile returns the content of path at rev.
 func (r Repo) ShowFile(rev, path string) ([]byte, error) {
-	cmd := r.cmd("show", rev+":"+path)
+	full := r.in(path)
+	cmd := r.cmd("show", rev+":"+full)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git show %s:%s: %s", rev, path, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("git show %s:%s: %s", rev, full, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
 }
@@ -301,9 +349,14 @@ func (r Repo) ChangedPaths(sha string) ([]string, error) {
 	}
 	var paths []string
 	for _, p := range strings.Split(out, "\x00") {
-		if p != "" {
-			paths = append(paths, p)
+		if p == "" {
+			continue
 		}
+		stripped, ok := r.out(p)
+		if !ok {
+			continue
+		}
+		paths = append(paths, stripped)
 	}
 	return paths, nil
 }
