@@ -92,37 +92,13 @@ func storedPath(sum, name string) string {
 	return vault.CapturedDir + "/" + sum + ext
 }
 
-// mountedLedger is one mounted knowledge base's source ledger, under the knowledge base's
-// own name.
-type mountedLedger struct {
-	name   string
-	ledger *ledger.Ledger
-}
-
-// mountLedgers loads the source ledger of every mounted knowledge base, in mount-name
-// order so a hash two of them hold answers the same way every time. A knowledge base is
-// named by its identity file, or by the mount when that file cannot be read; one whose
-// ledger cannot be read is left out.
-func mountLedgers(mounts map[string]string, now time.Time) []mountedLedger {
-	names := make([]string, 0, len(mounts))
-	for name := range mounts {
-		names = append(names, name)
+// holderName is the name of the vault that holds a source: its own, from its identity
+// file, or the mount it was reached through when that file cannot be read.
+func holderName(h *ledger.Holder) string {
+	if cfg, ok := vault.ReadConfig(h.Root); ok && cfg.Name != "" {
+		return cfg.Name
 	}
-	sort.Strings(names)
-	var out []mountedLedger
-	for _, name := range names {
-		root := filepath.Dir(mounts[name])
-		led, err := ledger.Load(filepath.Join(root, filepath.FromSlash(vault.LedgerPath)), now)
-		if err != nil {
-			continue
-		}
-		who := name
-		if cfg, ok := vault.ReadConfig(root); ok && cfg.Name != "" {
-			who = cfg.Name
-		}
-		out = append(out, mountedLedger{name: who, ledger: led})
-	}
-	return out
+	return h.Mount
 }
 
 // ListInbox walks inbox/ and says which files already have a captured copy, here or in one
@@ -133,7 +109,7 @@ func ListInbox(v *vault.Vault, mounts map[string]string, now time.Time) ([]Inbox
 	if err != nil {
 		return nil, err
 	}
-	mounted := mountLedgers(mounts, now)
+	mounted := ledger.Mounts(mounts, now)
 	root := v.Path(vault.InboxDir)
 	var files []InboxFile
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -163,13 +139,8 @@ func ListInbox(v *vault.Vault, mounts map[string]string, now time.Time) ([]Inbox
 		}
 		if id, rec := led.FindBySHA(sum); id != "" {
 			f.Captured, f.SourceID, f.StoredPath = true, id, rec.Origin.Locator
-		} else {
-			for _, m := range mounted {
-				if id, rec := m.ledger.FindBySHA(sum); id != "" {
-					f.Captured, f.SourceID, f.StoredPath, f.CapturedIn = true, id, rec.Origin.Locator, m.name
-					break
-				}
-			}
+		} else if h := mounted.Find(sum); h != nil {
+			f.Captured, f.SourceID, f.StoredPath, f.CapturedIn = true, h.ID, h.Source.Origin.Locator, holderName(h)
 		}
 		files = append(files, f)
 		return nil

@@ -817,3 +817,32 @@ func TestKnowledgeBaseBoundsWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A plan reads a mount's ledger only to remove a captured file from the inbox. Every mount
+// here points into a directory that does not exist, so a plan that reads one would find
+// nothing; only the inbox delete is refused.
+func TestOnlyAnInboxDeleteAsksTheMounts(t *testing.T) {
+	v := newVault(t)
+	gone := map[string]string{"kb": filepath.Join(t.TempDir(), "absent", "wiki")}
+
+	ok := []struct {
+		name string
+		req  Request
+	}{
+		{"a page", Request{Kind: Ingest, Summary: "add A", Mounts: gone,
+			Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: mkpage("A", "# A\n\ntext\n")}}}},
+		{"another kind", Request{Kind: Save, Summary: "save A", Mounts: gone,
+			Writes: []Write{{Path: "wiki/concepts/B.md", Mode: Create, Content: mkpage("B", "# B\n\ntext\n")}}}},
+	}
+	for _, c := range ok {
+		if _, err := Prepare(v, c.req, now); err != nil {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+
+	del := Request{Kind: Ingest, Summary: "clear the inbox", Mounts: gone,
+		Writes: []Write{{Path: "inbox/.gitkeep", Mode: Delete}}}
+	if _, err := Prepare(v, del, now); err == nil || !strings.Contains(err.Error(), "has not been captured") {
+		t.Errorf("an inbox delete asks the mounts, and none holds the file: %v", err)
+	}
+}

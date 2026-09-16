@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
@@ -770,14 +771,20 @@ func TestTheProjectsIngestRemovesAnInboxFileTheKnowledgeBaseCaptured(t *testing.
 	c := connectIn(t, h, p.Root)
 	os.WriteFile(p.Path("inbox/paper.md"), []byte("# A paper\n\nThe claim.\n"), 0o644)
 
-	if msg := c.call("capture", map[string]any{"vault": kb.Root, "paths": []string{"paper.md"}}, nil); msg != "" {
+	var captured capture.Result
+	if msg := c.call("capture", map[string]any{"vault": kb.Root, "paths": []string{"paper.md"}}, &captured); msg != "" {
 		t.Fatal(msg)
 	}
+	if len(captured.Sources) != 1 {
+		t.Fatalf("capture %+v", captured)
+	}
+	stored := captured.Sources[0].StoredPath
 	var list InboxOut
 	if msg := c.call("inbox", nil, &list); msg != "" {
 		t.Fatal(msg)
 	}
-	if len(list.Files) != 1 || !list.Files[0].Captured || list.Files[0].CapturedIn != "kb" {
+	f := list.Files[0]
+	if len(list.Files) != 1 || !f.Captured || f.CapturedIn != "kb" || f.SourceID != captured.Sources[0].SourceID || f.StoredPath != stored {
 		t.Fatalf("the inbox names the knowledge base that captured the file: %+v", list.Files)
 	}
 	var st Status
@@ -797,8 +804,11 @@ func TestTheProjectsIngestRemovesAnInboxFileTheKnowledgeBaseCaptured(t *testing.
 	if _, err := os.Stat(p.Path("inbox/paper.md")); err == nil {
 		t.Fatal("the inbox file is gone")
 	}
-	if _, err := os.Stat(kb.Path(".raw/captured")); err != nil {
-		t.Fatal("the knowledge base keeps the captured copy")
+	if data, err := os.ReadFile(kb.Path(stored)); err != nil || string(data) != "# A paper\n\nThe claim.\n" {
+		t.Fatalf("the knowledge base keeps the captured copy at %s: %s %v", stored, data, err)
+	}
+	if _, err := os.Stat(p.Path(stored)); err == nil {
+		t.Fatal("the project holds no copy of a source the knowledge base captured")
 	}
 }
 

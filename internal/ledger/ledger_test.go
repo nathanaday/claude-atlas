@@ -1,6 +1,8 @@
 package ledger
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +117,102 @@ func TestParseKeepsLegacyFields(t *testing.T) {
 	out := string(l.Encode())
 	if !strings.Contains(out, `"independence_key": "x"`) || !strings.Contains(out, `"refresh_due"`) || !strings.Contains(out, Schema) {
 		t.Fatalf("encode:\n%s", out)
+	}
+}
+
+// writeLedger puts a ledger holding one source at root's ledger path and returns the
+// source's content hash.
+func writeLedger(t *testing.T, root, sha string) {
+	t.Helper()
+	l := Empty(now)
+	origin := &Origin{Kind: "file", Locator: ".raw/captured/" + sha + ".md"}
+	if err := l.Apply([]Update{{ID: ID(origin.Kind, origin.Locator, sha), Origin: origin, ContentSHA256: sha}}, now); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, filepath.FromSlash(VaultPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, l.Encode(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMountsFindReadsNothingUntilItIsAsked(t *testing.T) {
+	root := t.TempDir()
+	kb := filepath.Join(root, "kb")
+	writeLedger(t, kb, "aa")
+
+	m := Mounts(map[string]string{"kb": filepath.Join(kb, "wiki")}, now)
+	if m.reads != 0 {
+		t.Fatalf("Mounts must read nothing: %d", m.reads)
+	}
+	h := m.Find("aa")
+	if h == nil || h.Root != kb || h.Mount != "kb" || h.Source == nil || h.Source.Origin.Locator != ".raw/captured/aa.md" {
+		t.Fatalf("holder %+v", h)
+	}
+	if m.reads != 1 {
+		t.Fatalf("one mount, one read: %d", m.reads)
+	}
+	if m.Find("bb") != nil || m.Find("aa") == nil || m.reads != 1 {
+		t.Fatalf("the ledgers load once: %d", m.reads)
+	}
+	if m.Find("") != nil {
+		t.Fatal("an empty hash holds nothing")
+	}
+	var absent *Mounted
+	if absent.Find("aa") != nil {
+		t.Fatal("no mounts, no holder")
+	}
+}
+
+func TestMountsSkipALedgerItCannotRead(t *testing.T) {
+	root := t.TempDir()
+	garbage := filepath.Join(root, "garbage")
+	if err := os.MkdirAll(filepath.Join(garbage, filepath.FromSlash(VaultPath)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	broken := filepath.Join(root, "broken")
+	brokenPath := filepath.Join(broken, filepath.FromSlash(VaultPath))
+	if err := os.MkdirAll(filepath.Dir(brokenPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brokenPath, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(root, "gone")
+	holder := filepath.Join(root, "holder")
+	writeLedger(t, holder, "aa")
+
+	// The names sort before "holder", so an unreadable ledger must not stop the walk.
+	m := Mounts(map[string]string{
+		"a-garbage": filepath.Join(garbage, "wiki"),
+		"b-broken":  filepath.Join(broken, "wiki"),
+		"c-gone":    filepath.Join(gone, "wiki"),
+		"d-holder":  filepath.Join(holder, "wiki"),
+		"e-empty":   "",
+	}, now)
+	h := m.Find("aa")
+	if h == nil || h.Root != holder || h.Mount != "d-holder" {
+		t.Fatalf("holder %+v", h)
+	}
+	if m.reads != 4 {
+		t.Fatalf("the empty path is not a mount to read: %d", m.reads)
+	}
+	if m.Find("zz") != nil {
+		t.Fatal("no ledger holds zz")
+	}
+}
+
+func TestMountsAnswerInMountNameOrder(t *testing.T) {
+	root := t.TempDir()
+	first, second := filepath.Join(root, "one"), filepath.Join(root, "two")
+	writeLedger(t, first, "aa")
+	writeLedger(t, second, "aa")
+	paths := map[string]string{"alpha": filepath.Join(first, "wiki"), "beta": filepath.Join(second, "wiki")}
+	for i := 0; i < 5; i++ {
+		if h := Mounts(paths, now).Find("aa"); h == nil || h.Mount != "alpha" {
+			t.Fatalf("run %d: %+v", i, h)
+		}
 	}
 }

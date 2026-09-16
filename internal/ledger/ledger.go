@@ -8,12 +8,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 )
 
 const Schema = "claude-atlas.source-ledger.v1"
+
+// VaultPath is where a vault keeps its source ledger, relative to the vault root. It is
+// vault.LedgerPath; the constant lives here so this package can reach a mounted knowledge
+// base's ledger without importing vault, which imports this one.
+const VaultPath = "wiki/meta/ledgers/source-ledger.json"
 
 // LegacySchema is claude-obsidian's; its records read the same way.
 const LegacySchema = "claude-obsidian.source-ledger.v1"
@@ -272,6 +278,77 @@ func (l *Ledger) FindBySHA(sha string) (string, *Source) {
 		}
 	}
 	return "", nil
+}
+
+// Holder names the vault whose ledger records a source, and the record.
+type Holder struct {
+	Root   string // the vault's root
+	Mount  string // the mount name the vault was reached through
+	ID     string // the source id in that vault's ledger
+	Source *Source
+}
+
+// Mounted looks a content hash up in the ledgers of the knowledge bases a project mounts.
+// Knowledge enters through a project, so a source one of them captured is captured, and
+// the project may remove it from its inbox.
+type Mounted struct {
+	paths   map[string]string
+	now     time.Time
+	loaded  bool
+	reads   int
+	ledgers []mountedLedger
+}
+
+type mountedLedger struct {
+	mount  string
+	root   string
+	ledger *Ledger
+}
+
+// Mounts prepares the lookup over a project's mounts: a mount name to that knowledge
+// base's wiki path, the map the atlas resolves. It reads nothing; the first Find loads the
+// ledgers, and a caller that never asks reads none.
+func Mounts(paths map[string]string, now time.Time) *Mounted {
+	return &Mounted{paths: paths, now: now}
+}
+
+// Find returns the mounted vault whose ledger records the content hash, or nil. Mounts are
+// visited in name order, so two knowledge bases that hold one source answer the same way
+// every time; a ledger that cannot be read holds nothing.
+func (m *Mounted) Find(sha string) *Holder {
+	if m == nil || sha == "" {
+		return nil
+	}
+	m.load()
+	for _, l := range m.ledgers {
+		if id, rec := l.ledger.FindBySHA(sha); id != "" {
+			return &Holder{Root: l.root, Mount: l.mount, ID: id, Source: rec}
+		}
+	}
+	return nil
+}
+
+func (m *Mounted) load() {
+	if m.loaded {
+		return
+	}
+	m.loaded = true
+	names := make([]string, 0, len(m.paths))
+	for name := range m.paths {
+		if m.paths[name] != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		root := filepath.Dir(m.paths[name])
+		m.reads++
+		led, err := Load(filepath.Join(root, filepath.FromSlash(VaultPath)), m.now)
+		if err != nil {
+			continue
+		}
+		m.ledgers = append(m.ledgers, mountedLedger{mount: name, root: root, ledger: led})
+	}
 }
 
 func contains(list []string, value string) bool {

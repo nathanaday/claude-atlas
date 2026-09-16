@@ -44,7 +44,7 @@ const (
 	HotPage      = "wiki/hot.md"
 	IndexPage    = "wiki/index.md"
 	OverviewPage = "wiki/overview.md"
-	LedgerPath   = "wiki/meta/ledgers/source-ledger.json"
+	LedgerPath   = ledger.VaultPath
 
 	// Tasks: open task pages, their archive, the generated index, the derived ledger,
 	// the inbox folder for task notes, and the user's scratch space.
