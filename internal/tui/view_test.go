@@ -31,6 +31,8 @@ func item(kind vault.Kind, name string, tags []string, heat string) Item {
 	return Item{Entry: e}
 }
 
+// sample is three projects (welcome untagged, p3 under itl, course under usc), two
+// knowledge bases, and one vault the scan could not read.
 func sample() []Item {
 	items := []Item{
 		item(vault.Project, "welcome", nil, "new"),
@@ -39,33 +41,43 @@ func sample() []Item {
 		item(vault.Knowledge, "papers", nil, "warm"),
 		item(vault.Knowledge, "ai-ml", nil, "cold"),
 	}
-	// p3 mounts a knowledge base and works in one repository.
+	zero := 0
+	// p3 was touched today, has three open tasks, mounts ai-ml, and works in one repository.
+	items[1].Entry.State.DaysIdle = &zero
+	items[1].Entry.State.Tasks = &registry.TaskSummary{Counts: tasks.Counts{Open: 3, Active: 1, Planned: 2}}
 	items[1].Entry.Mounts = []registry.Mount{{ID: "id-ai-ml", Name: "ai-ml", Access: vault.AccessWrite, Effective: vault.AccessWrite, Path: "/v/ai-ml/wiki"}}
 	items[1].Entry.Repos = []registry.Repo{{Name: "atlas", Path: "/code/atlas", Remote: "git@example.com:atlas.git", Changes: "pr"}}
-	// papers has a stale grant: the project that granted it is gone.
+	// course asked papers for write and got read.
+	items[2].Entry.Mounts = []registry.Mount{{ID: "id-papers", Name: "papers", Access: vault.AccessWrite, Effective: vault.AccessRead, Path: "/v/papers/wiki"}}
+	// The knowledge bases know who mounts them; papers has a stale grant too.
+	items[3].Entry.MountedBy = []registry.Ref{{ID: "id-course", Name: "course", Access: vault.AccessRead}}
 	items[3].Entry.Grants = []registry.Grant{{ID: "gone-0000", Name: "gone-0000", Access: vault.AccessRead, Error: "no project with id gone-0000"}}
-	// One vault the scan found but could not read.
-	items = append(items, Item{Entry: registry.Entry{Path: "/v/old-notes", Error: v1Error}})
+	items[4].Entry.MountedBy = []registry.Ref{{ID: "id-p3", Name: "p3", Access: vault.AccessWrite}}
+	items = append(items, Item{Entry: registry.Entry{Path: "/v/old-notes", Error: v1Error, Reason: registry.ReasonV1}})
 	return items
 }
 
-// v1Error is what the scan says about a vault from version 1; a box wraps it, so the
-// tree is checked for its first words only.
+// v1Error is what the scan says about a vault from version 1; a box wraps it, so a
+// screen is checked for its first words only.
 const (
 	v1Error = "v1 vault; run claude-atlas adopt /v/old-notes --as knowledge|project"
 	v1Start = "v1 vault; run claude-atlas adopt"
 )
 
-// findVault moves the cursor to the box of the vault with that name.
+// findVault puts the cursor on the vault with that name, on its tab.
 func findVault(t *testing.T, v view, name string) view {
 	t.Helper()
-	for i, r := range v.rows {
-		if r.kind == rowVault && entryName(r.item.Entry) == name {
-			v.cursor = i
-			return v
+	for i := range v.boards {
+		for j, it := range v.boards[i].items {
+			if entryName(it.Entry) == name {
+				v.tab = boardTab(i)
+				v.boards[i].cursor = j
+				v.boards[i].layout()
+				return v
+			}
 		}
 	}
-	t.Fatalf("no box for %s in\n%s", name, v.View())
+	t.Fatalf("no box for %s", name)
 	return v
 }
 
@@ -97,21 +109,6 @@ func typeV(v view, text string) view {
 	return v
 }
 
-func kinds(v view) string {
-	out := ""
-	for _, r := range v.rows {
-		switch r.kind {
-		case rowFolded:
-			out += "F"
-		case rowFolder:
-			out += "C"
-		default:
-			out += "P"
-		}
-	}
-	return out
-}
-
 func runCmd(v view, cmd tea.Cmd) view {
 	if cmd == nil {
 		return v
@@ -120,24 +117,163 @@ func runCmd(v view, cmd tea.Cmd) view {
 	return next.(view)
 }
 
-// The tree rows: projects(C) welcome(P) itl(C) p3(P) usc(C) course(P) knowledge(C) ai-ml(P) papers(P).
-func TestTreeShowsProjectsThenKnowledge(t *testing.T) {
+// quits reports whether a command is tea.Quit.
+func quits(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
+func TestTabBarAndArrows(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
 	out := v.View()
 	t.Logf("\n%s", out)
-	for _, want := range []string{"▾ projects", "▾ itl", "▾ usc", "▾ knowledge", "welcome", "p3", "course", "ai-ml", "papers"} {
+	for _, want := range []string{"Atlas", "Projects 3", "Knowledge 2", "Tasks 3", "Problems 1", "A project holds tasks", "refreshed 2026-09-1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if strings.Index(out, "▾ projects") > strings.Index(out, "▾ knowledge") {
-		t.Error("projects should come before knowledge")
+	if v.tab != tabProjects || len(v.boards[0].rows) != 3 {
+		t.Fatalf("the Projects tab lists the projects: tab=%d rows=%d", v.tab, len(v.boards[0].rows))
 	}
-	if got := kinds(v); got != "CPCPCPCPPCP" {
-		t.Fatalf("rows %s", got)
+	v = pressV(v, tea.KeyRight)
+	if v.tab != tabKnowledge || !strings.Contains(v.View(), "A knowledge base is a wiki") {
+		t.Fatalf("right: tab=%d\n%s", v.tab, v.View())
 	}
-	if !strings.HasSuffix(v.lines[len(v.lines)-1], "(end)") {
-		t.Fatal("tree should end with an explicit (end) marker")
+	v = pressV(v, tea.KeyRight)
+	if v.tab != tabTasks || !strings.Contains(v.View(), "tasks are not available here") {
+		t.Fatalf("tasks without hooks: tab=%d\n%s", v.tab, v.View())
+	}
+	v = pressV(v, tea.KeyRight)
+	if v.tab != tabProblems || !strings.Contains(v.View(), "could not read") {
+		t.Fatalf("problems: tab=%d", v.tab)
+	}
+	v = pressV(v, tea.KeyRight)
+	if v.tab != tabProblems {
+		t.Fatal("the bar does not wrap")
+	}
+	v = pressV(v, tea.KeyLeft, tea.KeyLeft, tea.KeyLeft, tea.KeyLeft)
+	if v.tab != tabProjects {
+		t.Fatalf("left stops at Projects: tab=%d", v.tab)
+	}
+	v = keyV(v, "T")
+	if v.tab != tabTasks {
+		t.Fatal("T is the Tasks tab")
+	}
+	clean := newView(sample()[:5], Opener{}, Hooks{})
+	if strings.Contains(clean.View(), "Problems") || len(clean.tabs()) != 3 {
+		t.Fatal("no problems, no Problems tab")
+	}
+	clean = pressV(clean, tea.KeyRight, tea.KeyRight, tea.KeyRight)
+	if clean.tab != tabTasks {
+		t.Fatal("the bar ends at Tasks then")
+	}
+}
+
+func TestProjectsTabDrawsTheConnectors(t *testing.T) {
+	v := newView(sample(), Opener{}, Hooks{})
+	out := v.View()
+	t.Logf("\n%s", out)
+	for _, want := range []string{"╌╌╌╌▶ ai-ml   write · link missing", "╌╌╌╌▶ papers   read (write not granted)", "no knowledge base mounted", "touched today · 3 tasks open", "│ new ", "  itl\n", "  usc\n", "(end)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	welcome, itl, p3, usc, course := strings.Index(out, "welcome"), strings.Index(out, "  itl\n"), strings.Index(out, "p3"), strings.Index(out, "  usc\n"), strings.Index(out, "course")
+	if !(welcome < itl && itl < p3 && p3 < usc && usc < course) {
+		t.Fatalf("order: untagged first, then the tag groups: %d %d %d %d %d", welcome, itl, p3, usc, course)
+	}
+	if strings.Contains(out, "Path") {
+		t.Fatal("nothing is expanded yet")
+	}
+}
+
+func TestKnowledgeTabCountsThenExpands(t *testing.T) {
+	v := pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyRight)
+	out := v.View()
+	t.Logf("\n%s", out)
+	for _, want := range []string{"ai-ml   open", "papers   open", "4 pages · new", "◀╌╌╌╌ 1 project"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Count(out, "◀╌╌╌╌ 1 project") != 2 || !strings.Contains(out, "1 grant stale") {
+		t.Fatalf("counts:\n%s", out)
+	}
+	v = findVault(t, v, "papers")
+	v = pressV(v, tea.KeyEnter)
+	out = v.View()
+	t.Logf("\n%s", out)
+	for _, want := range []string{"◀╌╌╌╌ course   read", "grant  gone-0000   read · no project with id gone-0000", "Scope", "papers sources", "Access", "open", "Grant", "Enter collapse"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expanded knowledge base missing %q", want)
+		}
+	}
+	if strings.Contains(out, "Tags") || strings.Contains(out, "i ingest") {
+		t.Error("a knowledge base has no tags and no ingest")
+	}
+	v = pressV(v, tea.KeyEnter)
+	if strings.Contains(v.View(), "Scope") || !strings.Contains(v.View(), "◀╌╌╌╌ 1 project · 1 grant stale") {
+		t.Fatal("enter again collapses back to the count")
+	}
+}
+
+func TestEnterExpandsEscCollapsesThenQuits(t *testing.T) {
+	v := findVault(t, newView(sample(), Opener{}, Hooks{}), "p3")
+	v = pressV(v, tea.KeyEnter)
+	out := v.View()
+	t.Logf("\n%s", out)
+	for _, want := range []string{"Path", "/v/p3", "Id", "id-p3", "Mode", "generic", "Created", "2026-09-01", "Tags", "itl",
+		"Repositories", "atlas", "/code/atlas", "changes: pr", "git@example.com:atlas.git",
+		"Vault check", "ok", "Pages", "4", "Open threads", "- thread", "Tasks", "3 open: 1 active", "Refreshed", "Enter collapse"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(out, "Mounts") {
+		t.Error("the connectors carry the mounts")
+	}
+	v = findVault(t, v, "welcome")
+	v = pressV(v, tea.KeyEnter)
+	if n := len(v.boards[0].expanded); n != 2 {
+		t.Fatalf("two expanded, got %d", n)
+	}
+	v = pressV(v, tea.KeyEsc)
+	if len(v.boards[0].expanded) != 0 || strings.Contains(v.View(), "Path") {
+		t.Fatal("esc collapses everything")
+	}
+	_, cmd := v.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if !quits(cmd) {
+		t.Fatal("esc with nothing open quits")
+	}
+	_, cmd = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if !quits(cmd) {
+		t.Fatal("q quits")
+	}
+}
+
+func TestHintsFollowTheCursor(t *testing.T) {
+	v := newView(sample(), Opener{}, Hooks{})
+	if hints := v.boardHints(); !strings.Contains(hints, "Enter details · o Obsidian · c Claude · i ingest · t tasks · l repos · m mounts · e edit") {
+		t.Fatalf("project hints: %q", hints)
+	}
+	if out := v.View(); !strings.Contains(out, "←→ tabs") || !strings.Contains(out, "N new knowledge base") {
+		t.Fatalf("global hints:\n%s", out)
+	}
+	v = findVault(t, v, "ai-ml")
+	if hints := v.boardHints(); strings.Contains(hints, "ingest") || strings.Contains(hints, "repos") || !strings.Contains(hints, "m mounts · e edit") {
+		t.Fatalf("a knowledge base has no ingest, tasks, or repositories: %q", hints)
+	}
+	v = findVault(t, v, "old-notes")
+	if hints := v.boardHints(); strings.Contains(hints, "c Claude") || strings.Contains(hints, "ingest") || !strings.Contains(hints, "a adopt") || !strings.Contains(hints, "e edit") {
+		t.Fatalf("a problem opens, edits, and adopts: %q", hints)
+	}
+	v = findVault(t, v, "welcome")
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	if !v.boards[0].atEnd() || strings.Contains(v.boardHints(), "Enter") || strings.Contains(v.boardHints(), "Obsidian") {
+		t.Fatalf("end marker hints: %q", v.boardHints())
 	}
 }
 
@@ -146,166 +282,29 @@ func TestDownRevealsTheEndAndNeverWraps(t *testing.T) {
 	next, _ := v.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
 	v = next.(view)
 	v = pressV(v, tea.KeyUp)
-	if v.cursor != 0 {
+	if v.boards[0].cursor != 0 {
 		t.Fatal("up at the top must stay at the top")
 	}
-	for i := 0; i < len(v.rows)-1; i++ {
-		v = pressV(v, tea.KeyDown)
-	}
-	if v.cursor != len(v.rows)-1 || !strings.Contains(v.View(), "more lines") {
-		t.Fatalf("last row should be selected with the end still hidden: cursor=%d\n%s", v.cursor, v.View())
+	v = pressV(v, tea.KeyDown, tea.KeyDown)
+	if v.boards[0].cursor != 2 || !strings.Contains(v.View(), "more lines") {
+		t.Fatalf("last vault selected with the end still hidden: cursor=%d\n%s", v.boards[0].cursor, v.View())
 	}
 	v = pressV(v, tea.KeyDown)
 	out := v.View()
-	if !v.atEnd() || strings.Contains(out, "more lines") || !strings.Contains(out, "(end)") {
-		t.Fatalf("one more down should reveal the end marker: cursor=%d\n%s", v.cursor, out)
+	if !v.boards[0].atEnd() || strings.Contains(out, "more lines") || !strings.Contains(out, "(end)") {
+		t.Fatalf("one more down reveals the end marker: cursor=%d\n%s", v.boards[0].cursor, out)
 	}
 	v = pressV(v, tea.KeyDown)
-	if !v.atEnd() {
+	if !v.boards[0].atEnd() {
 		t.Fatal("down at the end must stay at the end")
 	}
-	v = pressV(v, tea.KeyEnter) // nothing to open here
-	if v.detail != nil {
-		t.Fatal("enter on the end marker opens nothing")
+	v = pressV(v, tea.KeyEnter) // nothing to expand here
+	if len(v.boards[0].expanded) != 0 {
+		t.Fatal("enter on the end marker expands nothing")
 	}
 	v = pressV(v, tea.KeyUp)
-	if v.atEnd() || v.cursor != len(v.rows)-1 {
-		t.Fatal("up from the end returns to the last row")
-	}
-}
-
-func TestHintsFollowTheCursor(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
-	if hints := v.treeHints(); strings.Contains(hints, "Obsidian") || !strings.Contains(hints, "Enter fold") {
-		t.Fatalf("category hints wrong: %q", hints)
-	}
-	if out := v.View(); !strings.Contains(out, "- + fold all") || !strings.Contains(out, "N new knowledge") {
-		t.Fatalf("global hints wrong:\n%s", out)
-	}
-	v = pressV(v, tea.KeyDown) // welcome
-	if hints := v.treeHints(); !strings.Contains(hints, "o Obsidian · c Claude · i ingest · t tasks · l repos · m mounts · e edit") {
-		t.Fatalf("project hints missing: %q", hints)
-	}
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown) // ai-ml
-	if r := v.current(); r.kind != rowVault || r.item.Entry.Kind != vault.Knowledge {
-		t.Fatalf("cursor on %+v", r)
-	}
-	if hints := v.treeHints(); strings.Contains(hints, "ingest") || strings.Contains(hints, "repos") || !strings.Contains(hints, "e edit") {
-		t.Fatalf("a knowledge base has no ingest, tasks, or repositories: %q", hints)
-	}
-	v = pressV(v, tea.KeyUp) // knowledge
-	v = pressV(v, tea.KeySpace)
-	if out := v.View(); !strings.Contains(out, "Enter unfold") {
-		t.Fatalf("folded category hints wrong:\n%s", out)
-	}
-	v = keyV(v, "+")
-	for i := 0; i <= len(v.rows); i++ {
-		v = pressV(v, tea.KeyDown)
-	}
-	if hints := v.treeHints(); !v.atEnd() || strings.Contains(hints, "Enter") || strings.Contains(hints, "Obsidian") {
-		t.Fatalf("end marker hints wrong: %q", hints)
-	}
-}
-
-func TestFoldBranchAndFoldAll(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // projects, welcome, itl, p3
-	if r := v.current(); r.kind != rowVault || r.item.Entry.Name != "p3" {
-		t.Fatalf("cursor on %+v", r)
-	}
-	v = pressV(v, tea.KeySpace) // collapses itl and moves onto it
-	if r := v.current(); r.kind != rowFolder || r.path != "projects/itl" || !v.collapsed["projects/itl"] {
-		t.Fatalf("after fold: %+v collapsed=%v", r, v.collapsed)
-	}
-	out := v.View()
-	if strings.Contains(out, "p3") || !strings.Contains(out, "▸ itl") || !strings.Contains(out, "1 vault") {
-		t.Fatalf("folded branch still shows its vault:\n%s", out)
-	}
-	v = pressV(v, tea.KeyEnter) // enter on a category expands it again
-	if v.collapsed["projects/itl"] || !strings.Contains(v.View(), "p3") {
-		t.Fatal("enter should expand the category")
-	}
-	v = keyV(v, "-")
-	if got := kinds(v); got != "CCC" || !strings.Contains(v.View(), "▸ projects") {
-		t.Fatalf("collapse all: rows %s\n%s", got, v.View())
-	}
-	if r := v.current(); r == nil || r.path != "projects" {
-		t.Fatalf("collapse all should leave the cursor on the visible ancestor: %+v", r)
-	}
-	v = keyV(v, "+")
-	if got := kinds(v); got != "CPCPCPCPPCP" || v.current().path != "projects" {
-		t.Fatalf("expand all: rows %s cursor %+v", got, v.current())
-	}
-	v = pressV(v, tea.KeyLeft) // left on a category folds it
-	if r := v.current(); r.path != "projects" || !v.collapsed["projects"] || kinds(v) != "CCPPCP" {
-		t.Fatalf("left on category: %+v rows %s", r, kinds(v))
-	}
-}
-
-// A tag may carry a slash, and then the tree nests: layers past the third fold into one
-// row that Enter zooms into.
-func TestEnterOnFoldedZoomsAndEscReturns(t *testing.T) {
-	deep := []Item{
-		item(vault.Project, "buried", []string{"usc/cs566/deep/deeper"}, "warm"),
-		item(vault.Project, "other", []string{"usc/cs566/deep"}, "warm"),
-	}
-	v := newView(deep, Opener{}, Hooks{})
-	if got := kinds(v); got != "CCCF" {
-		t.Fatalf("rows %s\n%s", got, v.View())
-	}
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown)
-	if v.rows[v.cursor].kind != rowFolded {
-		t.Fatalf("cursor on %+v", v.rows[v.cursor])
-	}
-	v = pressV(v, tea.KeyEnter)
-	out := v.View()
-	t.Logf("\n%s", out)
-	if v.root != "projects/usc/cs566/deep" || !strings.Contains(out, "▾ deeper") || !strings.Contains(out, "buried") || !strings.Contains(out, "other") {
-		t.Fatalf("zoom failed: root=%q\n%s", v.root, out)
-	}
-	if !strings.Contains(out, "projects › usc › cs566 › deep") {
-		t.Fatal("breadcrumb missing")
-	}
-	v = pressV(v, tea.KeyEsc)
-	if v.root != "" || v.rows[v.cursor].kind != rowFolded || v.rows[v.cursor].path != "projects/usc/cs566/deep" {
-		t.Fatalf("esc should return to where the user came from: root=%q row=%+v", v.root, v.rows[v.cursor])
-	}
-}
-
-func TestDetailShowsEverything(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyEnter) // p3
-	out := v.View()
-	t.Logf("\n%s", out)
-	for _, want := range []string{"p3", "projects/itl/p3", "🔥 hot", "created 2026-09-01",
-		"Kind", "project", "Id", "id-p3", "Path", "/v/p3", "Mode", "generic", "Tags", "itl",
-		"Mounts", "ai-ml", "write · /v/ai-ml/wiki · symlink missing", "Repositories", "atlas", "/code/atlas", "changes: pr", "git@example.com:atlas.git",
-		"Vault check", "ok", "Heat", "Pages", "4", "Open threads", "- thread", "Refreshed", "Esc back"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q", want)
-		}
-	}
-	v = pressV(v, tea.KeyEsc)
-	if v.detail != nil {
-		t.Fatal("esc should close the detail")
-	}
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyEnter) // ai-ml
-	out = v.View()
-	for _, want := range []string{"knowledge/ai-ml", "Scope", "ai-ml sources", "Access", "open"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("knowledge detail missing %q:\n%s", want, out)
-		}
-	}
-	if strings.Contains(out, "Tags") || strings.Contains(out, "i ingest") {
-		t.Errorf("a knowledge base has no tags and no ingest:\n%s", out)
-	}
-	v = pressV(v, tea.KeyEsc)
-	v = pressV(findVault(t, v, "papers"), tea.KeyEnter)
-	out = v.View()
-	for _, want := range []string{"gone-0000", "no project with id", "gone-0000  read  no project with id gone-0000"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("papers detail missing %q:\n%s", want, out)
-		}
+	if v.boards[0].atEnd() || v.current() == nil || v.current().Entry.Name != "course" {
+		t.Fatal("up from the end returns to the last vault")
 	}
 }
 
@@ -313,22 +312,52 @@ func TestScrollKeepsCursorVisible(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
 	next, _ := v.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
 	v = next.(view)
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown)
-	r := v.rows[v.cursor]
-	if r.start < v.offset || r.end >= v.offset+v.bodyHeight() {
-		t.Fatalf("cursor row %d-%d not within offset %d + %d", r.start, r.end, v.offset, v.bodyHeight())
+	v = pressV(v, tea.KeyDown, tea.KeyDown)
+	bd := v.boards[0]
+	r := bd.rows[bd.cursor]
+	if r.start < bd.offset || r.end >= bd.offset+v.bodyHeight() {
+		t.Fatalf("cursor row %d-%d not within offset %d + %d", r.start, r.end, bd.offset, v.bodyHeight())
 	}
-	if !strings.Contains(v.View(), "more lines") && v.offset == 0 {
+	if bd.offset == 0 {
 		t.Fatal("expected scrolling")
 	}
 }
 
-func TestEmptyTree(t *testing.T) {
+func TestEmptyTabs(t *testing.T) {
 	v := newView(nil, Opener{}, Hooks{})
-	if !strings.Contains(v.View(), "no vaults yet") {
-		t.Fatal("empty message missing")
+	if !strings.Contains(v.View(), "no projects yet") {
+		t.Fatal("empty projects message missing")
 	}
 	v = pressV(v, tea.KeyDown, tea.KeyEnter) // must not panic
+	v = pressV(v, tea.KeyRight)
+	if !strings.Contains(v.View(), "no knowledge bases yet") {
+		t.Fatal("empty knowledge message missing")
+	}
+	v = pressV(v, tea.KeyEnter, tea.KeyUp)
+	if _, cmd := v.Update(tea.KeyMsg{Type: tea.KeyEsc}); !quits(cmd) {
+		t.Fatal("esc on an empty tab quits")
+	}
+}
+
+func TestAWriteLandsOnTheVaultsTab(t *testing.T) {
+	entries := entriesOf(sample())
+	fresh := registry.Entry{ID: "id-fresh", Kind: vault.Knowledge, Name: "fresh", Path: "/v/fresh", Mode: vault.Generic}
+	hooks := Hooks{
+		Load:    func() ([]registry.Entry, error) { return append(entries, fresh), nil },
+		Refresh: func() error { return nil },
+	}
+	v := newView(sample(), Opener{}, hooks)
+	cmd := v.wrote("/v/fresh", "created fresh")
+	if !v.changed || v.status != "created fresh" || cmd == nil {
+		t.Fatalf("wrote: changed=%v status=%q", v.changed, v.status)
+	}
+	v = runCmd(v, cmd)
+	if v.tab != tabKnowledge || v.current() == nil || v.current().Entry.Name != "fresh" || v.status != "refreshed" {
+		t.Fatalf("after the refresh: tab=%d current=%v status=%q", v.tab, v.current(), v.status)
+	}
+	if !strings.Contains(v.View(), "Knowledge 3") {
+		t.Fatalf("the count follows:\n%s", v.View())
+	}
 }
 
 type fakeOpener struct {
@@ -352,8 +381,7 @@ func (f *fakeOpener) opener() Opener {
 
 func TestOpenRegisteredVaultDirectly(t *testing.T) {
 	f := &fakeOpener{registered: map[string]bool{"/v/p3": true}}
-	v := newView(sample(), f.opener(), Hooks{})
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
+	v := findVault(t, newView(sample(), f.opener(), Hooks{}), "p3")
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
 	v = next.(view)
 	if v.busy == "" || cmd == nil {
@@ -367,8 +395,7 @@ func TestOpenRegisteredVaultDirectly(t *testing.T) {
 
 func TestOpenUnknownVaultAsksThenRegisters(t *testing.T) {
 	f := &fakeOpener{registered: map[string]bool{}, running: true}
-	v := newView(sample(), f.opener(), Hooks{})
-	v = pressV(v, tea.KeyDown) // welcome
+	v := newView(sample(), f.opener(), Hooks{}) // the cursor starts on welcome
 	next, _ := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
 	v = next.(view)
 	if v.ask == nil || !strings.Contains(v.View(), "quit and relaunch") {
@@ -392,22 +419,20 @@ func TestOpenUnknownVaultAsksThenRegisters(t *testing.T) {
 	}
 }
 
-func TestOpenFromDetail(t *testing.T) {
+func TestOpenFromAnExpandedVault(t *testing.T) {
 	f := &fakeOpener{registered: map[string]bool{"/v/p3": true}}
-	v := newView(sample(), f.opener(), Hooks{})
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyEnter)
+	v := pressV(findVault(t, newView(sample(), f.opener(), Hooks{}), "p3"), tea.KeyEnter)
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
 	v = runCmd(next.(view), cmd)
-	if len(f.opened) != 1 || v.detail == nil {
-		t.Fatalf("opened=%v detail=%v", f.opened, v.detail)
+	if len(f.opened) != 1 || !v.boards[0].expanded["/v/p3"] {
+		t.Fatalf("opened=%v expanded=%v", f.opened, v.boards[0].expanded)
 	}
 }
 
 func TestClaudeKeyHandsOffTheTerminal(t *testing.T) {
 	var got string
 	op := Opener{Claude: func(vault, prompt string) (*exec.Cmd, error) { got = vault; return exec.Command("true"), nil }}
-	v := newView(sample(), op, Hooks{})
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
+	v := findVault(t, newView(sample(), op, Hooks{}), "p3")
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	v = next.(view)
 	if got != "/v/p3" || cmd == nil || v.errMsg != "" {
@@ -417,15 +442,17 @@ func TestClaudeKeyHandsOffTheTerminal(t *testing.T) {
 	if !strings.Contains(next.(view).View(), "back from Claude Code in p3") {
 		t.Fatal("status after return missing")
 	}
-	none := newView(sample(), Opener{}, Hooks{})
-	none = pressV(none, tea.KeyDown)
-	next, _ = none.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
-	if next.(view).errMsg == "" {
+	none := keyV(newView(sample(), Opener{}, Hooks{}), "c")
+	if none.errMsg == "" {
 		t.Fatal("missing launcher should report an error")
+	}
+	bad := keyV(findVault(t, newView(sample(), op, Hooks{}), "old-notes"), "c")
+	if bad.errMsg != v1Error {
+		t.Fatalf("c on a problem names the problem: %q", bad.errMsg)
 	}
 }
 
-func TestNewAndAdoptFromTheTree(t *testing.T) {
+func TestNewAndAdoptFromTheTabs(t *testing.T) {
 	dir := t.TempDir()
 	var got []AddVault
 	hooks := Hooks{
@@ -461,8 +488,8 @@ func TestNewAndAdoptFromTheTree(t *testing.T) {
 	old := filepath.Join(t.TempDir(), "Old Notes")
 	os.MkdirAll(filepath.Join(old, ".obsidian"), 0o755)
 	v = keyV(v, "a")
-	if v.add == nil || !v.add.adopting || !strings.Contains(v.View(), "Adopt a vault") {
-		t.Fatalf("a should open the adopt screen:\n%s", v.View())
+	if v.add == nil || !v.add.adopting || !strings.Contains(v.View(), "Adopt a vault") || v.add.path.value() != "" {
+		t.Fatalf("a should open the adopt screen with no path:\n%s", v.View())
 	}
 	v = typeV(v, t.TempDir())
 	v = pressV(v, tea.KeyEnter)
@@ -522,8 +549,7 @@ func TestRefreshKey(t *testing.T) {
 		Load:    func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
 		Refresh: func() error { calls++; return nil },
 	}
-	v := newView(sample(), Opener{}, hooks)
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
+	v := findVault(t, newView(sample(), Opener{}, hooks), "p3")
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
 	v = next.(view)
 	if cmd == nil || v.busy == "" {
@@ -534,14 +560,14 @@ func TestRefreshKey(t *testing.T) {
 	if calls != 1 || v.busy != "" || v.status != "refreshed" || v.errMsg != "" {
 		t.Fatalf("after refresh: calls=%d busy=%q status=%q err=%q", calls, v.busy, v.status, v.errMsg)
 	}
-	if v.detail != nil || v.current() == nil || v.current().item.Entry.Name != "p3" {
-		t.Fatalf("a refresh from the tree stays in the tree, cursor kept: detail=%v", v.detail)
+	if v.tab != tabProjects || v.current() == nil || v.current().Entry.Name != "p3" {
+		t.Fatalf("a refresh keeps the tab and the cursor: tab=%d current=%v", v.tab, v.current())
 	}
-	v = pressV(v, tea.KeyEnter) // details, then refresh from there
+	v = pressV(v, tea.KeyEnter) // expand, then refresh from there
 	next, cmd = v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
 	next, _ = next.(view).Update(cmd())
-	if v = next.(view); v.detail == nil || v.detail.Entry.Name != "p3" {
-		t.Fatal("a refresh from the details keeps them open")
+	if v = next.(view); !v.boards[0].expanded["/v/p3"] || !strings.Contains(v.View(), "Path") {
+		t.Fatal("a refresh keeps the expansion")
 	}
 	none := keyV(newView(sample(), Opener{}, Hooks{}), "R")
 	if !strings.Contains(none.errMsg, "not available") {
@@ -549,7 +575,7 @@ func TestRefreshKey(t *testing.T) {
 	}
 }
 
-func TestIngestFromTheTree(t *testing.T) {
+func TestIngestFromTheTabs(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "Papers")
 	os.MkdirAll(src, 0o755)
 	os.WriteFile(filepath.Join(src, "a.pdf"), []byte("a"), 0o644)
@@ -571,8 +597,7 @@ func TestIngestFromTheTree(t *testing.T) {
 		},
 	}
 	op := Opener{Claude: func(vault, prompt string) (*exec.Cmd, error) { launched = prompt; return exec.Command("true"), nil }}
-	v := newView(sample(), op, hooks)
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
+	v := findVault(t, newView(sample(), op, hooks), "p3")
 	v = keyV(v, "i")
 	if v.ingest == nil || !strings.Contains(v.View(), "Ingest into p3") {
 		t.Fatalf("i should open the ingest screen:\n%s", v.View())
@@ -604,8 +629,7 @@ func TestIngestFromTheTree(t *testing.T) {
 	nothingNew.StagePlan = func(en registry.Entry, source string) (*capture.StagePlan, error) {
 		return &capture.StagePlan{Vault: en.Path, Sources: []string{source}, Unchanged: []string{"a"}, Waiting: 2}, nil
 	}
-	w := newView(sample(), op, nothingNew)
-	w = pressV(w, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	w := findVault(t, newView(sample(), op, nothingNew), "p3")
 	w = keyV(w, "i")
 	w = typeV(w, src)
 	w = pressV(w, tea.KeyEnter)
@@ -621,8 +645,7 @@ func TestIngestFromTheTree(t *testing.T) {
 	nothingAtAll.StagePlan = func(en registry.Entry, source string) (*capture.StagePlan, error) {
 		return &capture.StagePlan{Vault: en.Path, Sources: []string{source}, Unchanged: []string{"a", "b"}}, nil
 	}
-	w = newView(sample(), op, nothingAtAll)
-	w = pressV(w, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	w = findVault(t, newView(sample(), op, nothingAtAll), "p3")
 	w = keyV(w, "i")
 	w = typeV(w, src)
 	w = pressV(w, tea.KeyEnter, tea.KeyEnter)
@@ -640,18 +663,18 @@ func TestIngestFromTheTree(t *testing.T) {
 	if len(planned) != 3 {
 		t.Fatalf("planned %v", planned)
 	}
-	none := keyV(pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown, tea.KeyDown, tea.KeyDown), "i")
+	none := keyV(findVault(t, newView(sample(), Opener{}, Hooks{}), "p3"), "i")
 	if none.ingest != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("i without hooks reports why")
 	}
 	// A knowledge base has no inbox of its own.
-	kb := keyV(pressV(newView(sample(), op, hooks), tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown), "i")
+	kb := keyV(findVault(t, newView(sample(), op, hooks), "ai-ml"), "i")
 	if kb.ingest != nil || !strings.Contains(kb.errMsg, "knowledge base") {
 		t.Fatalf("i on a knowledge base: ingest=%v err=%q", kb.ingest, kb.errMsg)
 	}
 }
 
-func TestAVaultTheScanCouldNotReadSitsUnderProblems(t *testing.T) {
+func TestTasksTabHostsTheBoard(t *testing.T) {
 	var asked []string
 	hooks := Hooks{
 		Load: func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
@@ -661,32 +684,106 @@ func TestAVaultTheScanCouldNotReadSitsUnderProblems(t *testing.T) {
 		},
 	}
 	v := newView(sample(), Opener{}, hooks)
+	if v.tasksTab != nil {
+		t.Fatal("the board waits for the first visit")
+	}
+	v = keyV(v, "T")
 	out := v.View()
 	t.Logf("\n%s", out)
-	if !strings.Contains(out, "▾ problems") || !strings.Contains(out, "old-notes") || !strings.Contains(out, v1Start) {
-		t.Fatalf("the folder, the vault, and its reason belong in the tree:\n%s", out)
+	if v.tab != tabTasks || v.tasksTab == nil || !v.tasksTab.hosted || v.tasksTab.item != nil {
+		t.Fatalf("T hosts the board: tab=%d board=%+v", v.tab, v.tasksTab)
 	}
-	if strings.Index(out, "▾ problems") < strings.Index(out, "▾ knowledge") {
-		t.Errorf("problems comes after projects and knowledge:\n%s", out)
+	for _, want := range []string{"Every project's open tasks", "no open tasks in any project", "←→ tabs"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
 	}
-	v = findVault(t, v, "old-notes")
-	if hints := v.treeHints(); strings.Contains(hints, "i ingest") || strings.Contains(hints, "t tasks") || strings.Contains(hints, "l repos") {
-		t.Errorf("nothing but opening and editing works on it: %q", hints)
-	}
-	v = pressV(v, tea.KeyEnter)
-	detail := v.View()
-	if v.detail == nil || !strings.Contains(detail, v1Error) || !strings.Contains(detail, "/v/old-notes") {
-		t.Fatalf("the detail page says what is wrong:\n%s", detail)
-	}
-	if strings.Contains(detail, "i ingest") || strings.Contains(detail, "t tasks") || strings.Contains(detail, "l repos") {
-		t.Errorf("detail footer:\n%s", detail)
-	}
-	v = pressV(v, tea.KeyEsc)
-	v = keyV(v, "T")
-	if v.tasks == nil || len(v.tasks.rows) != 0 {
-		t.Fatalf("the board opens with no tasks: %+v", v.tasks)
+	if strings.Contains(out, "open across") {
+		t.Error("the hosted board has no header of its own")
 	}
 	if strings.Join(asked, ",") != "welcome,p3,course" {
 		t.Fatalf("the board asks the projects only: %v", asked)
+	}
+	v = keyV(v, "p")
+	if v.tasksTab.err == "" {
+		t.Fatal("p with no task says what to do")
+	}
+	v = pressV(v, tea.KeyEsc)
+	if v.tab != tabProjects {
+		t.Fatal("esc on the Tasks tab returns to Projects")
+	}
+	v = keyV(v, "T")
+	if _, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}); !quits(cmd) {
+		t.Fatal("q on the Tasks tab quits")
+	}
+	v = pressV(v, tea.KeyLeft)
+	if v.tab != tabKnowledge {
+		t.Fatal("left from Tasks is Knowledge")
+	}
+	// A board with a task plants through the tab; a q typed into the idea is a letter.
+	ledgers := map[string]*tasks.Ledger{
+		"/v/p3": {Tasks: []tasks.Record{{Task: tasks.Task{ID: "task-20260901-aaaa", Path: "wiki/tasks/x.md", Title: "Fix it", Status: "active", Priority: "high"}}}},
+	}
+	var planted []string
+	w := keyV(newView(sample(), Opener{}, taskHooks(ledgers, &planted)), "T")
+	if len(w.tasksTab.rows) != 1 {
+		t.Fatalf("one task: %+v", w.tasksTab.rows)
+	}
+	w = keyV(w, "p")
+	if w.tasksTab.mode != tasksPlant {
+		t.Fatal("p opens the idea field")
+	}
+	w = keyV(w, "q")
+	if w.tasksTab.idea.Value() != "q" || w.tasksTab.mode != tasksPlant {
+		t.Fatalf("q typed into the idea field: %q", w.tasksTab.idea.Value())
+	}
+	w = typeV(w, "uick idea")
+	w = pressV(w, tea.KeyEnter)
+	if len(planted) != 1 || w.tasksTab.mode != tasksList || !w.changed {
+		t.Fatalf("plant through the tab: planted=%v mode=%d changed=%v", planted, w.tasksTab.mode, w.changed)
+	}
+}
+
+func TestProblemsTabAdoptsAndExplains(t *testing.T) {
+	var got []AddVault
+	hooks := Hooks{
+		Load:      func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
+		Create:    func(c AddVault) (string, error) { got = append(got, c); return c.Path, nil },
+		VaultsDir: t.TempDir(),
+	}
+	v := findVault(t, newView(sample(), Opener{}, hooks), "old-notes")
+	out := v.View()
+	t.Logf("\n%s", out)
+	if v.tab != tabProblems || !strings.Contains(out, "could not read") || !strings.Contains(out, "old-notes") || !strings.Contains(out, v1Start) {
+		t.Fatalf("the Problems tab names the folder and the reason:\n%s", out)
+	}
+	v = pressV(v, tea.KeyEnter)
+	out = v.View()
+	for _, want := range []string{"Reason", "v1", "Fix", "press a to adopt it"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expanded problem missing %q:\n%s", want, out)
+		}
+	}
+	v = keyV(v, "m")
+	if v.mounts != nil || !strings.Contains(v.errMsg, v1Start) {
+		t.Fatalf("m on a problem names the problem: err=%q", v.errMsg)
+	}
+	v = keyV(v, "a")
+	if v.add == nil || !v.add.adopting || v.add.path.value() != "/v/old-notes" {
+		t.Fatalf("a starts the adopt screen on the folder: add=%+v", v.add)
+	}
+	v = pressV(v, tea.KeyEsc)
+	if v.add != nil || len(got) != 0 {
+		t.Fatal("esc cancels")
+	}
+	gone := sample()
+	gone[5].Entry.Reason, gone[5].Entry.Error = registry.ReasonMissing, "not found; run claude-atlas remove /v/old-notes to forget it"
+	w := findVault(t, newView(gone, Opener{}, hooks), "old-notes")
+	if strings.Contains(w.boardHints(), "a adopt") || !strings.Contains(pressV(w, tea.KeyEnter).View(), "press e then r to forget it") {
+		t.Fatalf("a folder that is gone is forgotten, not adopted: %q", w.boardHints())
+	}
+	w = keyV(w, "a")
+	if w.add == nil || w.add.path.value() != "" {
+		t.Fatal("a on a missing folder starts the adopt screen empty")
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,12 +12,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
-	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
-	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
-	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // Item is one vault in the view: what the scan found, with the state the last refresh
@@ -36,27 +31,12 @@ func Items(entries []registry.Entry) []Item {
 	return items
 }
 
-// problems is the folder a vault the scan could not read sits in.
-const problems = "problems"
-
 // entryName is the name to show: a vault the scan could not read has only its folder.
 func entryName(e registry.Entry) string {
 	if e.Error != "" || e.Name == "" {
 		return filepath.Base(e.Path)
 	}
 	return e.Name
-}
-
-// folder is where an item sits in the tree: its Rel without its own name.
-func (i Item) folder() string {
-	if i.Entry.Error != "" {
-		return problems
-	}
-	rel := i.Entry.Rel()
-	if j := strings.LastIndex(rel, "/"); j >= 0 {
-		return rel[:j]
-	}
-	return ""
 }
 
 // Opener connects the view to Obsidian and Claude Code without the screen doing the work itself.
@@ -93,116 +73,61 @@ type refreshedMsg struct {
 	err error
 }
 
-// maxLayers is how many folder layers the tree shows before folding deeper ones.
-const maxLayers = 3
-
-type folderNode struct {
-	name     string
-	path     string
-	children []*folderNode
-	items    []*Item
-}
-
-func (n *folderNode) count() int {
-	total := len(n.items)
-	for _, c := range n.children {
-		total += c.count()
-	}
-	return total
-}
-
-// topRank puts projects before knowledge bases at the top of the tree, and the vaults
-// the scan could not read last.
-func topRank(path string) int {
-	switch path {
-	case "projects":
-		return 0
-	case "knowledge":
-		return 1
-	case problems:
-		return 3
-	}
-	return 2
-}
-
-// buildTree arranges the items whose folder sits under root into nested folder nodes.
-func buildTree(items []Item, root string) *folderNode {
-	top := &folderNode{path: root}
-	byPath := map[string]*folderNode{root: top}
-	for i := range items {
-		item := &items[i]
-		folder := item.folder()
-		if root != "" && folder != root && !strings.HasPrefix(folder, root+"/") {
-			continue
-		}
-		rel := strings.TrimPrefix(strings.TrimPrefix(folder, root), "/")
-		node := top
-		if rel != "" {
-			path := root
-			for _, seg := range strings.Split(rel, "/") {
-				if path == "" {
-					path = seg
-				} else {
-					path += "/" + seg
-				}
-				child, ok := byPath[path]
-				if !ok {
-					child = &folderNode{name: seg, path: path}
-					byPath[path] = child
-					node.children = append(node.children, child)
-				}
-				node = child
-			}
-		}
-		node.items = append(node.items, item)
-	}
-	var sortNode func(n *folderNode)
-	sortNode = func(n *folderNode) {
-		sort.Slice(n.children, func(i, j int) bool {
-			a, b := topRank(n.children[i].path), topRank(n.children[j].path)
-			if a != b {
-				return a < b
-			}
-			return n.children[i].name < n.children[j].name
-		})
-		sort.Slice(n.items, func(i, j int) bool { return entryName(n.items[i].Entry) < entryName(n.items[j].Entry) })
-		for _, c := range n.children {
-			sortNode(c)
-		}
-	}
-	sortNode(top)
-	return top
-}
-
-type rowKind int
+// tab is one screen of the tab bar.
+type tab int
 
 const (
-	rowVault rowKind = iota
-	rowFolded
-	rowFolder
+	tabProjects tab = iota
+	tabKnowledge
+	tabTasks
+	tabProblems
 )
 
-// viewRow is a selectable element of the rendered tree with its line span.
-type viewRow struct {
-	kind  rowKind
-	item  *Item
-	path  string // folded folder path
-	count int
-	start int
-	end   int
+var tabNames = map[tab]string{tabProjects: "Projects", tabKnowledge: "Knowledge", tabTasks: "Tasks", tabProblems: "Problems"}
+
+// captions say what each tab holds, for a user who is new to the two kinds.
+var captions = map[tab]string{
+	tabProjects:  "A project holds tasks, questions, and an inbox. It mounts the knowledge bases it reads and writes.",
+	tabKnowledge: "A knowledge base is a wiki. Projects mount it, and sources reach it through a project's inbox. A guarded one grants write access per project.",
+	tabTasks:     "Every project's open tasks.",
+	tabProblems:  "Vaults the atlas found but could not read.",
 }
 
-// frame remembers where the user was before zooming into a folded folder.
-type frame struct {
-	root   string
-	cursor int
-	offset int
+// empties is what a tab says when it lists nothing.
+var empties = map[tab]string{
+	tabProjects:  "no projects yet; press n to make one, or run `claude-atlas new-project NAME`",
+	tabKnowledge: "no knowledge bases yet; press N to make one, or run `claude-atlas new-knowledge NAME`",
+}
+
+// boardOf is the index of the board behind a tab; the Tasks tab has none and maps to 0.
+func boardOf(t tab) int {
+	switch t {
+	case tabKnowledge:
+		return 1
+	case tabProblems:
+		return 2
+	}
+	return 0
+}
+
+// boardTab is the tab a board sits on.
+func boardTab(i int) tab {
+	switch i {
+	case 1:
+		return tabKnowledge
+	case 2:
+		return tabProblems
+	}
+	return tabProjects
 }
 
 type view struct {
 	items     []Item
 	opener    Opener
 	hooks     Hooks
+	tab       tab
+	boards    [3]board     // projects, knowledge, problems
+	tasksTab  *tasksScreen // the hosted board, built on the first visit to the Tasks tab
 	edit      *editor
 	add       *model // the add-vault or adopt screen while open
 	ingest    *ingestScreen
@@ -210,34 +135,26 @@ type view struct {
 	mounts    *mountsScreen
 	tasks     *tasksScreen
 	changed   bool
-	collapsed map[string]bool // folder paths folded by the user
-	root      string
-	stack     []frame
 	ask       *Item  // vault awaiting a register-and-open confirmation
 	askRun    bool   // Obsidian was running when we asked, so it will restart
 	busy      string // message while an open runs in the background
 	status    string
 	errMsg    string
-	rows      []viewRow
-	lines     []string
-	cursor    int
-	offset    int
 	width     int
 	height    int
-	detail    *Item
 	refreshed string
 	// focus is the vault the next refresh should land on, after a write.
 	focus string
 }
 
-var (
-	guideSt = lipgloss.NewStyle().Foreground(muted)
-)
-
 func newView(items []Item, opener Opener, hooks Hooks) view {
-	v := view{items: items, opener: opener, hooks: hooks, collapsed: map[string]bool{}, width: 100, height: 40}
+	v := view{items: items, opener: opener, hooks: hooks, width: 100, height: 40}
+	v.boards = [3]board{
+		newBoard(boardProjects, items, v.width),
+		newBoard(boardKnowledge, items, v.width),
+		newBoard(boardProblems, items, v.width),
+	}
 	v.stamp()
-	v.layout()
 	return v
 }
 
@@ -250,276 +167,113 @@ func (v *view) stamp() {
 	}
 }
 
-// reloadKeeping is reload, with the details panel left as it was: open or closed.
-func (v *view) reloadKeeping(path string) {
-	keep := v.detail != nil
-	v.reload(path)
-	if !keep {
-		v.detail = nil
+// board is the active tab's board; nil on the Tasks tab.
+func (v *view) board() *board {
+	if v.tab == tabTasks {
+		return nil
+	}
+	return &v.boards[boardOf(v.tab)]
+}
+
+// current is the vault under the cursor; nil on the end marker, an empty board, or the
+// Tasks tab.
+func (v *view) current() *Item {
+	if b := v.board(); b != nil {
+		return b.current()
+	}
+	return nil
+}
+
+// tabs lists the tabs the bar shows: Problems only while there is one.
+func (v view) tabs() []tab {
+	out := []tab{tabProjects, tabKnowledge, tabTasks}
+	if len(v.boards[2].items) > 0 {
+		out = append(out, tabProblems)
+	}
+	return out
+}
+
+// switchTab moves along the bar and stops at its ends.
+func (v *view) switchTab(delta int) {
+	tabs := v.tabs()
+	at := 0
+	for i, t := range tabs {
+		if t == v.tab {
+			at = i
+		}
+	}
+	v.goTo(tabs[max(0, min(len(tabs)-1, at+delta))])
+}
+
+// goTo shows a tab. The first visit to Tasks builds the board, when tasks are available.
+func (v *view) goTo(t tab) {
+	v.tab = t
+	if t == tabTasks && v.tasksTab == nil && v.hooks.Tasks != nil {
+		s := newTasks(v.hooks, v.opener, nil, v.items, v.width)
+		s.hosted = true
+		v.tasksTab = &s
+	}
+	if b := v.board(); b != nil {
+		b.layout()
+		b.ensureVisible(v.bodyHeight())
 	}
 }
 
-// reload re-reads the registry and keeps the cursor on the vault at path.
+// reload re-reads the registry when the hooks can, then rebuilds every board with the
+// cursor on the vault at path, on its tab.
 func (v *view) reload(path string) {
-	entries, err := v.hooks.Load()
-	if err != nil {
-		v.errMsg = err.Error()
-		return
+	if v.hooks.Load != nil {
+		entries, err := v.hooks.Load()
+		if err != nil {
+			v.errMsg = err.Error()
+			return
+		}
+		v.items = Items(entries)
+		v.stamp()
 	}
-	v.items = Items(entries)
-	v.stamp()
-	v.layout()
-	v.detail = nil
-	for i := range v.rows {
-		if v.rows[i].kind == rowVault && v.rows[i].item.Entry.Path == path {
-			v.cursor = i
+	v.rebuild(path)
+}
+
+// rebuild lays the boards out again over v.items.
+func (v *view) rebuild(path string) {
+	for i := range v.boards {
+		v.boards[i].width = v.width
+		v.boards[i].reload(v.items)
+	}
+	if v.tasksTab != nil {
+		v.tasksTab.reload(v.items)
+	}
+	for i := range v.boards {
+		if path != "" && v.boards[i].moveTo(path) {
+			v.tab = boardTab(i)
 		}
 	}
-	for i := range v.items {
-		if v.items[i].Entry.Path == path && path != "" {
-			v.detail = &v.items[i]
-		}
+	if v.tab == tabProblems && len(v.boards[2].items) == 0 {
+		v.tab = tabProjects
 	}
-	v.ensureVisible()
+	for i := range v.boards {
+		v.boards[i].layout()
+	}
+	if b := v.board(); b != nil {
+		b.ensureVisible(v.bodyHeight())
+	}
 }
 
 func (v view) Init() tea.Cmd { return nil }
 
-func unfinishedCount(state *registry.State) string {
-	if state == nil {
-		return "—"
-	}
-	if total := state.Unfinished.Total(); total != nil {
-		return fmt.Sprint(*total)
-	}
-	return "—"
-}
-
-func idleText(state *registry.State) string {
-	switch {
-	case state == nil || state.DaysIdle == nil:
-		return "—"
-	case *state.DaysIdle == 0:
-		return "today"
-	default:
-		return fmt.Sprintf("%dd", *state.DaysIdle)
-	}
-}
-
-// layout renders the tree into lines and records where each selectable row lands.
-func (v *view) layout() {
-	v.lines = nil
-	v.rows = nil
-	top := buildTree(v.items, v.root)
-	v.renderNode(top, 0)
-	if len(v.lines) > 0 {
-		v.lines = append(v.lines, v.endLine())
-	}
-	if v.cursor > len(v.rows) {
-		v.cursor = len(v.rows)
-	}
-}
-
-// atEnd reports whether the cursor sits on the end marker below the last row.
-func (v view) atEnd() bool { return len(v.rows) > 0 && v.cursor == len(v.rows) }
-
-// endLine is the marker after the last row; it takes the cursor so the user knows the tree stops here.
-func (v view) endLine() string {
-	if v.atEnd() {
-		return selSt.Render("(end)")
-	}
-	return dim.Render("(end)")
-}
-
-// current is the row under the cursor, or nil on the end marker or an empty tree.
-func (v view) current() *viewRow {
-	if v.cursor < 0 || v.cursor >= len(v.rows) {
-		return nil
-	}
-	return &v.rows[v.cursor]
-}
-
-func (v *view) guide(depth int) string {
-	return guideSt.Render(strings.Repeat("│  ", depth))
-}
-
-func (v *view) renderNode(n *folderNode, depth int) {
-	for _, item := range n.items {
-		v.renderBox(item, depth)
-	}
-	for _, child := range n.children {
-		if depth+1 > maxLayers {
-			start := len(v.lines)
-			v.lines = append(v.lines, v.guide(depth)+"▸ "+catSt.Render(child.name)+dim.Render(fmt.Sprintf("  %d vault%s · Enter to open", child.count(), plural(child.count()))))
-			v.rows = append(v.rows, viewRow{kind: rowFolded, path: child.path, count: child.count(), start: start, end: start})
-			continue
-		}
-		v.renderFolder(child, depth)
-	}
-}
-
-// renderFolder writes a selectable folder header and, unless folded, its contents.
-func (v *view) renderFolder(n *folderNode, depth int) {
-	selected := len(v.rows) == v.cursor
-	folded := v.collapsed[n.path]
-	arrow, name := "▾ ", catSt.Render(n.name)
-	if folded {
-		arrow = "▸ "
-	}
-	if selected {
-		arrow, name = selSt.Render(arrow), selSt.Render(n.name)
-	}
-	line := v.guide(depth) + arrow + name
-	if folded {
-		line += dim.Render(fmt.Sprintf("  %d vault%s", n.count(), plural(n.count())))
-	}
-	start := len(v.lines)
-	v.lines = append(v.lines, line)
-	v.rows = append(v.rows, viewRow{kind: rowFolder, path: n.path, count: n.count(), start: start, end: start})
-	if !folded {
-		v.renderNode(n, depth+1)
-	}
-}
-
-// parentPath is the folder a row sits in, relative to the tree shown; "" at the root.
-func (v view) parentPath(r viewRow) string {
-	switch r.kind {
-	case rowVault:
-		return r.item.folder()
-	default:
-		if i := strings.LastIndex(r.path, "/"); i >= 0 {
-			return r.path[:i]
-		}
-		return ""
-	}
-}
-
-// moveTo puts the cursor on the row for a folder path, when it is visible.
-func (v *view) moveTo(path string) {
-	for i, r := range v.rows {
-		if r.kind != rowVault && r.path == path {
-			v.cursor = i
-			return
-		}
-	}
-}
-
-// fold collapses or expands the branch at the cursor. On a vault it collapses the
-// vault's folder and moves the cursor there.
-func (v *view) fold() {
-	r := v.current()
-	if r == nil {
-		return
-	}
-	switch r.kind {
-	case rowFolder:
-		v.collapsed[r.path] = !v.collapsed[r.path]
-	case rowVault:
-		parent := v.parentPath(*r)
-		if parent == "" || parent == v.root {
-			return
-		}
-		v.collapsed[parent] = true
-		v.layout()
-		v.moveTo(parent)
-		return
-	default:
-		return
-	}
-	v.layout()
-}
-
-// foldAll collapses or expands every folder in the tree shown. The cursor stays on the
-// nearest visible ancestor of where it was.
-func (v *view) foldAll(collapse bool) {
-	anchor := ""
-	if r := v.current(); r != nil {
-		anchor = r.path
-		if r.kind == rowVault {
-			anchor = r.item.folder()
-		}
-	}
-	if !collapse {
-		v.collapsed = map[string]bool{}
-	} else {
-		var mark func(n *folderNode)
-		mark = func(n *folderNode) {
-			for _, c := range n.children {
-				v.collapsed[c.path] = true
-				mark(c)
-			}
-		}
-		mark(buildTree(v.items, v.root))
-	}
-	v.layout()
-	best := -1
-	for i, r := range v.rows {
-		if r.kind == rowVault || r.path == "" {
-			continue
-		}
-		if (anchor == r.path || strings.HasPrefix(anchor, r.path+"/")) && (best < 0 || len(r.path) > len(v.rows[best].path)) {
-			best = i
-		}
-	}
-	switch {
-	case best >= 0:
-		v.cursor = best
-	case v.cursor > len(v.rows):
-		v.cursor = len(v.rows)
-	}
-}
-
-func (v *view) renderBox(item *Item, depth int) {
-	width := min(46, max(24, v.width-depth*3-6))
-	selected := len(v.rows) == v.cursor
-	style := boxSt
-	if selected {
-		style = boxSelSt
-	}
-	name := entryName(item.Entry)
-	if selected {
-		name = selSt.Render(name)
-	}
-	state := item.Entry.State
-	facts := dim.Render(fmt.Sprintf("%s pages · %s unfinished · idle %s", pagesText(state), unfinishedCount(state), idleText(state)))
-	if item.Entry.Error != "" {
-		facts = errSt.Render(item.Entry.Error)
-	}
-	box := style.Width(width).Render(fmt.Sprintf("%s %s\n%s", heatMark(state), name, facts))
-	start := len(v.lines)
-	for _, line := range strings.Split(box, "\n") {
-		v.lines = append(v.lines, v.guide(depth)+line)
-	}
-	v.rows = append(v.rows, viewRow{kind: rowVault, item: item, start: start, end: len(v.lines) - 1})
-}
-
-func (v *view) ensureVisible() {
-	if len(v.rows) == 0 {
-		v.offset = 0
-		return
-	}
-	avail := v.bodyHeight()
-	start, end := len(v.lines)-1, len(v.lines)-1
-	if r := v.current(); r != nil {
-		start, end = r.start, r.end
-	}
-	if start < v.offset {
-		v.offset = start
-	}
-	if end >= v.offset+avail {
-		v.offset = end - avail + 1
-	}
-	if v.offset < 0 {
-		v.offset = 0
-	}
-}
-
-func (v view) bodyHeight() int { return max(5, v.height-6) }
+func (v view) bodyHeight() int { return max(5, v.height-8) }
 
 func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		v.width, v.height = msg.Width, msg.Height
+		for i := range v.boards {
+			v.boards[i].width = msg.Width
+			v.boards[i].layout()
+		}
+		if v.tasksTab != nil {
+			v.tasksTab.width = msg.Width
+		}
 		if v.links != nil {
 			v.links.width = msg.Width
 		}
@@ -529,8 +283,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.tasks != nil {
 			v.tasks.width = msg.Width
 		}
-		v.layout()
-		v.ensureVisible()
+		if b := v.board(); b != nil {
+			b.ensureVisible(v.bodyHeight())
+		}
 		return v, nil
 	case claudeDoneMsg:
 		if msg.err != nil {
@@ -541,6 +296,11 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.tasks != nil {
 			v.tasks.reload(v.items)
 			v.tasks.status = "back from Claude Code"
+			return v, v.refreshCmd()
+		}
+		if v.tab == tabTasks && v.tasksTab != nil {
+			v.tasksTab.reload(v.items)
+			v.tasksTab.status = "back from Claude Code"
 			return v, v.refreshCmd()
 		}
 		return v, nil
@@ -561,13 +321,11 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		path := v.focus
 		v.focus = ""
 		if path == "" {
-			if v.detail != nil {
-				path = v.detail.Entry.Path
-			} else if r := v.current(); r != nil && r.kind == rowVault {
-				path = r.item.Entry.Path
+			if it := v.current(); it != nil {
+				path = it.Entry.Path
 			}
 		}
-		v.reloadKeeping(path)
+		v.reload(path)
 		v.status = "refreshed"
 		if v.links != nil {
 			v.links.reload(v.items)
@@ -580,6 +338,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.tasks != nil {
 			v.tasks.reload(v.items)
 			v.tasks.status = "refreshed"
+		}
+		if v.tasksTab != nil {
+			v.tasksTab.status = "refreshed"
 		}
 		return v, nil
 	case tea.KeyMsg:
@@ -604,6 +365,10 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.tasks != nil {
 			return v.updateTasks(msg)
 		}
+		// The board's idea field takes every key while it is open, q included.
+		if v.tab == tabTasks && v.tasksTab != nil && v.tasksTab.mode != tasksList {
+			return v.updateTasksTab(msg)
+		}
 		if msg.String() == "q" {
 			return v, tea.Quit
 		}
@@ -622,26 +387,37 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 		v.status, v.errMsg = "", ""
+		switch msg.Type {
+		case tea.KeyLeft:
+			v.switchTab(-1)
+			return v, nil
+		case tea.KeyRight:
+			v.switchTab(1)
+			return v, nil
+		}
 		switch msg.String() {
 		case "n":
 			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Project))
 		case "N":
 			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Knowledge))
 		case "a":
-			return v.openAdd(newAdoptModel())
+			return v.openAdd(v.adoptModel())
 		case "R":
 			return v.refresh()
 		case "T":
-			return v.openTasks(nil)
+			v.goTo(tabTasks)
+			return v, nil
+		}
+		if v.tab == tabTasks {
+			return v.updateTasksTab(msg)
 		}
 		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" || key == "l" || key == "m" || key == "t" {
-			var item *Item
-			if v.detail != nil {
-				item = v.detail
-			} else if r := v.current(); r != nil && r.kind == rowVault {
-				item = r.item
-			}
+			item := v.current()
 			if item == nil {
+				return v, nil
+			}
+			if item.Entry.Error != "" && key != "o" && key != "e" {
+				v.errMsg = item.Entry.Error
 				return v, nil
 			}
 			switch key {
@@ -660,59 +436,35 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v.open(item)
 		}
-		if v.detail != nil {
-			if msg.Type == tea.KeyEsc || msg.Type == tea.KeyEnter || msg.Type == tea.KeyLeft {
-				v.detail = nil
-			}
-			return v, nil
-		}
+		b := v.board()
 		switch msg.Type {
 		case tea.KeyUp:
-			if v.cursor > 0 {
-				v.cursor--
-			}
+			b.move(-1)
 		case tea.KeyDown:
-			// One step past the last row lands on the end marker, so the bottom is unmistakable.
-			if v.cursor < len(v.rows) {
-				v.cursor++
-			}
-		case tea.KeyEnter, tea.KeyRight:
-			r := v.current()
-			if r == nil {
-				return v, nil
-			}
-			switch r.kind {
-			case rowFolded:
-				v.stack = append(v.stack, frame{root: v.root, cursor: v.cursor, offset: v.offset})
-				v.root = r.path
-				v.cursor = 0
-				v.offset = 0
-			case rowFolder:
-				v.collapsed[r.path] = !v.collapsed[r.path]
-			default:
-				v.detail = r.item
-			}
-		case tea.KeySpace, tea.KeyLeft:
-			v.fold()
+			b.move(1)
+		case tea.KeyEnter:
+			b.toggle()
 		case tea.KeyEsc:
-			if len(v.stack) == 0 {
+			if !b.collapseAll() {
 				return v, tea.Quit
 			}
-			last := v.stack[len(v.stack)-1]
-			v.stack = v.stack[:len(v.stack)-1]
-			v.root, v.cursor, v.offset = last.root, last.cursor, last.offset
 		default:
-			switch msg.String() {
-			case "-":
-				v.foldAll(true)
-			case "+", "=":
-				v.foldAll(false)
-			}
+			return v, nil
 		}
-		v.layout()
-		v.ensureVisible()
+		b.layout()
+		b.ensureVisible(v.bodyHeight())
 	}
 	return v, nil
+}
+
+// adoptModel is the adopt screen. On the Problems tab it starts on the folder under the
+// cursor, unless that folder is gone.
+func (v *view) adoptModel() model {
+	m := newAdoptModel()
+	if it := v.current(); v.tab == tabProblems && it != nil && it.Entry.Reason != registry.ReasonMissing {
+		m.path.setValue(it.Entry.Path)
+	}
+	return m
 }
 
 // refreshCmd rebuilds the registry in the background; nil when no hook does it.
@@ -759,11 +511,10 @@ func (v view) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	cmd = v.wrote(path, verb+choice.Name)
 	v.reload(path)
-	v.detail = nil
 	return v, cmd
 }
 
-// wrote records a write: the tree reloads now, and a background refresh brings the
+// wrote records a write: the boards reload now, and a background refresh brings the
 // derived state up to date and lands the cursor back on this vault.
 func (v *view) wrote(path, status string) tea.Cmd {
 	v.changed = true
@@ -772,7 +523,7 @@ func (v *view) wrote(path, status string) tea.Cmd {
 	return v.refreshCmd()
 }
 
-// refresh rebuilds derived state in the background, then reloads the tree.
+// refresh rebuilds derived state in the background, then reloads the boards.
 func (v view) refresh() (tea.Model, tea.Cmd) {
 	if v.hooks.Refresh == nil || v.hooks.Load == nil {
 		v.errMsg = "refresh is not available here"
@@ -803,7 +554,7 @@ func (v view) updateEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return v, cmd
 	case editSaved:
 		cmd = v.wrote(path, "saved "+ed.draft.Name)
-		v.reloadKeeping(path)
+		v.reload(path)
 	case editRemoved:
 		cmd = v.wrote("", fmt.Sprintf("forgot %s; the vault is still on disk", ed.entry.Name))
 		v.reload("")
@@ -833,7 +584,7 @@ func (v view) updateLinks(msg tea.Msg) (tea.Model, tea.Cmd) {
 	s, cmd := v.links.update(msg)
 	if s.closed {
 		v.links = nil
-		v.reloadKeeping(s.entry.Path)
+		v.reload(s.entry.Path)
 		return v, nil
 	}
 	v.links = &s
@@ -841,7 +592,7 @@ func (v view) updateLinks(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.links.changed = false
 		v.changed = true
 		v.focus = s.entry.Path
-		v.reloadKeeping(s.entry.Path)
+		v.reload(s.entry.Path)
 		v.links.reload(v.items)
 		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
 			v.links.status += " · refreshing…"
@@ -876,7 +627,7 @@ func (v view) updateMounts(msg tea.Msg) (tea.Model, tea.Cmd) {
 	s, cmd := v.mounts.update(msg)
 	if s.closed {
 		v.mounts = nil
-		v.reloadKeeping(s.entry.Path)
+		v.reload(s.entry.Path)
 		return v, nil
 	}
 	v.mounts = &s
@@ -884,7 +635,7 @@ func (v view) updateMounts(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.mounts.changed = false
 		v.changed = true
 		v.focus = s.entry.Path
-		v.reloadKeeping(s.entry.Path)
+		v.reload(s.entry.Path)
 		v.mounts.reload(v.items)
 		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
 			v.mounts.status += " · refreshing…"
@@ -894,7 +645,7 @@ func (v view) updateMounts(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, cmd
 }
 
-// openTasks shows a project's open tasks, or every project's when item is nil.
+// openTasks shows a project's open tasks.
 func (v view) openTasks(item *Item) (tea.Model, tea.Cmd) {
 	if v.hooks.Tasks == nil {
 		v.errMsg = "tasks are not available here"
@@ -909,8 +660,7 @@ func (v view) openTasks(item *Item) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-// updateTasks forwards keys to the tasks screen, starts Claude Code when asked, and
-// refreshes in the background after a plant.
+// updateTasks forwards keys to a project's tasks screen.
 func (v view) updateTasks(msg tea.Msg) (tea.Model, tea.Cmd) {
 	s, cmd := v.tasks.update(msg)
 	if s.closed {
@@ -918,32 +668,52 @@ func (v view) updateTasks(msg tea.Msg) (tea.Model, tea.Cmd) {
 		path := ""
 		if s.item != nil {
 			path = s.item.Entry.Path
-		} else if r := v.current(); r != nil && r.kind == rowVault {
-			path = r.item.Entry.Path
 		}
-		v.reloadKeeping(path)
+		v.reload(path)
 		return v, nil
 	}
 	v.tasks = &s
+	return v, v.afterTasks(v.tasks, cmd)
+}
+
+// updateTasksTab forwards keys to the hosted board. Esc there returns to the Projects tab.
+func (v view) updateTasksTab(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if v.tasksTab == nil {
+		return v, nil
+	}
+	s, cmd := v.tasksTab.update(msg)
+	if s.closed {
+		s.closed = false
+		v.tasksTab = &s
+		v.goTo(tabProjects)
+		return v, nil
+	}
+	v.tasksTab = &s
+	return v, v.afterTasks(v.tasksTab, cmd)
+}
+
+// afterTasks does what a tasks board asked for after a key: starts Claude Code, or
+// refreshes after a plant.
+func (v *view) afterTasks(s *tasksScreen, cmd tea.Cmd) tea.Cmd {
 	if l := s.launch; l != nil {
-		v.tasks.launch = nil
-		cmd, err := v.opener.ClaudeIn(l.vault, l.dir, l.prompt)
+		s.launch = nil
+		c, err := v.opener.ClaudeIn(l.vault, l.dir, l.prompt)
 		if err != nil {
-			v.tasks.err = err.Error()
-			return v, nil
+			s.err = err.Error()
+			return nil
 		}
 		name := l.name
-		return v, tea.ExecProcess(cmd, func(err error) tea.Msg { return claudeDoneMsg{name: name, err: err} })
+		return tea.ExecProcess(c, func(err error) tea.Msg { return claudeDoneMsg{name: name, err: err} })
 	}
 	if s.changed {
-		v.tasks.changed = false
+		s.changed = false
 		v.changed = true
 		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
-			v.tasks.status += " · refreshing…"
-			return v, tea.Batch(cmd, refreshCmd)
+			s.status += " · refreshing…"
+			return tea.Batch(cmd, refreshCmd)
 		}
 	}
-	return v, cmd
+	return cmd
 }
 
 // openIngest starts the ingest screen for a project.
@@ -1062,59 +832,109 @@ func (v view) footer(hints ...string) string {
 	return out
 }
 
-func (v view) View() string {
-	if v.edit != nil {
-		return v.edit.view()
+// tabBar is the first line: every tab with its count, the active one in its color, and
+// the refresh stamp at the right.
+func (v view) tabBar() string {
+	var parts []string
+	for _, t := range v.tabs() {
+		text := tabNames[t]
+		if n, ok := v.count(t); ok {
+			text += fmt.Sprintf(" %d", n)
+		}
+		style := dim
+		if t == v.tab {
+			switch t {
+			case tabProjects:
+				style = projectSt
+			case tabKnowledge:
+				style = knowledgeSt
+			default:
+				style = title
+			}
+		}
+		parts = append(parts, style.Render(text))
 	}
-	if v.add != nil {
-		return v.add.View()
-	}
-	if v.ingest != nil {
-		return v.ingest.view()
-	}
-	if v.links != nil {
-		return v.links.view()
-	}
-	if v.mounts != nil {
-		return v.mounts.view()
-	}
-	if v.tasks != nil {
-		return v.tasks.view()
-	}
-	if v.detail != nil {
-		return v.viewDetail()
-	}
-	var b strings.Builder
-	crumb := "all vaults"
-	if v.root != "" {
-		crumb = strings.ReplaceAll(v.root, "/", " › ")
-	}
+	left := title.Render("Atlas") + "   " + strings.Join(parts, "   ")
 	stamp := "not refreshed yet"
 	if t, err := time.Parse("2006-01-02T15:04:05Z", v.refreshed); err == nil {
 		stamp = "refreshed " + t.Local().Format("2006-01-02 15:04")
 	}
-	fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render("Atlas"), catSt.Render(crumb), dim.Render(fmt.Sprintf("%d vault%s · %s", len(v.items), plural(len(v.items)), stamp)))
-	if len(v.lines) == 0 {
-		b.WriteString("  " + dim.Render("no vaults yet; press n to make one, or run `claude-atlas new-project NAME`") + "\n")
+	pad := max(3, v.width-4-lipgloss.Width(left)-lipgloss.Width(stamp))
+	return left + strings.Repeat(" ", pad) + dim.Render(stamp)
+}
+
+// count is the number after a tab's name: its vaults, or the open tasks the last refresh
+// counted. It is false for Tasks until a refresh has counted them.
+func (v view) count(t tab) (int, bool) {
+	if t != tabTasks {
+		return len(v.boards[boardOf(t)].items), true
 	}
-	end := min(len(v.lines), v.offset+v.bodyHeight())
-	for _, line := range v.lines[v.offset:end] {
+	n, known := 0, false
+	for _, it := range v.items {
+		if s := it.Entry.State; it.Entry.Kind == vault.Project && s != nil && s.Tasks != nil {
+			n += s.Tasks.Counts.Open
+			known = true
+		}
+	}
+	return n, known
+}
+
+func (v view) View() string {
+	switch {
+	case v.edit != nil:
+		return v.edit.view()
+	case v.add != nil:
+		return v.add.View()
+	case v.ingest != nil:
+		return v.ingest.view()
+	case v.links != nil:
+		return v.links.view()
+	case v.mounts != nil:
+		return v.mounts.view()
+	case v.tasks != nil:
+		return v.tasks.view()
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n  %s\n  %s\n\n", v.tabBar(), dim.Render(captions[v.tab]))
+	if v.tab == tabTasks {
+		if v.tasksTab == nil {
+			b.WriteString("  " + dim.Render("tasks are not available here") + "\n")
+			b.WriteString("\n" + v.footer("←→ tabs · q quit"))
+			return b.String()
+		}
+		b.WriteString(v.tasksTab.view())
+		b.WriteString(v.footer())
+		return b.String()
+	}
+	bd := v.boards[boardOf(v.tab)]
+	if len(bd.items) == 0 {
+		b.WriteString("  " + dim.Render(empties[v.tab]) + "\n")
+	}
+	lines, more := bd.window(v.bodyHeight())
+	for _, line := range lines {
 		b.WriteString("  " + line + "\n")
 	}
-	if end < len(v.lines) {
-		b.WriteString("  " + dim.Render(fmt.Sprintf("… %d more lines", len(v.lines)-end)) + "\n")
+	if more > 0 {
+		b.WriteString("  " + dim.Render(fmt.Sprintf("… %d more lines", more)) + "\n")
 	}
-	b.WriteString("\n" + v.footer(v.treeHints(), v.globalHints()))
+	b.WriteString("\n" + v.footer(v.boardHints(), v.globalHints()))
 	return b.String()
 }
 
-// globalHints lists the keys that work anywhere in the tree.
+// globalHints lists the keys that work on every tab.
 func (v view) globalHints() string {
-	return "n new project · N new knowledge base · a adopt · T all tasks · R refresh · - + fold all · q quit"
+	return "←→ tabs · n new project · N new knowledge base · a adopt · R refresh · q quit"
 }
 
 // vaultKeys lists the keys that act on one vault.
 func vaultKeys(e registry.Entry) string {
+	if e.Error != "" {
+		keys := "o Obsidian · e edit"
+		if e.Reason != registry.ReasonMissing {
+			keys += " · a adopt"
+		}
+		return keys
+	}
 	keys := "o Obsidian · c Claude"
 	if e.Kind == vault.Project {
 		keys += " · i ingest · t tasks · l repos"
@@ -1122,153 +942,22 @@ func vaultKeys(e registry.Entry) string {
 	return keys + " · m mounts · e edit"
 }
 
-// treeHints lists the keys that do something for the row under the cursor.
-func (v view) treeHints() string {
+// boardHints lists the keys for the vault under the cursor.
+func (v view) boardHints() string {
 	hints := "↑↓ move"
-	if r := v.current(); r != nil {
-		switch r.kind {
-		case rowVault:
-			hints += " · Enter details · " + vaultKeys(r.item.Entry) + " · Space fold"
-		case rowFolder:
-			if v.collapsed[r.path] {
-				hints += " · Enter unfold"
-			} else {
-				hints += " · Enter fold"
-			}
-		case rowFolded:
-			hints += " · Enter open"
-		}
+	bd := v.boards[boardOf(v.tab)]
+	it := bd.current()
+	if it == nil {
+		return hints
 	}
-	if len(v.stack) > 0 {
-		hints += " · Esc back"
+	open := "Enter details"
+	if bd.expanded[it.Entry.Path] {
+		open = "Enter collapse"
 	}
-	return hints
+	return hints + " · " + open + " · " + vaultKeys(it.Entry)
 }
 
-func (v view) viewDetail() string {
-	e := v.detail.Entry
-	s := e.State
-	where := e.Rel()
-	if e.Error != "" {
-		where = home.Display(e.Path)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "\n  %s   %s\n\n", title.Render(entryName(e)), dim.Render(where))
-	if s == nil {
-		b.WriteString("  " + dim.Render("never refreshed; press R") + "\n\n")
-	} else {
-		summary := heatMark(s) + " " + dash(s.Heat)
-		if e.Created != "" {
-			summary += " · created " + e.Created
-		}
-		if s.LastTouched != "" {
-			summary += " · last touched " + s.LastTouched + " (" + idleText(s) + ")"
-		}
-		b.WriteString("  " + summary + "\n\n")
-	}
-	row := func(k, val string) { fmt.Fprintf(&b, "  %s%s\n", label.Width(16).Render(k), dash(val)) }
-	row("Name", entryName(e))
-	row("Kind", string(e.Kind))
-	row("Id", e.ID)
-	row("Path", home.Display(e.Path))
-	row("Mode", string(e.Mode))
-	if e.Kind == vault.Knowledge {
-		row("Scope", e.Scope)
-		row("Access", e.Access)
-		for _, g := range e.Grants {
-			text := g.Name + "  " + g.Access
-			if g.Error != "" {
-				text += "  " + g.Error
-			}
-			row("Grant", text)
-		}
-		for _, m := range e.MountedBy {
-			row("Mounted by", m.Name+"  "+m.Access)
-		}
-	} else {
-		row("Tags", strings.Join(e.Tags, ", "))
-	}
-	if len(e.Mounts) > 0 {
-		b.WriteString("\n  " + catSt.Render("Mounts") + "\n")
-		for _, m := range e.Mounts {
-			text := m.Effective + " · " + home.Display(m.Path)
-			style := dim
-			switch state := vaults.MountState(e, m); {
-			case m.Error != "":
-				text = m.Error
-				style = errSt
-			case state == vaults.MountMissing:
-				text += " · symlink missing"
-				style = errSt
-			case state == vaults.MountWrong:
-				text += " · symlink points elsewhere"
-				style = errSt
-			}
-			fmt.Fprintf(&b, "    %-24s %s\n", m.Name, style.Render(text))
-		}
-	}
-	if len(e.Repos) > 0 {
-		b.WriteString("\n  " + catSt.Render("Repositories") + "\n")
-		for _, r := range e.Repos {
-			where := home.Display(r.Path) + " · changes: " + links.Policy(r.Changes, r.Remote)
-			if r.Remote != "" {
-				where += " · " + r.Remote
-			}
-			if r.Path == "" {
-				where = r.Error
-			}
-			fmt.Fprintf(&b, "    %-24s %s\n", r.Name, dim.Render(where))
-			if s != nil {
-				if fact, ok := s.RepoFacts[r.Name]; ok {
-					facts := refresh.LinkSummary(fact)
-					if !fact.OK {
-						facts = errSt.Render(facts)
-					}
-					b.WriteString("                             " + dim.Render(facts) + "\n")
-				}
-			}
-		}
-	}
-	if s != nil {
-		b.WriteString("\n")
-		check := okSt.Render("ok")
-		if !s.VaultOK {
-			check = errSt.Render(dash(s.VaultError))
-		}
-		row("Vault check", check)
-		row("Heat", s.Heat)
-		row("Last touched", s.LastTouched)
-		if s.DaysIdle != nil {
-			row("Idle", fmt.Sprintf("%d day%s", *s.DaysIdle, plural(*s.DaysIdle)))
-		}
-		row("Last operation", s.LastOperation)
-		row("Pages", pagesText(s))
-		row("Unfinished", s.Unfinished.Text())
-		for i, t := range s.OpenThreads {
-			k := "Open threads"
-			if i > 0 {
-				k = ""
-			}
-			fmt.Fprintf(&b, "  %s- %s\n", label.Width(16).Render(k), refresh.PlainText(t))
-		}
-		if s.Tasks != nil {
-			row("Tasks", taskSummaryText(s.Tasks))
-		}
-		if t, err := time.Parse("2006-01-02T15:04:05Z", s.GeneratedAt); err == nil {
-			row("Refreshed", t.Local().Format("2006-01-02 15:04"))
-		}
-	}
-	if signals := refresh.Signals(e, now()); len(signals) > 0 {
-		b.WriteString("\n  " + catSt.Render("Signals") + "\n")
-		for _, signal := range signals {
-			b.WriteString("    - " + signal + "\n")
-		}
-	}
-	b.WriteString("\n" + v.footer(vaultKeys(e)+" · R refresh · Esc back · q quit"))
-	return b.String()
-}
-
-// RunView shows the tree until the user quits. It reports whether any vault changed.
+// RunView shows the atlas until the user quits. It reports whether any vault changed.
 func RunView(items []Item, opener Opener, hooks Hooks) (bool, error) {
 	final, err := tea.NewProgram(newView(items, opener, hooks), tea.WithAltScreen()).Run()
 	if err != nil {

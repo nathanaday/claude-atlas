@@ -111,7 +111,7 @@ func atlasFixture(t *testing.T) (*home.Config, home.Home, Hooks) {
 	return cfg, h, hooks
 }
 
-// openView loads the entries and shows the tree, cursor on the first row.
+// openView loads the entries and shows the boards, cursor on the first vault.
 func openView(t *testing.T, hooks Hooks) view {
 	t.Helper()
 	entries, err := hooks.Load()
@@ -121,13 +121,12 @@ func openView(t *testing.T, hooks Hooks) view {
 	return newView(Items(entries), Opener{}, hooks)
 }
 
-// atlasView opens the tree over the fixture with the cursor on the project "reading"
-// (rows: projects, welcome, personal, reading, knowledge, ai-ml).
+// atlasView opens the boards over the fixture with the cursor on the project "reading".
 func atlasView(t *testing.T) (*home.Config, home.Home, view) {
 	t.Helper()
 	cfg, h, hooks := atlasFixture(t)
-	v := pressV(openView(t, hooks), tea.KeyDown, tea.KeyDown, tea.KeyDown)
-	if r := v.current(); r == nil || r.kind != rowVault || r.item.Entry.Name != "reading" {
+	v := findVault(t, openView(t, hooks), "reading")
+	if it := v.current(); it == nil || it.Entry.Name != "reading" {
 		t.Fatalf("cursor on %+v", v.current())
 	}
 	return cfg, h, v
@@ -176,18 +175,18 @@ func TestEditRenamesAndRetagsAProject(t *testing.T) {
 	if strings.Join(e.Tags, ",") != "usc,fall" || e.Rel() != "projects/usc/reading List" {
 		t.Fatalf("identity file: %+v", e)
 	}
-	if r := v.rows[v.cursor]; r.kind != rowVault || r.item.Entry.Path != e.Path {
-		t.Fatalf("cursor should follow the vault: %+v", r)
+	if it := v.current(); it == nil || it.Entry.Path != e.Path {
+		t.Fatalf("cursor should follow the vault: %+v", v.current())
 	}
-	if out := v.View(); !strings.Contains(out, "▾ usc") || !strings.Contains(out, "reading List") {
+	if out := v.View(); !strings.Contains(out, "  usc\n") || !strings.Contains(out, "reading List") {
 		t.Fatalf("tree not reloaded:\n%s", out)
 	}
 }
 
 func TestEditScopeAndAccessOnAKnowledgeBase(t *testing.T) {
 	cfg, _, v := atlasView(t)
-	v = pressV(v, tea.KeyDown, tea.KeyDown) // knowledge, ai-ml
-	if r := v.current(); r == nil || r.item.Entry.Kind != vault.Knowledge {
+	v = findVault(t, v, "ai-ml")
+	if r := v.current(); r == nil || r.Entry.Kind != vault.Knowledge {
 		t.Fatalf("cursor on %+v", v.current())
 	}
 	v = keyV(v, "e")
@@ -221,7 +220,7 @@ func TestEscWarnsBeforeDiscarding(t *testing.T) {
 		t.Fatalf("first esc should warn: %+v", v.edit)
 	}
 	v = pressV(v, tea.KeyEsc)
-	if v.edit != nil || v.changed || v.detail != nil {
+	if v.edit != nil || v.changed {
 		t.Fatalf("second esc should discard: edit=%v changed=%v", v.edit, v.changed)
 	}
 }
@@ -265,8 +264,8 @@ func TestUnregisterFromTheEditor(t *testing.T) {
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
-	w := pressV(openView(t, v.hooks), tea.KeyDown) // projects, outside
-	if r := w.current(); r == nil || r.item.Entry.Name != "outside" {
+	w := findVault(t, openView(t, v.hooks), "outside")
+	if r := w.current(); r == nil || r.Entry.Name != "outside" {
 		t.Fatalf("cursor on %+v", w.current())
 	}
 	w = keyV(w, "e")
@@ -280,29 +279,30 @@ func TestUnregisterFromTheEditor(t *testing.T) {
 	}
 }
 
-func TestEditFromDetailReturnsToDetail(t *testing.T) {
+func TestEditFromAnExpandedVaultKeepsItExpanded(t *testing.T) {
 	_, _, v := atlasView(t)
-	v = pressV(v, tea.KeyEnter) // detail
-	if v.detail == nil {
-		t.Fatal("detail should open")
+	path := v.current().Entry.Path
+	v = pressV(v, tea.KeyEnter)
+	if !v.boards[0].expanded[path] {
+		t.Fatal("enter should expand")
 	}
 	v = keyV(v, "e")
 	v = pressV(v, tea.KeyEsc)
-	if v.edit != nil || v.detail == nil || v.detail.Entry.Name != "reading" {
-		t.Fatalf("esc should return to the detail page: edit=%v detail=%v", v.edit, v.detail)
+	if v.edit != nil || !v.boards[0].expanded[path] || v.current().Entry.Name != "reading" {
+		t.Fatalf("esc should return to the expanded vault: edit=%v expanded=%v", v.edit, v.boards[0].expanded)
 	}
 	v = keyV(v, "e")
 	v = pressV(v, tea.KeyEnter) // name
 	v = typeV(v, " 2")
 	v = pressV(v, tea.KeyEnter)
 	v = keyV(v, "s")
-	if v.edit != nil || v.detail == nil || v.detail.Entry.Name != "reading 2" || !strings.Contains(v.View(), "reading 2") {
-		t.Fatalf("a saved edit should refresh the detail page: detail=%+v", v.detail)
+	if v.edit != nil || v.current() == nil || v.current().Entry.Name != "reading 2" || !v.boards[0].expanded[path] || !strings.Contains(v.View(), "reading 2") {
+		t.Fatalf("a saved edit keeps the vault expanded under the cursor: current=%+v", v.current())
 	}
 }
 
 func TestEditNeedsHooks(t *testing.T) {
-	v := pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown)
+	v := newView(sample(), Opener{}, Hooks{})
 	v = keyV(v, "e")
 	if v.edit != nil || !strings.Contains(v.errMsg, "not available") {
 		t.Fatalf("edit without hooks: %+v %q", v.edit, v.errMsg)
@@ -326,7 +326,7 @@ func TestASaveRefreshesAndKeepsTheCursor(t *testing.T) {
 			return nil
 		},
 	}
-	v := pressV(newView(Items(entries), Opener{}, hooks), tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
+	v := findVault(t, newView(Items(entries), Opener{}, hooks), "p3")
 	v = keyV(v, "e")
 	v = pressV(v, tea.KeyEnter)
 	v.edit.text.SetValue("p3 again")
@@ -336,11 +336,11 @@ func TestASaveRefreshesAndKeepsTheCursor(t *testing.T) {
 	if cmd == nil || v.focus != "/v/p3" || edited.Name != "p3 again" {
 		t.Fatalf("save should start a refresh: focus=%q edit=%+v", v.focus, edited)
 	}
-	if r := v.current(); r == nil || r.item.Entry.Name != "p3" {
+	if r := v.current(); r == nil || r.Entry.Name != "p3" {
 		t.Fatalf("the registry has not been rewritten yet: %+v", r)
 	}
 	v = runCmd(v, cmd)
-	if r := v.current(); r == nil || r.kind != rowVault || r.item.Entry.Name != "p3 again" {
+	if r := v.current(); r == nil || r.Entry.Name != "p3 again" {
 		t.Fatalf("the cursor should land on the renamed vault: %+v", r)
 	}
 	if v.focus != "" {

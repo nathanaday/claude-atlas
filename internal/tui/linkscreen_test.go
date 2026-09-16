@@ -181,13 +181,13 @@ func TestReposScreenClonesAndAsksHowChangesLand(t *testing.T) {
 }
 
 func TestReposScreenNeedsHooksAndAProject(t *testing.T) {
-	none := keyV(pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown), "l")
+	none := keyV(newView(sample(), Opener{}, Hooks{}), "l")
 	if none.links != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("l without hooks reports why")
 	}
 	_, _, hooks := atlasFixture(t)
-	kb := pressV(openView(t, hooks), tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown)
-	if r := kb.current(); r == nil || r.item.Entry.Kind != vault.Knowledge {
+	kb := findVault(t, openView(t, hooks), "ai-ml")
+	if r := kb.current(); r == nil || r.Entry.Kind != vault.Knowledge {
 		t.Fatalf("cursor on %+v", kb.current())
 	}
 	kb = keyV(kb, "l")
@@ -206,7 +206,7 @@ func TestUnlinkSurvivesAReloadThatDroppedTheRepository(t *testing.T) {
 		AddRepo:    func(registry.Entry, string, bool) (vault.Repo, string, error) { return vault.Repo{}, "", nil },
 		RemoveRepo: func(registry.Entry, string) error { removed++; return nil },
 	}
-	v := pressV(newView(sample(), Opener{}, hooks), tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
+	v := findVault(t, newView(sample(), Opener{}, hooks), "p3")
 	v = keyV(v, "l")
 	if v.links == nil || len(v.links.rows) != 1 {
 		t.Fatalf("one repository to start: %+v", v.links)

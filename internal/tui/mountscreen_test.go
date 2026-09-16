@@ -82,7 +82,7 @@ func TestMountsScreenMountsAndUnmounts(t *testing.T) {
 }
 
 func TestMountsScreenNeedsHooks(t *testing.T) {
-	none := keyV(pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown), "m")
+	none := keyV(newView(sample(), Opener{}, Hooks{}), "m")
 	if none.mounts != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatalf("m without hooks reports why: err=%q", none.errMsg)
 	}
@@ -92,8 +92,8 @@ func TestMountsScreenNeedsHooks(t *testing.T) {
 	if bad.mounts != nil || !strings.Contains(bad.errMsg, v1Start) {
 		t.Fatalf("m on a vault the scan could not read: err=%q", bad.errMsg)
 	}
-	kb := pressV(openView(t, hooks), tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown)
-	if r := kb.current(); r == nil || r.item.Entry.Kind != vault.Knowledge {
+	kb := findVault(t, openView(t, hooks), "ai-ml")
+	if r := kb.current(); r == nil || r.Entry.Kind != vault.Knowledge {
 		t.Fatalf("cursor on %+v", kb.current())
 	}
 	kb = keyV(kb, "m")

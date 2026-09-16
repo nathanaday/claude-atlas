@@ -56,7 +56,7 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 		OpenPath: func(path string) error { launched = append(launched, "open "+path); return nil },
 	}
 	v := newView(sample(), op, taskHooks(ledgers, &planted))
-	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown) // p3
+	v = findVault(t, v, "p3")
 	v = keyV(v, "t")
 	out := v.View()
 	if v.tasks == nil || !strings.Contains(out, "p3   tasks") || !strings.Contains(out, "Fix it") || !strings.Contains(out, "active · high") || !strings.Contains(out, "workdir /code/p3") || strings.Contains(out, "Old") {
@@ -97,11 +97,11 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	// T shows every project's open tasks, blocked ones before planted ones, with vault names.
 	v = keyV(v, "T")
 	out = v.View()
-	if v.tasks == nil || v.tasks.item != nil || !strings.Contains(out, "4 open across 2 projects") || !strings.Contains(out, "welcome · task-20260902-dddd") {
+	if v.tasksTab == nil || v.tasksTab.item != nil || len(v.tasksTab.rows) != 4 || !strings.Contains(out, "welcome · task-20260902-dddd") {
 		t.Fatalf("board:\n%s", out)
 	}
-	if v.tasks.rows[0].rec.Status != "active" || v.tasks.rows[1].rec.Status != "blocked" {
-		t.Fatalf("board order %+v", v.tasks.rows)
+	if v.tasksTab.rows[0].rec.Status != "active" || v.tasksTab.rows[1].rec.Status != "blocked" {
+		t.Fatalf("board order %+v", v.tasksTab.rows)
 	}
 	v = pressV(v, tea.KeyDown)
 	v = keyV(v, "p")
@@ -109,9 +109,12 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 		t.Fatalf("board plant target:\n%s", v.View())
 	}
 	v = pressV(v, tea.KeyEsc, tea.KeyEsc)
+	if v.tab != tabProjects {
+		t.Fatal("esc returns to Projects")
+	}
 	// An empty project offers to plant; c there opens the task skill in the vault.
-	v = pressV(v, tea.KeyDown, tea.KeyDown) // usc, course
-	if r := v.current(); r == nil || r.kind != rowVault || r.item.Entry.Name != "course" {
+	v = findVault(t, v, "course")
+	if it := v.current(); it == nil || it.Entry.Name != "course" {
 		t.Fatalf("cursor %+v", v.current())
 	}
 	v = keyV(v, "t")
@@ -123,12 +126,12 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	if cmd == nil || launched[len(launched)-1] != "/v/course||/claude-atlas:task" {
 		t.Fatalf("c on an empty project: %v", launched)
 	}
-	none := keyV(pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyDown), "t")
+	none := keyV(newView(sample(), Opener{}, Hooks{}), "t")
 	if none.tasks != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("t without hooks reports why")
 	}
 	// A knowledge base has no tasks of its own.
-	kb := pressV(newView(sample(), op, taskHooks(ledgers, &planted)), tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	kb := findVault(t, newView(sample(), op, taskHooks(ledgers, &planted)), "ai-ml")
 	kb = keyV(kb, "t")
 	if kb.tasks != nil || !strings.Contains(kb.errMsg, "knowledge base") {
 		t.Fatalf("t on a knowledge base: tasks=%v err=%q", kb.tasks, kb.errMsg)
@@ -146,21 +149,21 @@ func TestPlantSurvivesAReloadThatDroppedTheProject(t *testing.T) {
 	hooks := taskHooks(ledgers, &planted)
 	hooks.Load = func() ([]registry.Entry, error) { return entries, nil }
 	v := keyV(newView(sample(), Opener{}, hooks), "T")
-	if v.tasks == nil || len(v.tasks.rows) != 1 {
-		t.Fatalf("one task to start: %+v", v.tasks)
+	if v.tasksTab == nil || len(v.tasksTab.rows) != 1 {
+		t.Fatalf("one task to start: %+v", v.tasksTab)
 	}
 	v = keyV(v, "p")
 	v = typeV(v, "Later")
 	entries = nil
 	next, _ := v.Update(refreshedMsg{})
 	v = next.(view)
-	if v.tasks == nil || v.tasks.plantTarget() != nil {
-		t.Fatalf("the refresh takes the project away: %+v", v.tasks)
+	if v.tasksTab == nil || v.tasksTab.plantTarget() != nil {
+		t.Fatalf("the refresh takes the project away: %+v", v.tasksTab)
 	}
 	_ = v.View() // the prompt has no project to name and must still render
 	next, _ = v.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	v = next.(view)
-	if v.tasks == nil || v.tasks.mode != tasksList || len(planted) != 0 || !strings.Contains(v.tasks.err, "the list changed") {
-		t.Fatalf("enter after the project is gone: mode=%d planted=%v err=%q", v.tasks.mode, planted, v.tasks.err)
+	if v.tasksTab == nil || v.tasksTab.mode != tasksList || len(planted) != 0 || !strings.Contains(v.tasksTab.err, "the list changed") {
+		t.Fatalf("enter after the project is gone: mode=%d planted=%v err=%q", v.tasksTab.mode, planted, v.tasksTab.err)
 	}
 }
