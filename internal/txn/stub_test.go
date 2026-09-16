@@ -32,7 +32,7 @@ func TestStubPagesRefusesWhatIsNotWanted(t *testing.T) {
 		{"Gradient Clipping", "task", `type "task" is not filed`},
 	}
 	for _, c := range cases {
-		_, _, err := StubRequest(v, []StubTitle{{Title: c.title, Type: c.pageType}}, "", now)
+		_, _, err := StubRequest(v, []StubTitle{{Title: c.title, Type: c.pageType}}, "", nil, now)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s (%s): got %v, want %q", c.title, c.pageType, err, c.want)
 		}
@@ -44,7 +44,7 @@ func TestStubPagesCreatesWantedPagesAndMovesClickedOnes(t *testing.T) {
 	writeFile(t, v, "wiki/concepts/Training.md", string(mkpage("Training", "# Training\n\nSuffers from the [[vanishing gradient problem]] and needs [[Gradient Clipping]]; see [[Clicked]].\n")))
 	writeFile(t, v, "wiki/Clicked.md", "")
 
-	res, err := StubPages(v, []StubTitle{{Title: "gradient clipping", Type: "entity"}}, "", now)
+	res, err := StubPages(v, []StubTitle{{Title: "gradient clipping", Type: "entity"}}, "", nil, now)
 	if err != nil || len(res.Stubs) != 1 || res.Stubs[0] != (Stubbed{Title: "Gradient Clipping", Type: "entity", Path: "wiki/entities/Gradient Clipping.md"}) || res.OperationID == "" || res.Commit == "" {
 		t.Fatalf("one stub: %+v %v", res, err)
 	}
@@ -56,7 +56,7 @@ func TestStubPagesCreatesWantedPagesAndMovesClickedOnes(t *testing.T) {
 		t.Fatalf("history %+v", ops[0])
 	}
 
-	res, err = StubPages(v, nil, "", now)
+	res, err = StubPages(v, nil, "", nil, now)
 	want := []Stubbed{
 		{Title: "vanishing gradient problem", Type: "concept", Path: "wiki/concepts/vanishing gradient problem.md"},
 		{Title: "Clicked", Type: "concept", Path: "wiki/concepts/Clicked.md"},
@@ -88,12 +88,12 @@ func TestStubPagesCreatesWantedPagesAndMovesClickedOnes(t *testing.T) {
 
 func TestStubPagesReplacesAnEmptyPageAtItsRoutedPath(t *testing.T) {
 	v := newVault(t)
-	if res, err := StubPages(v, nil, "", now); err != nil || len(res.Stubs) != 0 || res.Stubs == nil || res.OperationID != "" {
+	if res, err := StubPages(v, nil, "", nil, now); err != nil || len(res.Stubs) != 0 || res.Stubs == nil || res.OperationID != "" {
 		t.Fatalf("nothing wanted: %+v %v", res, err)
 	}
 	writeFile(t, v, "wiki/concepts/Linker.md", string(mkpage("Linker", "# Linker\n\n[[In Place]]\n")))
 	writeFile(t, v, "wiki/concepts/In Place.md", "")
-	res, err := StubPages(v, nil, "", now)
+	res, err := StubPages(v, nil, "", nil, now)
 	if err != nil || len(res.Stubs) != 1 || res.Stubs[0].Path != "wiki/concepts/In Place.md" {
 		t.Fatalf("in place: %+v %v", res, err)
 	}
@@ -106,7 +106,7 @@ func TestStubConflictsWhenTheUserTypesIntoTheEmptyPage(t *testing.T) {
 	v := newVault(t)
 	writeFile(t, v, "wiki/concepts/Later.md", string(mkpage("Later", "# Later\n\n[[Typed Into]]\n")))
 	writeFile(t, v, "wiki/Typed Into.md", "")
-	req, _, err := StubRequest(v, nil, "", now)
+	req, _, err := StubRequest(v, nil, "", nil, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestStubLeavesAnUnsanitizableEmptyPageAlone(t *testing.T) {
 	writeFile(t, v, "wiki/What?.md", "")
 	writeFile(t, v, "wiki/a  b.md", "")
 
-	res, err := StubPages(v, nil, "", now)
+	res, err := StubPages(v, nil, "", nil, now)
 	if err != nil || len(res.Stubs) != 1 || res.Stubs[0].Title != "Ordinary" {
 		t.Fatalf("only the ordinary wanted page stubs: %+v %v", res, err)
 	}
@@ -150,7 +150,7 @@ func TestStubLeavesAnUnsanitizableEmptyPageAlone(t *testing.T) {
 		}
 	}
 
-	if _, _, err := StubRequest(v, []StubTitle{{Title: "What?"}}, "", now); err == nil || !strings.Contains(err.Error(), "cannot be a page's file name") {
+	if _, _, err := StubRequest(v, []StubTitle{{Title: "What?"}}, "", nil, now); err == nil || !strings.Contains(err.Error(), "cannot be a page's file name") {
 		t.Fatalf("refusal for What?: %v", err)
 	}
 }
@@ -176,7 +176,7 @@ func TestStubIntoCreatesInTheKnowledgeBase(t *testing.T) {
 	p, kb := newVault(t), newKnowledge(t)
 	writeFile(t, p, "wiki/concepts/Training.md", string(mkpage("Training", "# Training\n\nSee [[Vanishing Gradient]].\n")))
 
-	res, err := StubInto(p, kb, []StubTitle{{Title: "Vanishing Gradient"}}, "", "cs566", now)
+	res, err := StubInto(p, kb, []StubTitle{{Title: "Vanishing Gradient"}}, "", "cs566", nil, now)
 	if err != nil || len(res.Stubs) != 1 || res.Stubs[0].Path != "wiki/concepts/Vanishing Gradient.md" || res.Commit == "" {
 		t.Fatalf("stub into the knowledge base: %+v %v", res, err)
 	}
@@ -205,14 +205,14 @@ func TestStubIntoCreatesInTheKnowledgeBase(t *testing.T) {
 	if r, err := lint.Run(p.Root, lint.Options{AsOf: now}); err != nil || len(r.WantedPages) != 0 {
 		t.Fatalf("the project reads the stub through its mount: %+v %v", r.WantedPages, err)
 	}
-	if _, err := StubInto(p, kb, []StubTitle{{Title: "Nowhere"}}, "", "cs566", now); err == nil || !strings.Contains(err.Error(), "nothing in the wiki links to") {
+	if _, err := StubInto(p, kb, []StubTitle{{Title: "Nowhere"}}, "", "cs566", nil, now); err == nil || !strings.Contains(err.Error(), "nothing in the wiki links to") {
 		t.Fatalf("a title nothing links to: %v", err)
 	}
 
 	// One knowledge base as source and destination stubs its own wanted pages, and the
 	// summary still names the project the session came through.
 	writeFile(t, kb, "wiki/concepts/Seed.md", string(mkpage("Seed", "# Seed\n\nSee [[Attention]].\n")))
-	res, err = StubInto(kb, kb, nil, "", "cs566", now)
+	res, err = StubInto(kb, kb, nil, "", "cs566", nil, now)
 	if err != nil || len(res.Stubs) != 1 || res.Stubs[0].Path != "wiki/concepts/Attention.md" {
 		t.Fatalf("the knowledge base's own wanted pages: %+v %v", res, err)
 	}

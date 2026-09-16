@@ -808,6 +808,52 @@ func TestStubIntoAMount(t *testing.T) {
 	}
 }
 
+// A mount's symlink is local state: a project cloned onto another machine has none until
+// refresh runs. The server hands lint the registry's mounts instead, so the project's
+// links still resolve and stub refuses to copy a knowledge base page into the project.
+func TestMountsReachLintWithoutTheSymlink(t *testing.T) {
+	h, _, p, kb := mounted(t)
+	linkPage(t, kb, "Backprop", "The knowledge base holds this page.")
+	linkPage(t, p, "Training", "See [[Backprop]].")
+	if err := os.Remove(filepath.Join(p.Root, vault.KbDir, "kb")); err != nil {
+		t.Fatal(err)
+	}
+	c := connectIn(t, h, p.Root)
+
+	var report struct {
+		Summary struct {
+			Wanted int `json:"wanted_pages"`
+		} `json:"summary"`
+		DeadLinks []any `json:"dead_links"`
+	}
+	if msg := c.call("lint", nil, &report); msg != "" {
+		t.Fatal(msg)
+	}
+	if report.Summary.Wanted != 0 || len(report.DeadLinks) != 0 {
+		t.Fatalf("the link resolves through the registry's mount: %+v", report)
+	}
+
+	msg := c.call("stub", map[string]any{"vault": p.Root, "titles": []map[string]any{{"title": "Backprop"}}}, nil)
+	if !strings.Contains(msg, `nothing in the wiki links to "Backprop"`) {
+		t.Fatalf("stub refuses a title the knowledge base already holds: %q", msg)
+	}
+	if _, err := os.Stat(p.Path("wiki/concepts/Backprop.md")); !os.IsNotExist(err) {
+		t.Fatalf("the project got a copy of the knowledge base's page: %v", err)
+	}
+
+	content := "---\ntitle: Notes\ntype: concept\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Notes\n\nSee [[Backprop]].\n"
+	writes := []map[string]any{{"path": "wiki/concepts/Notes.md", "mode": "create", "content": content}}
+	var out PlanOut
+	if msg := c.call("plan", map[string]any{"kind": "save", "summary": "save Notes", "writes": writes}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	for _, w := range out.Warnings {
+		if strings.Contains(w, "has no page yet") {
+			t.Fatalf("the preview wants a page the knowledge base already holds: %v", out.Warnings)
+		}
+	}
+}
+
 func TestStubNamesWhatCommittedWhenALaterOperationFails(t *testing.T) {
 	h, _, p, kb := mounted(t)
 	linkPage(t, p, "Training", "See [[Attention]].")

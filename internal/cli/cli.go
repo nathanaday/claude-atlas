@@ -1894,6 +1894,9 @@ func (e *env) refresh(args []string) (int, error) {
 		for _, name := range ch.Created {
 			e.console.Step(console.OK, "created", fmt.Sprintf("%s in %s", kbPath(name), ch.Project))
 		}
+		for _, name := range ch.Repaired {
+			e.console.Step(console.OK, "repaired", fmt.Sprintf("%s in %s: it pointed elsewhere", kbPath(name), ch.Project))
+		}
 		for _, name := range ch.Removed {
 			e.console.Step(console.OK, "removed", fmt.Sprintf("%s from %s", kbPath(name), ch.Project))
 		}
@@ -2077,7 +2080,8 @@ func (e *env) stub(args []string) (int, error) {
 	for _, title := range positional[1:] {
 		titles = append(titles, txn.StubTitle{Title: title})
 	}
-	res, err := txn.StubPages(v, titles, *pageType, time.Now())
+	// nil mounts: the CLI reads the symlinks under kb/, which refresh keeps current.
+	res, err := txn.StubPages(v, titles, *pageType, nil, time.Now())
 	if err != nil {
 		return 1, err
 	}

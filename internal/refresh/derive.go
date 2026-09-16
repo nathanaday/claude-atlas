@@ -108,20 +108,17 @@ func taskSummaryFor(v *vault.Vault, today time.Time) *registry.TaskSummary {
 	return sum
 }
 
-// MountChange is what one project's mount symlinks needed: Created and Removed name the
-// symlinks refresh made and dropped, Missing the mounts whose knowledge base the scan did
-// not find, and Error what stopped the repair.
+// MountChange is what one project's mount symlinks needed: the repair itself, and Error
+// for what stopped one of them.
 type MountChange struct {
 	Project string
-	Created []string
-	Removed []string
-	Missing []string
-	Error   string
+	vaults.MountRepair
+	Error string
 }
 
 // any reports whether the change is worth a line.
 func (c MountChange) any() bool {
-	return len(c.Created) > 0 || len(c.Removed) > 0 || len(c.Missing) > 0 || c.Error != ""
+	return len(c.Created)+len(c.Repaired)+len(c.Removed)+len(c.Missing) > 0 || c.Error != ""
 }
 
 // Registry scans, derives every readable entry, writes the registry file, and returns the
@@ -138,8 +135,8 @@ func Registry(cfg *home.Config, stateDir string, today time.Time, ensure bool) (
 			if e.Error != "" || e.Kind != vault.Project {
 				continue
 			}
-			created, removed, missing, err := vaults.EnsureMounts(e, ix)
-			change := MountChange{Project: e.Name, Created: created, Removed: removed, Missing: missing}
+			rep, err := vaults.EnsureMounts(e, ix)
+			change := MountChange{Project: e.Name, MountRepair: rep}
 			if err != nil {
 				change.Error = err.Error()
 			}

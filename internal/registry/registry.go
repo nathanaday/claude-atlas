@@ -385,12 +385,13 @@ func GrantedAccess(kb Entry, projectID string) string {
 	}
 }
 
-// Effective is the lesser of what a project asked for and what it was granted.
+// Effective is the lesser of what a project asked for and what it was granted. Anything
+// it does not recognize reads only, so a hand-edited identity file cannot widen access.
 func Effective(request, grant string) string {
-	if request == vault.AccessRead || grant == vault.AccessRead {
-		return vault.AccessRead
+	if request == vault.AccessWrite && grant == vault.AccessWrite {
+		return vault.AccessWrite
 	}
-	return vault.AccessWrite
+	return vault.AccessRead
 }
 
 // sortEntries orders valid entries before entries with an Error, projects before

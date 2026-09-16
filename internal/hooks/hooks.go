@@ -111,14 +111,16 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 		contextEnabled = true
 	}
 	// The atlas registry names a project's mounts and a knowledge base's mounters; with
-	// no atlas config, or a scan that fails, entry stays nil and the session says nothing
-	// about mounts.
+	// no atlas config, a scan that fails, or an entry the scan could not read, entry stays
+	// nil and the session says nothing about mounts.
 	var ix *registry.Index
 	var entry *registry.Entry
 	if cfg, cerr := h.Load(); cerr == nil {
 		if scanned, serr := registry.Scan(cfg); serr == nil {
 			ix = scanned
-			entry = ix.ByPath(v.Root)
+			if found := ix.ByPath(v.Root); found != nil && found.Error == "" {
+				entry = found
+			}
 		}
 	}
 	var b strings.Builder

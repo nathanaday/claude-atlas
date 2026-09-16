@@ -86,7 +86,7 @@ func checkMountTarget(project, kb registry.Entry, name string) error {
 // repairs the link later.
 func Mount(project, kb registry.Entry, access, name string, now time.Time) (vault.Mount, error) {
 	if project.Kind != vault.Project {
-		return vault.Mount{}, fmt.Errorf("%s is a knowledge base; only a project mounts one", project.Name)
+		return vault.Mount{}, fmt.Errorf("%s is not a project", project.Name)
 	}
 	if kb.Kind != vault.Knowledge {
 		return vault.Mount{}, fmt.Errorf("%s is not a knowledge base", kb.Name)
@@ -235,18 +235,42 @@ func Revoke(kb, project registry.Entry, now time.Time) error {
 	})
 }
 
-// EnsureMounts creates every symlink project's mounts need and removes symlinks under
-// kb/ that no mount names. It reports what it created and removed. A mount whose
-// knowledge base the index does not hold is left alone and returned in missing.
-func EnsureMounts(project registry.Entry, ix *registry.Index) (created, removed, missing []string, err error) {
+// MountRepair is what one run of EnsureMounts did to a project's mount symlinks: Created
+// names a link it made, Repaired one that led elsewhere, Removed a link under kb/ that no
+// mount names, and Missing a mount whose knowledge base the index does not hold.
+type MountRepair struct {
+	Created  []string
+	Repaired []string
+	Removed  []string
+	Missing  []string
+}
+
+// EnsureMounts creates every symlink project's mounts need, repoints one that leads
+// elsewhere, and removes symlinks under kb/ that no mount names. One mount it cannot fix
+// does not stop the others; the first failure comes back once the project is done.
+func EnsureMounts(project registry.Entry, ix *registry.Index) (MountRepair, error) {
 	root := kbRoot(project)
-	named := map[string]bool{}
+	var rep MountRepair
+	var firstErr error
+	fail := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	// named compares a folder name to the mount names the way Mount does.
+	named := func(dir string) bool {
+		for _, m := range project.Mounts {
+			if strings.EqualFold(m.Name, dir) {
+				return true
+			}
+		}
+		return false
+	}
 	wanted := map[string]string{}
 	for _, m := range project.Mounts {
-		named[m.Name] = true
 		kb := ix.ByID(m.ID)
 		if kb == nil || kb.Kind != vault.Knowledge {
-			missing = append(missing, m.Name)
+			rep.Missing = append(rep.Missing, m.Name)
 			continue
 		}
 		wanted[m.Name] = kb.Wiki()
@@ -254,24 +278,26 @@ func EnsureMounts(project registry.Entry, ix *registry.Index) (created, removed,
 
 	entries, rerr := os.ReadDir(root)
 	if rerr != nil && !os.IsNotExist(rerr) {
-		return nil, nil, nil, rerr
+		return rep, rerr
 	}
 	for _, entry := range entries {
-		if named[entry.Name()] {
+		if named(entry.Name()) {
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
 		info, lerr := os.Lstat(path)
 		if lerr != nil {
-			return created, removed, missing, lerr
+			fail(lerr)
+			continue
 		}
 		if info.Mode()&os.ModeSymlink == 0 {
 			continue
 		}
 		if err := os.Remove(path); err != nil {
-			return created, removed, missing, err
+			fail(err)
+			continue
 		}
-		removed = append(removed, entry.Name())
+		rep.Removed = append(rep.Removed, entry.Name())
 	}
 
 	for _, m := range project.Mounts {
@@ -281,22 +307,26 @@ func EnsureMounts(project registry.Entry, ix *registry.Index) (created, removed,
 		}
 		path := filepath.Join(root, m.Name)
 		before, lerr := os.Lstat(path)
-		alreadyLinked := lerr == nil && before.Mode()&os.ModeSymlink != 0
-		var current string
-		if alreadyLinked {
-			current, _ = os.Readlink(path)
-		}
-		if alreadyLinked && current == target {
-			continue
+		linked := lerr == nil && before.Mode()&os.ModeSymlink != 0
+		if linked {
+			if current, _ := os.Readlink(path); current == target {
+				continue
+			}
 		}
 		if err := symlinkTo(path, target); err != nil {
-			return created, removed, missing, err
+			fail(err)
+			continue
 		}
-		created = append(created, m.Name)
+		if linked {
+			rep.Repaired = append(rep.Repaired, m.Name)
+		} else {
+			rep.Created = append(rep.Created, m.Name)
+		}
 	}
 
-	sort.Strings(created)
-	sort.Strings(removed)
-	sort.Strings(missing)
-	return created, removed, missing, nil
+	sort.Strings(rep.Created)
+	sort.Strings(rep.Repaired)
+	sort.Strings(rep.Removed)
+	sort.Strings(rep.Missing)
+	return rep, firstErr
 }

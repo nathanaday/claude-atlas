@@ -250,6 +250,12 @@ func TestEffectiveAndKbDir(t *testing.T) {
 		{vault.AccessWrite, vault.AccessRead, vault.AccessRead},
 		{vault.AccessRead, vault.AccessWrite, vault.AccessRead},
 		{vault.AccessRead, vault.AccessRead, vault.AccessRead},
+		// A value neither side recognizes reads only: a hand-edited identity file is not
+		// validated on the way in, so Effective must fail closed.
+		{"", vault.AccessWrite, vault.AccessRead},
+		{vault.AccessWrite, "", vault.AccessRead},
+		{"WRITE", vault.AccessWrite, vault.AccessRead},
+		{vault.AccessWrite, "readwrite", vault.AccessRead},
 	}
 	for _, c := range cases {
 		if got := Effective(c.request, c.grant); got != c.want {

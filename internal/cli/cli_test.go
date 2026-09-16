@@ -335,7 +335,7 @@ func TestMountGrantAndRevokeCommands(t *testing.T) {
 	if code := h.run("mount", "welcome", "ai-ml"); code != 1 || !strings.Contains(h.err.String(), "already") {
 		t.Fatalf("a second mount of the same knowledge base: exit %d %s", code, h.err.String())
 	}
-	if code := h.run("mount", "ai-ml", "welcome"); code != 1 || !strings.Contains(h.err.String(), "knowledge base") {
+	if code := h.run("mount", "ai-ml", "welcome"); code != 1 || !strings.Contains(h.err.String(), "ai-ml is not a project") {
 		t.Fatalf("a knowledge base mounts nothing: exit %d %s", code, h.err.String())
 	}
 

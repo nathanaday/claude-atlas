@@ -82,6 +82,10 @@ type Request struct {
 	Summary string
 	Writes  []Write
 	Sources []ledger.Update
+	// Mounts names the knowledge bases the vault mounts, a mount name to that knowledge
+	// base's wiki path, for the lint run that produces the plan's warnings. Nil reads the
+	// symlinks under kb/, which are absent until refresh makes them.
+	Mounts map[string]string
 }
 
 const (
@@ -434,7 +438,7 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 		}
 	}
 	if len(written) > 0 {
-		report, err := lint.Run(v.Root, lint.Options{Overlay: overlay, AsOf: now})
+		report, err := lint.Run(v.Root, lint.Options{Overlay: overlay, AsOf: now, Mounts: req.Mounts})
 		if err == nil {
 			plan.Warnings = append(plan.Warnings, report.Problems(written)...)
 		}

@@ -113,9 +113,13 @@ func TestMountCreatesTheSymlinkAndRecordsTheMount(t *testing.T) {
 	}
 	project = refreshEntry(t, cfg, project.ID)
 
-	// A knowledge base entry as project.
-	if _, err := Mount(kb, project, "", "", identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
+	// A knowledge base entry as project. The refusal tests the kind it needs, so an entry
+	// with no kind gets the same answer.
+	if _, err := Mount(kb, project, "", "", identityNow); err == nil || !strings.Contains(err.Error(), "is not a project") {
 		t.Fatalf("kb as project: %v", err)
+	}
+	if _, err := Mount(registry.Entry{Name: "blank"}, kb, "", "", identityNow); err == nil || err.Error() != "blank is not a project" {
+		t.Fatalf("an entry with no kind: %v", err)
 	}
 
 	// A project entry as kb.
@@ -327,18 +331,18 @@ func TestEnsureMountsRecreatesAndPrunes(t *testing.T) {
 	}
 	project = *ix.ByID(project.ID)
 
-	created, removed, missing, err := EnsureMounts(project, ix)
+	rep, err := EnsureMounts(project, ix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(created, ",") != "ai-ml" {
-		t.Fatalf("created: %v", created)
+	if strings.Join(rep.Created, ",") != "ai-ml" {
+		t.Fatalf("created: %v", rep.Created)
 	}
-	if strings.Join(removed, ",") != "stray" {
-		t.Fatalf("removed: %v", removed)
+	if strings.Join(rep.Removed, ",") != "stray" {
+		t.Fatalf("removed: %v", rep.Removed)
 	}
-	if len(missing) != 0 {
-		t.Fatalf("missing: %v", missing)
+	if len(rep.Repaired) != 0 || len(rep.Missing) != 0 {
+		t.Fatalf("repaired: %v missing: %v", rep.Repaired, rep.Missing)
 	}
 	if target, err := os.Readlink(project.KbDir("ai-ml")); err != nil || target != kb.Wiki() {
 		t.Fatalf("recreated symlink: %s %v", target, err)
@@ -371,22 +375,44 @@ func TestEnsureMountsRecreatesAndPrunes(t *testing.T) {
 	}
 	project = *ix.ByID(project.ID)
 
-	created, removed, missing, err = EnsureMounts(project, ix)
+	rep, err = EnsureMounts(project, ix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(created) != 0 || len(removed) != 0 {
-		t.Fatalf("nothing else should change: created=%v removed=%v", created, removed)
+	if len(rep.Created) != 0 || len(rep.Repaired) != 0 || len(rep.Removed) != 0 {
+		t.Fatalf("nothing else should change: %+v", rep)
 	}
-	if strings.Join(missing, ",") != "ghost" {
-		t.Fatalf("missing: %v", missing)
+	if strings.Join(rep.Missing, ",") != "ghost" {
+		t.Fatalf("missing: %v", rep.Missing)
 	}
 
-	// A real folder at kb/<name> is an error.
-	if err := os.Remove(project.KbDir("robots")); err != nil {
+	// A symlink that leads elsewhere is repaired, and says so.
+	if err := os.Remove(project.KbDir("ai-ml")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(project.KbDir("robots"), 0o755); err != nil {
+	if err := os.Symlink(kb2.Wiki(), project.KbDir("ai-ml")); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = EnsureMounts(project, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Created) != 0 || strings.Join(rep.Repaired, ",") != "ai-ml" {
+		t.Fatalf("a wrong target is repaired, not created: %+v", rep)
+	}
+	if target, err := os.Readlink(project.KbDir("ai-ml")); err != nil || target != kb.Wiki() {
+		t.Fatalf("repaired symlink: %s %v", target, err)
+	}
+
+	// A real folder at kb/<name> is an error, and it does not stop the project's other
+	// mounts: ai-ml comes first and fails, and robots is still made.
+	if err := os.Remove(project.KbDir("ai-ml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(project.KbDir("ai-ml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(project.KbDir("robots")); err != nil {
 		t.Fatal(err)
 	}
 	ix, err = registry.Scan(cfg)
@@ -394,7 +420,14 @@ func TestEnsureMountsRecreatesAndPrunes(t *testing.T) {
 		t.Fatal(err)
 	}
 	project = *ix.ByID(project.ID)
-	if _, _, _, err := EnsureMounts(project, ix); err == nil || !strings.Contains(err.Error(), "robots") {
+	rep, err = EnsureMounts(project, ix)
+	if err == nil || !strings.Contains(err.Error(), "ai-ml") {
 		t.Fatalf("real folder: %v", err)
+	}
+	if strings.Join(rep.Created, ",") != "robots" {
+		t.Fatalf("one bad mount stopped the rest: %+v", rep)
+	}
+	if target, err := os.Readlink(project.KbDir("robots")); err != nil || target != kb2.Wiki() {
+		t.Fatalf("robots after the failure: %s %v", target, err)
 	}
 }

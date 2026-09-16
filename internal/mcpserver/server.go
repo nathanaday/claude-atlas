@@ -91,13 +91,18 @@ func (s *Server) home() home.Home { return home.Resolve(s.opts.Env(home.EnvHome)
 // and, when the target is a knowledge base mounted by that project, the mount's
 // effective access.
 type session struct {
-	target  *vault.Vault
-	project *registry.Entry // the session's project, from the working directory or CLAUDE_ATLAS_VAULT
+	target *vault.Vault
+	// project is whose mounts this call answers for: the target itself when it is a
+	// project, otherwise the session's own project from the working directory or
+	// CLAUDE_ATLAS_VAULT.
+	project *registry.Entry
 	mount   *registry.Mount // the project's mount of target, when target is a knowledge base
 	// entry is the target's own registry entry, and ix the scan both come from. Both are
 	// nil with no atlas or a failed scan. No read-only tool depends on them.
 	entry *registry.Entry
 	ix    *registry.Index
+	// mountPaths is what mounts returns.
+	mountPaths map[string]string
 }
 
 // open resolves the target (explicit, env, nearest identity file, then discovery) and
@@ -120,6 +125,7 @@ func (s *Server) open(explicit string) (*session, error) {
 	sess.entry = dropUnreadable(ix.ByPath(target.Root))
 	if target.Config.Kind == vault.Project {
 		sess.project = sess.entry
+		sess.mountPaths = mountPaths(sess.project)
 		return sess, nil
 	}
 	sess.project = s.sessionProject(ix)
@@ -159,6 +165,25 @@ func dropUnreadable(e *registry.Entry) *registry.Entry {
 	return e
 }
 
+// mountPaths maps each resolved mount's name to the knowledge base wiki it leads to.
+func mountPaths(project *registry.Entry) map[string]string {
+	if project == nil {
+		return nil
+	}
+	paths := map[string]string{}
+	for _, m := range project.Mounts {
+		if m.Error == "" && m.Path != "" {
+			paths[m.Name] = m.Path
+		}
+	}
+	return paths
+}
+
+// mounts is what lint reads instead of the symlinks under kb/, so a project whose links
+// refresh has not made yet still resolves into its knowledge bases. It is nil unless the
+// target is the project the mounts belong to; a knowledge base has none.
+func (sess *session) mounts() map[string]string { return sess.mountPaths }
+
 // writable says whether a page-writing kind may run: in a project, always; in a
 // knowledge base, only through a project session whose mount is effectively write.
 // It returns the refusal to show the model.
@@ -174,8 +199,11 @@ func (sess *session) writable(kind txn.Kind) error {
 		return nil
 	}
 	switch {
+	case sess.mount == nil && sess.entry == nil:
+		// mount takes a name or a path, and the scan does not hold this knowledge base.
+		return fmt.Errorf("the atlas does not know %s; run `claude-atlas adopt %s`, then `claude-atlas mount %s %s`", kb, sess.target.Root, sess.project.Path, sess.target.Root)
 	case sess.mount == nil:
-		return fmt.Errorf("%s does not mount %s; run `claude-atlas mount %s %s`", sess.project.Name, kb, sess.project.Name, kb)
+		return fmt.Errorf("%s does not mount %s; run `claude-atlas mount %s %s`", sess.project.Name, kb, sess.project.Path, sess.target.Root)
 	case sess.mount.Error != "":
 		return fmt.Errorf("mount %s: %s", sess.mount.Name, sess.mount.Error)
 	case sess.mount.Effective != vault.AccessWrite:
@@ -398,7 +426,7 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 	if st.Pending {
 		out.Warnings = append(out.Warnings, "an operation was interrupted; run `claude-atlas recover "+v.Root+"` before changing the vault")
 	}
-	if report, err := lint.Run(v.Root, lint.Options{AsOf: s.opts.Now()}); err == nil {
+	if report, err := lint.Run(v.Root, lint.Options{AsOf: s.opts.Now(), Mounts: sess.mounts()}); err == nil {
 		out.Pages = report.Summary.PagesScanned
 	}
 	if v.Config.Kind == vault.Project {
@@ -562,7 +590,7 @@ func (s *Server) route(ctx context.Context, req *mcp.CallToolRequest, a RouteArg
 		return nil, RouteOut{}, err
 	}
 	out := RouteOut{Route: *r, Vault: v.Root, Match: match, Next: routeNext}
-	if sess.project != nil && sess.mount == nil && v.Config.Kind == vault.Project {
+	if sess.project != nil && v.Config.Kind == vault.Project {
 		now := s.opts.Now()
 		for _, m := range sess.project.Mounts {
 			out.Mounts = append(out.Mounts, mountRoute(m, a.Type, a.Title, now))
@@ -707,7 +735,7 @@ func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs)
 		out.OperationID, out.Commit = res.OperationID, res.Commit
 	}
 	for _, g := range groups {
-		res, err := txn.StubInto(sess.target, g.kb, g.titles, a.Type, sess.project.Name, now)
+		res, err := txn.StubInto(sess.target, g.kb, g.titles, a.Type, sess.project.Name, sess.mounts(), now)
 		if err != nil {
 			return nil, out, out.receipt(err)
 		}
@@ -726,9 +754,9 @@ func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs)
 // mount through its target, not here.
 func (sess *session) stubHere(titles []txn.StubTitle, defaultType string, now time.Time) (txn.StubResult, error) {
 	if sess.target.Config.Kind == vault.Knowledge && sess.project != nil {
-		return txn.StubInto(sess.target, sess.target, titles, defaultType, sess.project.Name, now)
+		return txn.StubInto(sess.target, sess.target, titles, defaultType, sess.project.Name, sess.mounts(), now)
 	}
-	return txn.StubPages(sess.target, titles, defaultType, now)
+	return txn.StubPages(sess.target, titles, defaultType, sess.mounts(), now)
 }
 
 // add records one operation.
@@ -920,7 +948,7 @@ func (s *Server) plan(ctx context.Context, req *mcp.CallToolRequest, a PlanArgs)
 	if err := sess.writable(kind); err != nil {
 		return nil, PlanOut{}, err
 	}
-	r := txn.Request{Kind: kind, Summary: a.Summary}
+	r := txn.Request{Kind: kind, Summary: a.Summary, Mounts: sess.mounts()}
 	for _, w := range a.Writes {
 		r.Writes = append(r.Writes, txn.Write{Path: w.Path, Mode: txn.WriteMode(w.Mode), Content: []byte(w.Content), BaseSHA256: w.BaseSHA256})
 	}
@@ -1034,11 +1062,11 @@ type LintArgs struct {
 }
 
 func (s *Server) lint(ctx context.Context, req *mcp.CallToolRequest, a LintArgs) (*mcp.CallToolResult, lint.Report, error) {
-	v, err := s.resolve(a.Vault)
+	sess, err := s.open(a.Vault)
 	if err != nil {
 		return nil, lint.Report{}, err
 	}
-	report, err := lint.Run(v.Root, lint.Options{Exclude: a.Exclude, AsOf: s.opts.Now()})
+	report, err := lint.Run(sess.target.Root, lint.Options{Exclude: a.Exclude, AsOf: s.opts.Now(), Mounts: sess.mounts()})
 	if err != nil {
 		return nil, lint.Report{}, err
 	}

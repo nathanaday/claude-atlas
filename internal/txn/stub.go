@@ -35,15 +35,16 @@ type StubResult struct {
 
 // StubPages creates seed pages for the pages the wiki links to but nobody has written, and
 // for the empty pages a link points to, and commits them as one operation. With no titles
-// it stubs all of them.
-func StubPages(v *vault.Vault, titles []StubTitle, defaultType string, now time.Time) (StubResult, error) {
-	return stubOperation(v, v, titles, defaultType, "", now)
+// it stubs all of them. mounts is what v mounts, for the lint run that says what is wanted;
+// nil reads the symlinks under kb/.
+func StubPages(v *vault.Vault, titles []StubTitle, defaultType string, mounts map[string]string, now time.Time) (StubResult, error) {
+	return stubOperation(v, v, titles, defaultType, "", mounts, now)
 }
 
 // stubOperation applies one stub operation: the request from stubRequest, committed in
 // dest. via names the project the session came through, and ends the summary.
-func stubOperation(source, dest *vault.Vault, titles []StubTitle, defaultType, via string, now time.Time) (StubResult, error) {
-	req, stubbed, err := stubRequest(source, dest, titles, defaultType, now)
+func stubOperation(source, dest *vault.Vault, titles []StubTitle, defaultType, via string, mounts map[string]string, now time.Time) (StubResult, error) {
+	req, stubbed, err := stubRequest(source, dest, titles, defaultType, mounts, now)
 	if err != nil {
 		return StubResult{}, err
 	}
@@ -85,8 +86,8 @@ type stubSet struct {
 // stubCandidates reads a vault's lint report. withEmpty adds the empty pages a link
 // points to; a stub that lands in another vault leaves them out, because moving a file
 // between two vaults is not one operation.
-func stubCandidates(v *vault.Vault, withEmpty bool, now time.Time) (*stubSet, error) {
-	report, err := lint.Run(v.Root, lint.Options{AsOf: now})
+func stubCandidates(v *vault.Vault, withEmpty bool, mounts map[string]string, now time.Time) (*stubSet, error) {
+	report, err := lint.Run(v.Root, lint.Options{AsOf: now, Mounts: mounts})
 	if err != nil {
 		return nil, err
 	}
@@ -140,17 +141,17 @@ func (set *stubSet) find(v *vault.Vault, title string) (candidate, error) {
 
 // StubRequest builds the request StubPages applies. A title must name a wanted page or an
 // empty page a link points to; the type defaults to defaultType, then to the mode's.
-func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, now time.Time) (Request, []Stubbed, error) {
-	return stubRequest(v, v, titles, defaultType, now)
+func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, mounts map[string]string, now time.Time) (Request, []Stubbed, error) {
+	return stubRequest(v, v, titles, defaultType, mounts, now)
 }
 
 // stubRequest builds one stub operation's request: the candidates come from source's lint
 // report and the pages are routed in dest. A stub that stays in one vault also files the
 // empty pages a link points to, and with no titles it stubs every candidate; a stub that
 // crosses vaults names its titles.
-func stubRequest(source, dest *vault.Vault, titles []StubTitle, defaultType string, now time.Time) (Request, []Stubbed, error) {
+func stubRequest(source, dest *vault.Vault, titles []StubTitle, defaultType string, mounts map[string]string, now time.Time) (Request, []Stubbed, error) {
 	home := source.Root == dest.Root
-	set, err := stubCandidates(source, home, now)
+	set, err := stubCandidates(source, home, mounts, now)
 	if err != nil {
 		return Request{}, nil, err
 	}
@@ -168,6 +169,9 @@ func stubRequest(source, dest *vault.Vault, titles []StubTitle, defaultType stri
 		return Request{}, nil, err
 	}
 	req := Request{Kind: Stub, Writes: writes}
+	if home {
+		req.Mounts = mounts
+	}
 	if len(stubbed) > 0 {
 		req.Summary = stubSummary(stubbed)
 	}
@@ -226,12 +230,13 @@ func (set *stubSet) writes(source, dest *vault.Vault, titles []StubTitle, defaul
 // to but nobody has written, so the links resolve through the project's mount of dest.
 // via names the project in the operation's summary. One operation, in dest. Pass the same
 // knowledge base as source and dest for its own wanted pages, which is what a project
-// session stubs when it names the knowledge base as the vault.
-func StubInto(source, dest *vault.Vault, titles []StubTitle, defaultType string, via string, now time.Time) (StubResult, error) {
+// session stubs when it names the knowledge base as the vault. mounts is what source
+// mounts, as in StubPages.
+func StubInto(source, dest *vault.Vault, titles []StubTitle, defaultType string, via string, mounts map[string]string, now time.Time) (StubResult, error) {
 	if dest.Config.Kind != vault.Knowledge {
 		return StubResult{}, fmt.Errorf("%s is not a knowledge base", dest.Name())
 	}
-	return stubOperation(source, dest, titles, defaultType, via, now)
+	return stubOperation(source, dest, titles, defaultType, via, mounts, now)
 }
 
 func defaultStubType(mode vault.Mode) string {
