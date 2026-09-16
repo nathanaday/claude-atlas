@@ -30,8 +30,9 @@ project that mounts a knowledge base.
 1. Call `status`, then `mounts`, then `inbox`. `mounts` gives each knowledge
    base its `name`, `scope`, `access` (the mount's own setting), `effective`
    (the access that applies), and `path`. `path` is the knowledge base's
-   `wiki/`; its parent is the knowledge base's root. Pass that root as the
-   `vault` argument everywhere below.
+   `wiki/`; its parent is the knowledge base's root. Pass that root as `vault`
+   on every call that acts on the knowledge base, and omit `vault` for a call
+   that acts on the project.
 2. List what is waiting and whether it is already captured. Files with
    `area: tasks` are task notes, not sources: leave them to `task-plant` and
    say so.
@@ -178,13 +179,18 @@ The project second: `plan` with kind `ingest` and no `vault` argument, then
 - the project's `wiki/index.md` or MOC, and its `wiki/hot.md`;
 - `sources`: only for a source the project itself captured, with
   `ingested: true` and the pages it filed;
-- a `delete` of each ingested file under `inbox/`, so the inbox holds only what
-  is still waiting. The preview shows the removal; the captured copy stays in
-  the vault that holds it.
+- each ingested file under `inbox/` as a `writes` entry with `mode: delete` and
+  no `content`, so the inbox holds only what is still waiting. The preview
+  shows the removal; the captured copy stays in the vault that holds it.
 
 An ingest may remove an inbox file that the project or one of its mounted
 knowledge bases has captured. A source whose pages all went to a knowledge base
 still gets this second operation; a plan of deletes alone is allowed.
+
+The project's `summary` names the knowledge base and the pages filed there,
+because it becomes the project's log entry and commit subject: `file the DINOv2
+paper in ai-ml: DINOv2, Self-supervised Learning; clear the inbox`. The
+project's log then says where the knowledge went.
 
 Change `wiki/overview.md` only when that vault's high-level picture changed.
 Use complete file content for every write. The core writes each vault's log
