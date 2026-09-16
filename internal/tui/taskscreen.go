@@ -46,8 +46,10 @@ type tasksScreen struct {
 	changed bool
 	closed  bool
 	// hosted is set when the view shows the board as its Tasks tab: the tab bar replaces
-	// the header, and the hints name the tabs.
+	// the header, and the view's footer carries the keys that leave the tab. quiet drops
+	// the board's own hint line, for the view's footer with help off.
 	hosted bool
+	quiet  bool
 	// avail is how many lines the boxes may take; 0 means no limit. offset is the first
 	// box line on screen.
 	avail  int
@@ -382,17 +384,19 @@ func (s tasksScreen) view() string {
 		b.WriteString("  " + activeL.Width(9).Render("Idea") + s.idea.View() + "\n")
 		b.WriteString("  " + dim.Render(into) + "\n")
 	default:
+		if s.quiet {
+			break
+		}
 		hints := "p plant"
 		if len(s.rows) > 0 {
 			hints = "↑↓ move · p plant · c continue in Claude Code · o open in Obsidian"
 		} else if s.item != nil {
 			hints += " · c Claude Code"
 		}
-		back := " · Esc back"
-		if s.hosted {
-			back = " · ←→ tabs · R refresh · q quit"
+		if !s.hosted {
+			hints += " · Esc back"
 		}
-		b.WriteString("  " + dim.Render(hints+back) + "\n")
+		b.WriteString("  " + dim.Render(hints) + "\n")
 	}
 	if s.status != "" {
 		b.WriteString("  " + okSt.Render(s.status) + "\n")

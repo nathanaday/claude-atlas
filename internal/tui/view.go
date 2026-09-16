@@ -145,6 +145,8 @@ type view struct {
 	refreshed string
 	// focus is the vault the next refresh should land on, after a write.
 	focus string
+	// help shows every key in the footer; off, the footer names only the tab's keys.
+	help bool
 }
 
 func newView(items []Item, opener Opener, hooks Hooks) view {
@@ -211,6 +213,7 @@ func (v *view) goTo(t tab) {
 	if t == tabTasks && v.tasksTab == nil && v.hooks.Tasks != nil {
 		s := newTasks(v.hooks, v.opener, nil, v.items, v.width)
 		s.hosted = true
+		s.quiet = !v.help
 		s.avail = v.bodyHeight()
 		s.ensureVisible()
 		v.tasksTab = &s
@@ -263,10 +266,16 @@ func (v *view) rebuild(path string) {
 
 func (v view) Init() tea.Cmd { return nil }
 
-// bodyHeight is how many lines the body may take. The eight it reserves are the blank
-// line, the tab bar, the caption, a blank line, the "more lines" line, a blank line, and
-// the two hint lines.
-func (v view) bodyHeight() int { return max(5, v.height-8) }
+// bodyHeight is how many lines the body may take. It reserves the blank line, the tab
+// bar, the caption, a blank line, the "more lines" line, a blank line, and the hint
+// lines: one, or two with help on.
+func (v view) bodyHeight() int {
+	reserved := 7
+	if v.help {
+		reserved++
+	}
+	return max(5, v.height-reserved)
+}
 
 func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -415,6 +424,15 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v.refresh()
 		case "T":
 			v.goTo(tabTasks)
+			return v, nil
+		case "h":
+			v.help = !v.help
+			if v.tasksTab != nil {
+				v.tasksTab.quiet = !v.help
+			}
+			if b := v.board(); b != nil {
+				b.ensureVisible(v.bodyHeight())
+			}
 			return v, nil
 		}
 		if v.tab == tabTasks {
@@ -905,12 +923,11 @@ func (v view) View() string {
 	fmt.Fprintf(&b, "\n  %s\n  %s\n\n", v.tabBar(), dim.Render(captions[v.tab]))
 	if v.tab == tabTasks {
 		if v.tasksTab == nil {
-			b.WriteString("  " + dim.Render("tasks are not available here") + "\n")
-			b.WriteString("\n" + v.footer("←→ tabs · q quit"))
-			return b.String()
+			b.WriteString("  " + dim.Render("tasks are not available here") + "\n\n")
+		} else {
+			b.WriteString(v.tasksTab.view())
 		}
-		b.WriteString(v.tasksTab.view())
-		b.WriteString(v.footer())
+		b.WriteString(v.footer(v.hints()...))
 		return b.String()
 	}
 	bd := v.board()
@@ -924,13 +941,52 @@ func (v view) View() string {
 	if more > 0 {
 		b.WriteString("  " + dim.Render(fmt.Sprintf("… %d more lines", more)) + "\n")
 	}
-	b.WriteString("\n" + v.footer(v.boardHints(), v.globalHints()))
+	b.WriteString("\n" + v.footer(v.hints()...))
 	return b.String()
 }
 
-// globalHints lists the keys that work on every tab.
-func (v view) globalHints() string {
-	return "←→ tabs · n new project · N new knowledge base · a adopt · R refresh · q quit"
+// hints is the footer. With help off it names the tab's own keys: Enter for the vault
+// under the cursor, the key that adds a vault of the tab's kind, h, and q. With help on
+// it names every key on two lines.
+func (v view) hints() []string {
+	quit := "h help · q quit"
+	if v.help {
+		quit = "h hide help · q quit"
+	}
+	if v.tab == tabTasks {
+		if v.help {
+			return []string{"←→ tabs · R refresh · " + quit}
+		}
+		return []string{quit}
+	}
+	if v.help {
+		return []string{v.boardHints(), "←→ tabs · n new project · N new knowledge base · a adopt · R refresh · " + quit}
+	}
+	bd := v.board()
+	it := bd.current()
+	var parts []string
+	if it != nil {
+		parts = append(parts, enterHint(bd, it))
+	}
+	switch v.tab {
+	case tabProjects:
+		parts = append(parts, "n new project")
+	case tabKnowledge:
+		parts = append(parts, "N new knowledge base")
+	case tabProblems:
+		if it != nil && it.Entry.Reason != registry.ReasonMissing {
+			parts = append(parts, "a adopt")
+		}
+	}
+	return []string{strings.Join(append(parts, quit), " · ")}
+}
+
+// enterHint says what Enter does to the vault under the cursor.
+func enterHint(bd *board, it *Item) string {
+	if bd.expanded[it.Entry.Path] {
+		return "Enter collapse"
+	}
+	return "Enter details"
 }
 
 // vaultKeys lists the keys that act on one vault.
@@ -960,11 +1016,7 @@ func (v view) boardHints() string {
 	if it == nil {
 		return hints
 	}
-	open := "Enter details"
-	if bd.expanded[it.Entry.Path] {
-		open = "Enter collapse"
-	}
-	return hints + " · " + open + " · " + vaultKeys(it.Entry)
+	return hints + " · " + enterHint(bd, it) + " · " + vaultKeys(it.Entry)
 }
 
 // RunView shows the atlas until the user quits. It reports whether any vault changed.

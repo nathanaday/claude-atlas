@@ -149,6 +149,7 @@ func TestTheTasksBoardScrolls(t *testing.T) {
 	}
 	var planted []string
 	v := keyV(newView(sample(), Opener{}, taskHooks(map[string]*tasks.Ledger{"/v/p3": {Tasks: recs}}, &planted)), "T")
+	v = keyV(v, "h")                                              // help on: the board's hints show, and the footer takes two lines
 	next, _ := v.Update(tea.WindowSizeMsg{Width: 80, Height: 16}) // eight lines for the boxes
 	v = next.(view)
 	if v.tasksTab == nil || len(v.tasksTab.rows) != 6 || v.tasksTab.avail != 8 {

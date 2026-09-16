@@ -23,7 +23,7 @@ one command, so scripts and muscle memory both work:
 | `e` then `r` forget | `remove NAME` |
 | `m` mounts: on a project `a` mount, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant by name | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
 | `R` refresh | `refresh` |
-| `←` `→` switch tabs | — |
+| `←` `→` switch tabs; `h` shows every key | — |
 | — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
 
 ## Create a vault
@@ -325,10 +325,12 @@ the scan found a vault it could not read. Enter on any vault expands it in
 place: path, created, a knowledge base's scope, access, and grants, the vault
 check, the last touch, open threads, open tasks, and a project's repositories
 with their remotes; `show NAME` prints the rest. One sentence under the tab
-bar says what the tab holds.
+bar says what the tab holds. The footer names only the tab's own keys; `h`
+shows every key, and again hides them.
 
 | Key | What it does |
 |---|---|
+| `h` | show every key; again to hide them |
 | `←` `→` | previous tab, next tab |
 | `↑` `↓` | move |
 | Enter | expand the vault under the cursor, or collapse it |

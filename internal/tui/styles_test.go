@@ -46,7 +46,11 @@ func TestAHostedBoardHasNoHeaderAndNamesTheTabs(t *testing.T) {
 	}
 	s.hosted = true
 	out := s.view()
-	if strings.Contains(out, "Atlas") || strings.Contains(out, "Esc back") || !strings.Contains(out, "←→ tabs") {
+	if strings.Contains(out, "Atlas") || strings.Contains(out, "Esc back") || !strings.Contains(out, "p plant") {
 		t.Fatalf("hosted:\n%s", out)
+	}
+	s.quiet = true
+	if out := s.view(); strings.Contains(out, "p plant") {
+		t.Fatalf("quiet drops the hints:\n%s", out)
 	}
 }

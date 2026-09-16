@@ -255,26 +255,64 @@ func TestEnterExpandsEscCollapsesThenQuits(t *testing.T) {
 	}
 }
 
-func TestHintsFollowTheCursor(t *testing.T) {
+func TestFooterNamesTheTabsKeysUntilHelp(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
-	if hints := v.boardHints(); !strings.Contains(hints, "Enter details · o Obsidian · c Claude · i ingest · t tasks · l repos · m mounts · e edit") {
-		t.Fatalf("project hints: %q", hints)
+	out := v.View()
+	if !strings.Contains(out, "  Enter details · n new project · h help · q quit\n") {
+		t.Fatalf("projects footer:\n%s", out)
 	}
-	if out := v.View(); !strings.Contains(out, "←→ tabs") || !strings.Contains(out, "N new knowledge base") {
-		t.Fatalf("global hints:\n%s", out)
+	for _, hidden := range []string{"i ingest", "←→ tabs", "N new knowledge base", "a adopt", "R refresh"} {
+		if strings.Contains(out, hidden) {
+			t.Errorf("%q shows before h:\n%s", hidden, out)
+		}
+	}
+	v = keyV(v, "h")
+	out = v.View()
+	for _, want := range []string{
+		"↑↓ move · Enter details · o Obsidian · c Claude · i ingest · t tasks · l repos · m mounts · e edit",
+		"←→ tabs · n new project · N new knowledge base · a adopt · R refresh · h hide help · q quit",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help missing %q:\n%s", want, out)
+		}
+	}
+	v = keyV(v, "h")
+	if strings.Contains(v.View(), "i ingest") || !strings.Contains(v.View(), "h help") {
+		t.Fatal("h again hides the keys")
 	}
 	v = findVault(t, v, "ai-ml")
+	if out := v.View(); !strings.Contains(out, "Enter details · N new knowledge base · h help · q quit") || strings.Contains(out, "n new project") {
+		t.Fatalf("knowledge footer:\n%s", out)
+	}
 	if hints := v.boardHints(); strings.Contains(hints, "ingest") || strings.Contains(hints, "repos") || !strings.Contains(hints, "m mounts · e edit") {
 		t.Fatalf("a knowledge base has no ingest, tasks, or repositories: %q", hints)
 	}
 	v = findVault(t, v, "old-notes")
+	if out := v.View(); !strings.Contains(out, "Enter details · a adopt · h help · q quit") {
+		t.Fatalf("problems footer:\n%s", out)
+	}
 	if hints := v.boardHints(); strings.Contains(hints, "c Claude") || strings.Contains(hints, "ingest") || !strings.Contains(hints, "a adopt") || !strings.Contains(hints, "e edit") {
 		t.Fatalf("a problem opens, edits, and adopts: %q", hints)
 	}
 	v = findVault(t, v, "welcome")
 	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown)
-	if !v.boards[0].atEnd() || strings.Contains(v.boardHints(), "Enter") || strings.Contains(v.boardHints(), "Obsidian") {
-		t.Fatalf("end marker hints: %q", v.boardHints())
+	if !v.boards[0].atEnd() || strings.Contains(v.View(), "Enter") || !strings.Contains(v.View(), "  n new project · h help · q quit\n") {
+		t.Fatalf("end marker footer:\n%s", v.View())
+	}
+	v = pressV(findVault(t, v, "p3"), tea.KeyEnter)
+	if !strings.Contains(v.View(), "Enter collapse · n new project") {
+		t.Fatalf("expanded footer:\n%s", v.View())
+	}
+	// Help stays on across tabs, and the body gives it the second line.
+	v = keyV(v, "h")
+	tall := v.bodyHeight()
+	v = pressV(v, tea.KeyRight)
+	if !v.help || !strings.Contains(v.View(), "h hide help") || v.bodyHeight() != tall {
+		t.Fatalf("help across tabs: help=%v body=%d\n%s", v.help, v.bodyHeight(), v.View())
+	}
+	v = keyV(v, "h")
+	if v.bodyHeight() != tall+1 {
+		t.Fatalf("help off gives the body its line back: %d vs %d", v.bodyHeight(), tall)
 	}
 }
 
@@ -694,14 +732,19 @@ func TestTasksTabHostsTheBoard(t *testing.T) {
 	if v.tab != tabTasks || v.tasksTab == nil || !v.tasksTab.hosted || v.tasksTab.item != nil {
 		t.Fatalf("T hosts the board: tab=%d board=%+v", v.tab, v.tasksTab)
 	}
-	for _, want := range []string{"Every project's open tasks", "no open tasks in any project", "←→ tabs"} {
+	for _, want := range []string{"Every project's open tasks", "no open tasks in any project", "  h help · q quit\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if strings.Contains(out, "open across") {
-		t.Error("the hosted board has no header of its own")
+	if strings.Contains(out, "open across") || strings.Contains(out, "p plant") || strings.Contains(out, "Esc back") {
+		t.Errorf("the hosted board has no header and no hints of its own until h:\n%s", out)
 	}
+	v = keyV(v, "h")
+	if out := v.View(); !strings.Contains(out, "p plant") || !strings.Contains(out, "←→ tabs · R refresh · h hide help · q quit") || strings.Contains(out, "Esc back") {
+		t.Fatalf("help on the Tasks tab:\n%s", out)
+	}
+	v = keyV(v, "h")
 	if strings.Join(asked, ",") != "welcome,p3,course" {
 		t.Fatalf("the board asks the projects only: %v", asked)
 	}

@@ -410,7 +410,8 @@ under the cursor is the colored one; every other row is plain. Enter
 expands a vault in place: path, created, a knowledge base's scope, access,
 and grants, the vault check, the last touch, the open threads, the open
 tasks, and a project's repositories with their remotes. `show NAME` prints
-the rest. Every key is one command:
+the rest. The footer names only the tab's own keys until `h` shows them all.
+Every key is one command:
 
 | Key | Command |
 |---|---|
