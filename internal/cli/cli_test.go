@@ -352,8 +352,8 @@ func TestMountGrantAndRevokeCommands(t *testing.T) {
 	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "write") {
 		t.Fatalf("after the grant: exit %d\n%s", code, h.out.String())
 	}
-	if code := h.run("revoke", "ai-ml", "welcome"); code != 0 || !strings.Contains(h.out.String(), "revoked") {
-		t.Fatalf("revoke exit %d\n%s%s", code, h.out.String(), h.err.String())
+	if code := h.run("revoke", "ai-ml", "welcome"); code != 0 || !strings.Contains(h.out.String(), "welcome on ai-ml") {
+		t.Fatalf("revoke by project name should name the project: exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "read") {
 		t.Fatalf("after the revoke: exit %d\n%s", code, h.out.String())
@@ -427,8 +427,8 @@ func TestDoctorAndRevokeSeeAStaleGrant(t *testing.T) {
 		t.Fatalf("show should carry the stale grant: exit %d\n%s", code, h.out.String())
 	}
 
-	if code := h.run("revoke", "ai-ml", "gone-0000"); code != 0 || !strings.Contains(h.out.String(), "revoked") {
-		t.Fatalf("revoke by id: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	if code := h.run("revoke", "ai-ml", "gone-0000"); code != 0 || !strings.Contains(h.out.String(), "gone-0000 on ai-ml") {
+		t.Fatalf("revoke by id should name the id: exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 
 	h.run("doctor")

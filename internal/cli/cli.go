@@ -1613,12 +1613,12 @@ func (e *env) revoke(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	id := args[1]
+	label := args[1]
 	if project, perr := e.entry(cfg, args[1]); perr == nil {
 		if err := vaults.Revoke(kb, project, time.Now()); err != nil {
 			return 1, err
 		}
-		id = project.ID
+		label = project.Name
 	} else {
 		found := false
 		for _, g := range kb.Grants {
@@ -1638,7 +1638,7 @@ func (e *env) revoke(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "revoked", fmt.Sprintf("%s on %s", id, kb.Name))
+	e.console.Step(console.OK, "revoked", fmt.Sprintf("%s on %s", label, kb.Name))
 	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }

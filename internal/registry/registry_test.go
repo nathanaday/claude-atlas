@@ -187,12 +187,13 @@ func TestScanResolvesMountsReposAndGrants(t *testing.T) {
 
 func TestAGrantForAnUnknownProjectCarriesAnError(t *testing.T) {
 	cfg, vs := fixture(t)
-	kb, p := vs["ai-ml"], vs["cs566"]
+	kb, p, other := vs["ai-ml"], vs["cs566"], vs["robotics"]
 	if err := vault.UpdateConfig(kb.Root, "guard", now, func(c *vault.Config) error {
 		c.Access = vault.AccessGuarded
 		c.Grants = []vault.Grant{
 			{ID: p.Config.ID, Name: "old name", Access: vault.AccessRead},
 			{ID: "gone-0000", Name: "gone", Access: vault.AccessWrite},
+			{ID: other.Config.ID, Name: "robotics", Access: vault.AccessRead},
 		}
 		return nil
 	}); err != nil {
@@ -203,7 +204,7 @@ func TestAGrantForAnUnknownProjectCarriesAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := ix.ByID(kb.Config.ID)
-	if len(e.Grants) != 2 {
+	if len(e.Grants) != 3 {
 		t.Fatalf("grants %+v", e.Grants)
 	}
 	if e.Grants[0].Name != p.Config.Name || e.Grants[0].Error != "" {
@@ -211,6 +212,9 @@ func TestAGrantForAnUnknownProjectCarriesAnError(t *testing.T) {
 	}
 	if e.Grants[1].Error != "no project with id gone-0000" {
 		t.Fatalf("grant for an unknown project: %+v", e.Grants[1])
+	}
+	if e.Grants[2].Error != "no project with id "+other.Config.ID {
+		t.Fatalf("a grant whose id belongs to a knowledge base is stale: %+v", e.Grants[2])
 	}
 }
 

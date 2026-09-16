@@ -383,7 +383,7 @@ func resolve(ix *Index, cfg *home.Config) {
 		}
 		for j := range e.Grants {
 			g := &e.Grants[j]
-			if proj, ok := byID[g.ID]; ok {
+			if proj, ok := byID[g.ID]; ok && proj.Kind == vault.Project {
 				g.Name = proj.Name
 				continue
 			}
