@@ -48,8 +48,10 @@ type Hooks struct {
 	// or mount name; grant a project write or read on a knowledge base; revoke by project id.
 	Mount   func(project, kb registry.Entry, access, name string) (vault.Mount, error)
 	Unmount func(project registry.Entry, target string) error
-	Grant   func(kb, project registry.Entry, access string) error
-	Revoke  func(kb registry.Entry, projectID string) error
+	// EditMount changes what a mount asks for, read or write.
+	EditMount func(project registry.Entry, target, access string) (vault.Mount, error)
+	Grant     func(kb, project registry.Entry, access string) error
+	Revoke    func(kb registry.Entry, projectID string) error
 	// Tasks reads a project's task ledger and the notes waiting in inbox/tasks/; Plant
 	// plants a task in its vault.
 	Tasks func(registry.Entry) (tasks.Ledger, []string, error)

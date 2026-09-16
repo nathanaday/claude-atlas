@@ -140,8 +140,11 @@ func FindMount(project registry.Entry, target string) *registry.Mount {
 }
 
 // Unmount removes the mount named by kb's id or the mount name from project's identity
-// file and removes the symlink. The knowledge base is untouched. A real folder at the
-// mount's path is refused before the identity file changes; the mount stays recorded.
+// file and removes the symlink. The knowledge base is untouched, and a knowledge base
+// the scan no longer finds unmounts the same way, so a mount left behind by a move can
+// always be dropped. An empty folder where the symlink belongs goes with it; a folder
+// that holds files is refused before the identity file changes, and the mount stays
+// recorded.
 func Unmount(project registry.Entry, target string, now time.Time) error {
 	found := FindMount(project, target)
 	if found == nil {
@@ -153,7 +156,16 @@ func Unmount(project registry.Entry, target string, now time.Time) error {
 	case lerr != nil && !os.IsNotExist(lerr):
 		return lerr
 	case lerr == nil && info.Mode()&os.ModeSymlink == 0:
-		return fmt.Errorf("%s is a folder, not a mount; leaving it in place", home.Display(path))
+		if !info.IsDir() {
+			return fmt.Errorf("%s is a file, not a mount; move it away", home.Display(path))
+		}
+		rest, rerr := os.ReadDir(path)
+		if rerr != nil {
+			return rerr
+		}
+		if len(rest) > 0 {
+			return fmt.Errorf("%s is a folder holding %d file%s, not a mount; move it away", home.Display(path), len(rest), plural(len(rest)))
+		}
 	}
 	if err := vault.UpdateConfig(project.Path, "unmount "+found.Name, now, func(c *vault.Config) error {
 		var keep []vault.Mount
@@ -178,6 +190,44 @@ func Unmount(project registry.Entry, target string, now time.Time) error {
 		return nil
 	}
 	return os.Remove(path)
+}
+
+// plural is the s a count needs.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// SetMountAccess changes what a recorded mount asks for, read or write, and reports the
+// mount as it now stands. The effective access is still the lesser of this and what the
+// knowledge base grants the project, so a guarded knowledge base can hold a mount that
+// asks for write to read.
+func SetMountAccess(project registry.Entry, target, access string, now time.Time) (vault.Mount, error) {
+	if !vault.ValidAccess(access, false) {
+		return vault.Mount{}, fmt.Errorf("access must be %s or %s, not %q", vault.AccessRead, vault.AccessWrite, access)
+	}
+	found := FindMount(project, target)
+	if found == nil {
+		return vault.Mount{}, fmt.Errorf("%s has no mount named %q", project.Name, target)
+	}
+	m := vault.Mount{ID: found.ID, Name: found.Name, Access: access}
+	if found.Access == access {
+		return m, nil
+	}
+	if err := vault.UpdateConfig(project.Path, "mount "+found.Name+" "+access, now, func(c *vault.Config) error {
+		for i := range c.Mounts {
+			if c.Mounts[i].ID == found.ID {
+				c.Mounts[i].Access = access
+				return nil
+			}
+		}
+		return fmt.Errorf("%s has no mount named %q", project.Name, target)
+	}); err != nil {
+		return vault.Mount{}, err
+	}
+	return m, nil
 }
 
 // Grant records project's access on kb: read or write. A knowledge base that is open

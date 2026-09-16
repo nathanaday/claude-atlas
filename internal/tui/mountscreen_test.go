@@ -19,17 +19,14 @@ func TestMountsScreenMountsAndUnmounts(t *testing.T) {
 	if v.mounts == nil || !strings.Contains(v.View(), "no mounts yet") || !strings.Contains(v.View(), "reading   mounts") {
 		t.Fatalf("m should open the mounts screen:\n%s", v.View())
 	}
-	// A name no knowledge base carries is refused in place.
+	// The knowledge bases are listed, so a name is chosen and never typed.
 	v = keyV(v, "a")
-	if v.mounts.mode != mountsPickName {
-		t.Fatalf("pick mode: %d", v.mounts.mode)
+	if v.mounts.mode != mountsPickVault || len(v.mounts.picks) != 1 || v.mounts.picks[0].Name != "ai-ml" {
+		t.Fatalf("pick mode: mode=%d picks=%+v", v.mounts.mode, v.mounts.picks)
 	}
-	v.mounts.name.SetValue("nope")
-	v = pressV(v, tea.KeyEnter)
-	if v.mounts.mode != mountsPickName || !strings.Contains(v.mounts.err, "no knowledge base named nope") {
-		t.Fatalf("unknown name: mode=%d err=%q", v.mounts.mode, v.mounts.err)
+	if out := v.View(); !strings.Contains(out, "Choose one") || !strings.Contains(out, "▸ ai-ml") {
+		t.Fatalf("the picker lists the knowledge bases:\n%s", out)
 	}
-	v.mounts.name.SetValue("AI-ML")
 	v = pressV(v, tea.KeyEnter)
 	if v.mounts.mode != mountsPickAccess || !strings.Contains(v.View(), "w write") {
 		t.Fatalf("access step: mode=%d\n%s", v.mounts.mode, v.View())
@@ -175,17 +172,23 @@ func TestMountsScreenOnAKnowledgeBaseGrantsAndRevokes(t *testing.T) {
 	if v.mounts.mode != mountsList || v.mounts.err != "reading has no grant" {
 		t.Fatalf("x without a grant: mode=%d err=%q", v.mounts.mode, v.mounts.err)
 	}
-	// a grants a project that does not mount it, by name.
+	// a grants a project that does not mount it, chosen from the list.
 	v = keyV(v, "a")
-	if v.mounts.mode != mountsPickName || !strings.Contains(v.View(), "Project name") {
+	if v.mounts.mode != mountsPickVault || !strings.Contains(v.View(), "the project that may reach this knowledge base") {
 		t.Fatalf("pick mode: %d\n%s", v.mounts.mode, v.View())
 	}
-	v.mounts.name.SetValue("nope")
-	v = pressV(v, tea.KeyEnter)
-	if v.mounts.mode != mountsPickName || !strings.Contains(v.mounts.err, "no project named nope") {
-		t.Fatalf("unknown name: mode=%d err=%q", v.mounts.mode, v.mounts.err)
+	at := -1
+	for i, e := range v.mounts.picks {
+		if e.Name == "welcome" {
+			at = i
+		}
 	}
-	v.mounts.name.SetValue("welcome")
+	if at < 0 {
+		t.Fatalf("welcome should be a candidate: %+v", v.mounts.picks)
+	}
+	for i := 0; i < at; i++ {
+		v = pressV(v, tea.KeyDown)
+	}
 	v = pressV(v, tea.KeyEnter)
 	if v.mounts.mode != mountsPickAccess {
 		t.Fatalf("access step: mode=%d\n%s", v.mounts.mode, v.View())
@@ -216,7 +219,9 @@ func TestMountsScreenGrantsOnAnOpenKnowledgeBase(t *testing.T) {
 		t.Fatalf("a new knowledge base grants nothing yet: err=%q screen=%v", v.errMsg, v.mounts)
 	}
 	v = keyV(v, "a")
-	v.mounts.name.SetValue("reading")
+	for v.mounts.picks[v.mounts.pick].Name != "reading" {
+		v = pressV(v, tea.KeyDown)
+	}
 	v = pressV(v, tea.KeyEnter)
 	if v.mounts.mode != mountsPickAccess {
 		t.Fatalf("access step: mode=%d err=%q", v.mounts.mode, v.mounts.err)
@@ -237,7 +242,8 @@ func TestMountsScreenGrantsOnAnOpenKnowledgeBase(t *testing.T) {
 }
 
 // TestMountsScreenKindGuardsIgnoreTheWrongKeys holds the screen's central design
-// decision: w, r, and x act only on a knowledge base; u acts only on a project.
+// decision: x grants and revokes only on a knowledge base; u unmounts only on a
+// project, where w and r change what the mount asks for instead of granting.
 func TestMountsScreenKindGuardsIgnoreTheWrongKeys(t *testing.T) {
 	// Each screen holds one row, so the kind guard, not an empty list, is what stops a key.
 	cfg, _, hooks := atlasFixture(t)
@@ -246,17 +252,27 @@ func TestMountsScreenKindGuardsIgnoreTheWrongKeys(t *testing.T) {
 	if v.mounts == nil || len(v.mounts.rows) != 1 {
 		t.Fatalf("m should open the project's mounts with one row: err=%q", v.errMsg)
 	}
-	for _, key := range []string{"w", "r", "x"} {
-		v = keyV(v, key)
-		if v.mounts == nil || v.mounts.mode != mountsList || v.mounts.err != "" || v.mounts.changed || len(v.mounts.rows) != 1 {
-			t.Fatalf("%q on a project: mode=%d err=%q changed=%v rows=%d", key, v.mounts.mode, v.mounts.err, v.mounts.changed, len(v.mounts.rows))
-		}
-		if kb := entryNamed(t, cfg, "ai-ml"); len(kb.Grants) != 0 {
-			t.Fatalf("%q on a project granted something: %+v", key, kb.Grants)
-		}
-		if p := entryNamed(t, cfg, "reading"); len(p.Mounts) != 1 || p.Mounts[0].Access != vault.AccessWrite {
-			t.Fatalf("%q on a project changed its mounts: %+v", key, p.Mounts)
-		}
+	v = keyV(v, "x")
+	if v.mounts == nil || v.mounts.mode != mountsList || v.mounts.err != "" || v.mounts.changed || len(v.mounts.rows) != 1 {
+		t.Fatalf("x on a project: mode=%d err=%q changed=%v rows=%d", v.mounts.mode, v.mounts.err, v.mounts.changed, len(v.mounts.rows))
+	}
+	if kb := entryNamed(t, cfg, "ai-ml"); len(kb.Grants) != 0 {
+		t.Fatalf("x on a project granted something: %+v", kb.Grants)
+	}
+	// w and r change what the mount asks for; the guarded knowledge base still decides.
+	v = keyV(v, "r")
+	if v.mounts.err != "" || !v.changed || !strings.Contains(v.mounts.status, "ai-ml asks for read") {
+		t.Fatalf("r on a project: err=%q status=%q", v.mounts.err, v.mounts.status)
+	}
+	if p := entryNamed(t, cfg, "reading"); len(p.Mounts) != 1 || p.Mounts[0].Access != vault.AccessRead {
+		t.Fatalf("r should ask for read: %+v", p.Mounts)
+	}
+	v = keyV(v, "w")
+	if p := entryNamed(t, cfg, "reading"); len(p.Mounts) != 1 || p.Mounts[0].Access != vault.AccessWrite {
+		t.Fatalf("w should ask for write: %+v", p.Mounts)
+	}
+	if kb := entryNamed(t, cfg, "ai-ml"); len(kb.Grants) != 0 {
+		t.Fatalf("neither key grants anything: %+v", kb.Grants)
 	}
 
 	kv := keyV(findVault(t, openView(t, hooks), "ai-ml"), "m")

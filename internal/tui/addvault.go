@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
@@ -24,6 +25,9 @@ type AddVault struct {
 	Tags  []string
 	Scope string
 	Adopt bool // Path exists already and is adopted rather than created
+	// MountID is the knowledge base a new project mounts once it exists; "" mounts none.
+	// The mount asks for write, and the mounts screen changes that.
+	MountID string
 }
 
 type step int
@@ -33,6 +37,7 @@ const (
 	stepName
 	stepMode
 	stepFacts // tags for a project, scope for a knowledge base
+	stepMount // the knowledge base a new project mounts, or none
 	stepPath
 	stepConfirm
 )
@@ -54,9 +59,40 @@ type model struct {
 	scope     textinput.Model
 	path      pathField
 	edited    bool // the user typed a path of their own
+	kbs       []registry.Entry
+	kb        int // an index into kbs, or len(kbs) for no mount
 	err       string
 	done      bool
 	cancelled bool
+}
+
+// withKnowledge lists the knowledge bases a new project may mount, so the screen offers
+// them instead of asking for a name.
+func (m model) withKnowledge(items []Item) model {
+	for _, it := range items {
+		if it.Entry.Error == "" && it.Entry.Kind == vault.Knowledge {
+			m.kbs = append(m.kbs, it.Entry)
+		}
+	}
+	m.kb = len(m.kbs)
+	return m
+}
+
+// mountChoice is the knowledge base the mount step stands on, or nil for none.
+func (m model) mountChoice() *registry.Entry {
+	if m.kb < 0 || m.kb >= len(m.kbs) {
+		return nil
+	}
+	return &m.kbs[m.kb]
+}
+
+// applies says whether a step belongs in this run: only a new project with a knowledge
+// base to reach is asked what to mount.
+func (m model) applies(s step) bool {
+	if s == stepMount {
+		return !m.adopting && m.kind == vault.Project && len(m.kbs) > 0
+	}
+	return true
 }
 
 func newInput(placeholder string) textinput.Model {
@@ -71,7 +107,7 @@ func newInput(placeholder string) textinput.Model {
 func newModel(vaultsDir string, kind vault.Kind) model {
 	m := model{
 		vaultsDir: vaultsDir,
-		steps:     []step{stepKind, stepName, stepMode, stepFacts, stepPath, stepConfirm},
+		steps:     []step{stepKind, stepName, stepMode, stepFacts, stepMount, stepPath, stepConfirm},
 		kind:      kind,
 		mode:      string(vault.Generic),
 		name:      newInput("sensor-triage"),
@@ -221,6 +257,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			m.at--
+			for m.at > 0 && !m.applies(m.step()) {
+				m.at--
+			}
 			m.err = ""
 			return m, m.focus()
 		case tea.KeyEnter:
@@ -232,6 +271,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stepKind, stepMode:
 		if isKey && (key.Type == tea.KeyLeft || key.Type == tea.KeyRight || key.Type == tea.KeySpace) {
 			m.toggle()
+		}
+	case stepMount:
+		if isKey {
+			switch key.Type {
+			case tea.KeyLeft, tea.KeyUp:
+				if m.kb > 0 {
+					m.kb--
+				}
+			case tea.KeyRight, tea.KeyDown, tea.KeySpace:
+				if m.kb < len(m.kbs) {
+					m.kb++
+				}
+			}
 		}
 	case stepName:
 		m.name, cmd = m.name.Update(msg)
@@ -267,6 +319,9 @@ func (m model) advance() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	m.at++
+	for m.at < len(m.steps) && !m.applies(m.step()) {
+		m.at++
+	}
 	m.err = ""
 	return m, m.focus()
 }
@@ -292,6 +347,11 @@ func (m model) result() *AddVault {
 		out.Scope = strings.TrimSpace(m.scope.Value())
 	} else {
 		out.Tags = splitTags(m.tags.Value())
+		if m.applies(stepMount) {
+			if kb := m.mountChoice(); kb != nil {
+				out.MountID = kb.ID
+			}
+		}
 	}
 	return out
 }
@@ -352,6 +412,22 @@ func (m model) content(s step) string {
 			return dim.Render(m.mode)
 		}
 		return m.mode
+	case stepMount:
+		name, hint := "none", "this project reaches no knowledge base yet"
+		if kb := m.mountChoice(); kb != nil {
+			name = kb.Name
+			hint = "mounted at kb/" + kb.Name + " with write access; m on the project changes it"
+		}
+		if at {
+			return "◂ " + name + " ▸" + dim.Render("  "+hint)
+		}
+		if !done {
+			return dim.Render("a knowledge base to mount, or none")
+		}
+		if name == "none" {
+			return dim.Render(name)
+		}
+		return name
 	case stepFacts:
 		if m.kind == vault.Knowledge {
 			if at {
@@ -408,6 +484,8 @@ func stepLabel(s step, kind vault.Kind) string {
 		return "Name"
 	case stepMode:
 		return "Mode"
+	case stepMount:
+		return "Mounts"
 	case stepFacts:
 		if kind == vault.Knowledge {
 			return "Scope"
@@ -426,7 +504,7 @@ func (m model) View() string {
 	}
 	b.WriteString("\n  " + title.Render(heading) + "\n\n")
 	for _, s := range m.steps {
-		if s == stepConfirm {
+		if s == stepConfirm || !m.applies(s) {
 			continue
 		}
 		b.WriteString(m.row(s, stepLabel(s, m.kind), m.content(s)))
@@ -448,6 +526,8 @@ func (m model) View() string {
 		hints += " · ←→ project or knowledge base"
 	case stepMode:
 		hints += " · ←→ generic or lyt"
+	case stepMount:
+		hints += " · ←→ which knowledge base"
 	case stepPath:
 		hints += " · " + pathHint()
 		if !m.adopting {

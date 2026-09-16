@@ -510,6 +510,21 @@ func TestNewAndAdoptFromTheTabs(t *testing.T) {
 	v = pressV(v, tea.KeyRight, tea.KeyEnter) // mode: lyt
 	v = typeV(v, "usc, fall")
 	v = pressV(v, tea.KeyEnter) // tags
+	// The mount step offers the knowledge bases the atlas holds; none is the default.
+	if v.add.step() != stepMount || len(v.add.kbs) != 2 || v.add.mountChoice() != nil {
+		t.Fatalf("mount step: step=%d kbs=%d", v.add.step(), len(v.add.kbs))
+	}
+	if out := v.View(); !strings.Contains(out, "Mounts") || !strings.Contains(out, "◂ none ▸") {
+		t.Fatalf("mount step:\n%s", out)
+	}
+	v = pressV(v, tea.KeyLeft) // the last knowledge base listed
+	if kb := v.add.mountChoice(); kb == nil || kb.Name != "ai-ml" {
+		t.Fatalf("left should choose a knowledge base: %+v", kb)
+	}
+	if out := v.View(); !strings.Contains(out, "mounted at kb/ai-ml with write access") {
+		t.Fatalf("mount hint:\n%s", out)
+	}
+	v = pressV(v, tea.KeyEnter) // mounts: ai-ml
 	v = pressV(v, tea.KeyEnter) // path: the default
 	v = pressV(v, tea.KeyEnter) // confirm
 	want := filepath.Join(dir, "projects", "Sensor Triage")
@@ -517,7 +532,7 @@ func TestNewAndAdoptFromTheTabs(t *testing.T) {
 		t.Fatalf("create: add=%v got=%+v", v.add, got)
 	}
 	if c := got[0]; c.Kind != vault.Project || c.Name != "Sensor Triage" || c.Mode != "lyt" || c.Adopt ||
-		c.Path != want || strings.Join(c.Tags, ",") != "usc,fall" {
+		c.Path != want || strings.Join(c.Tags, ",") != "usc,fall" || c.MountID != "id-ai-ml" {
 		t.Fatalf("create: %+v, want path %s", c, want)
 	}
 	if !v.changed || v.status != "created Sensor Triage" {

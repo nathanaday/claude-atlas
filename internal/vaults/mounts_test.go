@@ -180,10 +180,10 @@ func TestUnmountRemovesTheSymlinkAndTheMount(t *testing.T) {
 	}
 }
 
-// TestUnmountRefusesARealFolder proves Unmount checks the symlink before it touches the
-// identity file: a real folder in the mount's place leaves the mount recorded and the
-// folder untouched, and only once the folder is gone does Unmount succeed.
-func TestUnmountRefusesARealFolder(t *testing.T) {
+// TestUnmountRefusesAFolderWithFilesInIt proves Unmount looks at the mount's place
+// before it touches the identity file: a folder holding files leaves the mount recorded
+// and the folder untouched, and an empty one goes with the mount.
+func TestUnmountRefusesAFolderWithFilesInIt(t *testing.T) {
 	cfg, project, kb, _ := mountFixture(t)
 
 	if _, err := Mount(project, kb, "", "", identityNow); err != nil {
@@ -198,9 +198,12 @@ func TestUnmountRefusesARealFolder(t *testing.T) {
 	if err := os.MkdirAll(link, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(link, "note.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	if err := Unmount(project, "ai-ml", identityNow); err == nil || !strings.Contains(err.Error(), "folder") {
-		t.Fatalf("real folder: %v", err)
+	if err := Unmount(project, "ai-ml", identityNow); err == nil || !strings.Contains(err.Error(), "folder holding 1 file") {
+		t.Fatalf("a folder with files in it: %v", err)
 	}
 	v, err := vault.Open(project.Path)
 	if err != nil {
@@ -213,11 +216,15 @@ func TestUnmountRefusesARealFolder(t *testing.T) {
 		t.Fatalf("the folder should still exist: %v", err)
 	}
 
-	if err := os.RemoveAll(link); err != nil {
+	// Emptied, the folder is the atlas's own leftover and goes with the mount.
+	if err := os.Remove(filepath.Join(link, "note.md")); err != nil {
 		t.Fatal(err)
 	}
 	if err := Unmount(project, "ai-ml", identityNow); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("the empty folder should be gone: %v", err)
 	}
 	v, err = vault.Open(project.Path)
 	if err != nil {
@@ -225,6 +232,83 @@ func TestUnmountRefusesARealFolder(t *testing.T) {
 	}
 	if len(v.Config.Mounts) != 0 {
 		t.Fatalf("the mount should be gone: %+v", v.Config.Mounts)
+	}
+}
+
+// A knowledge base that moved out of reach still unmounts: the mount is named by id and
+// the dangling symlink goes with it.
+func TestUnmountAKnowledgeBaseTheScanLost(t *testing.T) {
+	cfg, project, kb, _ := mountFixture(t)
+
+	if _, err := Mount(project, kb, "", "", identityNow); err != nil {
+		t.Fatal(err)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+	link := project.KbDir("ai-ml")
+
+	// The knowledge base moves away; the symlink dangles and the scan no longer holds it.
+	if err := os.Rename(kb.Path, filepath.Join(t.TempDir(), "ai-ml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(link); err == nil {
+		t.Fatal("the symlink should dangle now")
+	}
+
+	if err := Unmount(project, kb.ID, identityNow); err != nil {
+		t.Fatalf("unmount a knowledge base that moved: %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("the dangling symlink should be gone: %v", err)
+	}
+	v, err := vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Mounts) != 0 {
+		t.Fatalf("the mount should be gone: %+v", v.Config.Mounts)
+	}
+}
+
+func TestSetMountAccess(t *testing.T) {
+	cfg, project, kb, _ := mountFixture(t)
+
+	if _, err := Mount(project, kb, vault.AccessWrite, "", identityNow); err != nil {
+		t.Fatal(err)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+
+	if _, err := SetMountAccess(project, "ai-ml", "sideways", identityNow); err == nil || !strings.Contains(err.Error(), "access must be") {
+		t.Fatalf("an access that is neither: %v", err)
+	}
+	if _, err := SetMountAccess(project, "nope", vault.AccessRead, identityNow); err == nil || !strings.Contains(err.Error(), "no mount named") {
+		t.Fatalf("a mount that is not there: %v", err)
+	}
+
+	m, err := SetMountAccess(project, "ai-ml", vault.AccessRead, identityNow)
+	if err != nil || m.Access != vault.AccessRead || m.Name != "ai-ml" {
+		t.Fatalf("set read: %+v %v", m, err)
+	}
+	v, err := vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Mounts) != 1 || v.Config.Mounts[0].Access != vault.AccessRead {
+		t.Fatalf("identity file: %+v", v.Config.Mounts)
+	}
+
+	// The id names the mount too, and the access it already has writes nothing.
+	project = refreshEntry(t, cfg, project.ID)
+	if _, err := SetMountAccess(project, kb.ID, vault.AccessRead, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetMountAccess(project, kb.ID, vault.AccessWrite, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = vault.Open(project.Path); err != nil {
+		t.Fatal(err)
+	}
+	if v.Config.Mounts[0].Access != vault.AccessWrite {
+		t.Fatalf("back to write: %+v", v.Config.Mounts)
 	}
 }
 

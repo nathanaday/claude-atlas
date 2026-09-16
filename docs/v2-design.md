@@ -423,7 +423,7 @@ Every key is one command:
 | `t` tasks, `p` plant, `c` continue; `T` every project's tasks | `tasks`, `plant`, `open-claude --task` |
 | `o` Obsidian, `c` Claude Code, `i` ingest | `open-vault`, `open-claude`, `ingest` |
 | `R` refresh | `refresh` |
-| `m` mounts: on a project `a` mount, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant by name | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
+| `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
 
 Removed: `relate`, `unrelate`, `edit-link`, the `related` field, the category
 move, `Overview.md`, `Tree.md`, `categories/`, `repos/` pages, `About.md`,

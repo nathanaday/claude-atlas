@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -25,7 +24,7 @@ type mountsMode int
 
 const (
 	mountsList       mountsMode = iota
-	mountsPickName              // typing a knowledge base's name (project) or a project's name (knowledge base)
+	mountsPickVault             // choosing a knowledge base (project) or a project (knowledge base) from the list
 	mountsPickAccess            // w or r for the new mount (project) or the new grant (knowledge base)
 	mountsConfirm               // y or n before an unmount or a revoke
 )
@@ -47,9 +46,10 @@ type mountsScreen struct {
 	rows    []mountRow
 	cursor  int
 	mode    mountsMode
-	name    textinput.Model // the knowledge base (project screen) or project (knowledge base screen) to add
-	picked  *registry.Entry // the vault the typed name resolved to
-	confirm string          // mountsConfirm: what y would run, "unmount" or "revoke"
+	picks   []registry.Entry // mountsPickVault: what the user may choose from
+	pick    int              // the candidate under the cursor
+	picked  *registry.Entry  // the chosen vault
+	confirm string           // mountsConfirm: what y would run, "unmount" or "revoke"
 	status  string
 	err     string
 	changed bool
@@ -59,14 +59,6 @@ type mountsScreen struct {
 
 func newMounts(hooks Hooks, e registry.Entry, items []Item, width int) mountsScreen {
 	s := mountsScreen{hooks: hooks, entry: e, items: items, width: width}
-	s.name = textinput.New()
-	s.name.Prompt = ""
-	s.name.Placeholder = "ai-ml"
-	if e.Kind == vault.Knowledge {
-		s.name.Placeholder = "cs566"
-	}
-	s.name.CharLimit = 80
-	s.name.Width = 40
 	s.build()
 	return s
 }
@@ -224,10 +216,7 @@ func (s mountsScreen) update(msg tea.Msg) (mountsScreen, tea.Cmd) {
 		default:
 			switch key.String() {
 			case "a":
-				s.name.SetValue("")
-				s.picked = nil
-				s.mode = mountsPickName
-				return s, s.name.Focus()
+				return s.openPicker(), nil
 			case "u":
 				if s.entry.Kind == vault.Project && s.current() != nil {
 					s.confirm = "unmount"
@@ -237,10 +226,12 @@ func (s mountsScreen) update(msg tea.Msg) (mountsScreen, tea.Cmd) {
 				if s.entry.Kind == vault.Knowledge {
 					return s.grantRow(vault.AccessWrite), nil
 				}
+				return s.setAccess(vault.AccessWrite), nil
 			case "r":
 				if s.entry.Kind == vault.Knowledge {
 					return s.grantRow(vault.AccessRead), nil
 				}
+				return s.setAccess(vault.AccessRead), nil
 			case "x":
 				if s.entry.Kind == vault.Knowledge {
 					return s.askRevoke(), nil
@@ -250,20 +241,31 @@ func (s mountsScreen) update(msg tea.Msg) (mountsScreen, tea.Cmd) {
 			}
 		}
 		return s, nil
-	case mountsPickName:
-		if isKey {
-			switch key.Type {
-			case tea.KeyEnter:
-				return s.pick(), nil
-			case tea.KeyEsc:
+	case mountsPickVault:
+		if !isKey {
+			return s, nil
+		}
+		switch key.Type {
+		case tea.KeyUp:
+			if s.pick > 0 {
+				s.pick--
+			}
+		case tea.KeyDown:
+			if s.pick < len(s.picks)-1 {
+				s.pick++
+			}
+		case tea.KeyEnter:
+			return s.choose(), nil
+		case tea.KeyEsc:
+			s.err = ""
+			s.mode = mountsList
+		default:
+			if key.String() == "q" {
 				s.err = ""
 				s.mode = mountsList
-				return s, nil
 			}
 		}
-		var cmd tea.Cmd
-		s.name, cmd = s.name.Update(msg)
-		return s, cmd
+		return s, nil
 	case mountsPickAccess:
 		if isKey {
 			switch strings.ToLower(key.String()) {
@@ -294,28 +296,82 @@ func (s mountsScreen) update(msg tea.Msg) (mountsScreen, tea.Cmd) {
 	return s, nil
 }
 
-// pick resolves the typed name to a vault the atlas knows: a knowledge base to mount on
-// a project, a project to grant access to a knowledge base.
-func (s mountsScreen) pick() mountsScreen {
-	name := strings.TrimSpace(s.name.Value())
-	if name == "" {
+// candidates are the vaults the user may choose from: on a project, the knowledge bases
+// it does not mount yet; on a knowledge base, every project.
+func (s mountsScreen) candidates() []registry.Entry {
+	want := vault.Knowledge
+	if s.entry.Kind == vault.Knowledge {
+		want = vault.Project
+	}
+	mounted := map[string]bool{}
+	for _, m := range s.entry.Mounts {
+		mounted[m.ID] = true
+	}
+	var out []registry.Entry
+	for i := range s.items {
+		e := s.items[i].Entry
+		if e.Error != "" || e.Kind != want || mounted[e.ID] {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// openPicker lists what the user may add, so a name is chosen and never typed.
+func (s mountsScreen) openPicker() mountsScreen {
+	s.picks, s.pick, s.picked = s.candidates(), 0, nil
+	if len(s.picks) == 0 {
+		s.err = "no knowledge base left to mount; press N in the view to make one"
+		if s.entry.Kind == vault.Knowledge {
+			s.err = "no project to grant; press n in the view to make one"
+		}
+		return s
+	}
+	s.err = ""
+	s.mode = mountsPickVault
+	return s
+}
+
+// choose takes the candidate under the cursor and asks for its access.
+func (s mountsScreen) choose() mountsScreen {
+	if s.pick < 0 || s.pick >= len(s.picks) {
 		s.mode = mountsList
 		return s
 	}
-	want, missing := vault.Knowledge, "no knowledge base named "
-	if s.entry.Kind == vault.Knowledge {
-		want, missing = vault.Project, "no project named "
+	e := s.picks[s.pick]
+	s.picked = &e
+	s.err = ""
+	s.mode = mountsPickAccess
+	return s
+}
+
+// setAccess changes what the mount under the cursor asks for. A guarded knowledge base
+// still decides what the project gets.
+func (s mountsScreen) setAccess(access string) mountsScreen {
+	row := s.current()
+	if row == nil || row.mount == nil {
+		return s
 	}
-	for i := range s.items {
-		e := s.items[i].Entry
-		if e.Kind == want && strings.EqualFold(e.Name, name) {
-			s.picked = &e
-			s.err = ""
-			s.mode = mountsPickAccess
-			return s
+	if s.hooks.EditMount == nil {
+		s.err = "changing a mount is not available here"
+		return s
+	}
+	m, err := s.hooks.EditMount(s.entry, row.mount.ID, access)
+	if err != nil {
+		s.err = err.Error()
+		return s
+	}
+	for i := range s.entry.Mounts {
+		if s.entry.Mounts[i].ID == m.ID {
+			s.entry.Mounts[i].Access = access
+			s.entry.Mounts[i].Effective = ""
 		}
 	}
-	s.err = missing + name
+	s.err = ""
+	s.status = fmt.Sprintf("%s asks for %s; the knowledge base decides what it gets", m.Name, access)
+	s.changed = true
+	s.build()
 	return s
 }
 
@@ -516,7 +572,7 @@ func (s mountsScreen) view() string {
 		other = vault.Project
 	}
 	for i, row := range s.rows {
-		selected := i == s.cursor && s.mode != mountsPickName
+		selected := i == s.cursor && s.mode != mountsPickVault
 		style := boxStyle(other, selected)
 		name := kindStyle(other).Render(row.name)
 		var lines []string
@@ -530,14 +586,20 @@ func (s mountsScreen) view() string {
 	}
 	b.WriteString("\n")
 	switch s.mode {
-	case mountsPickName:
+	case mountsPickVault:
+		what := "the knowledge base this project should reach through kb/"
 		if kb {
-			b.WriteString("  " + activeL.Width(21).Render("Project name") + s.name.View() + "\n")
-			b.WriteString("  " + dim.Render("the project that may reach this knowledge base · Enter next · Esc cancel") + "\n")
-			break
+			what = "the project that may reach this knowledge base"
 		}
-		b.WriteString("  " + activeL.Width(21).Render("Knowledge base name") + s.name.View() + "\n")
-		b.WriteString("  " + dim.Render("the knowledge base this project should reach through kb/ · Enter next · Esc cancel") + "\n")
+		b.WriteString("  " + title.Render("Choose one") + "  " + dim.Render(what) + "\n")
+		for i, e := range s.picks {
+			line := "    " + e.Name
+			if i == s.pick {
+				line = "  ▸ " + kindStyle(e.Kind).Render(e.Name)
+			}
+			b.WriteString(line + "\n")
+		}
+		b.WriteString("  " + dim.Render("↑↓ move · Enter next · Esc cancel") + "\n")
 	case mountsPickAccess:
 		name := ""
 		if s.picked != nil {
@@ -563,8 +625,11 @@ func (s mountsScreen) view() string {
 		fmt.Fprintf(&b, "  %s Unmount %s? The knowledge base stays.  %s\n", errSt.Render("▲"), row.name, yn)
 	default:
 		hint := "a mount · u unmount"
+		if len(s.rows) > 0 {
+			hint = "a mount · u unmount · w ask write · r ask read"
+		}
 		if kb {
-			hint = "w grant write · r grant read · x revoke · a grant by name"
+			hint = "w grant write · r grant read · x revoke · a grant a project"
 		}
 		if len(s.rows) > 0 {
 			hint = "↑↓ move · " + hint

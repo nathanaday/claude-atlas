@@ -21,7 +21,7 @@ one command, so scripts and muscle memory both work:
 | `l` repositories on a project: `n` new, `a` link, `e` edit, `u` unlink | `new-repo NAME REPO`, `link NAME PATH`, `edit-repo NAME REPO`, `unlink NAME REPO`, `repos [NAME]` |
 | `e` edit a vault, `s` save | `edit NAME --…` |
 | `e` then `r` forget | `remove NAME` |
-| `m` mounts: on a project `a` mount, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant by name | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
+| `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
 | `R` refresh | `refresh` |
 | `←` `→` switch tabs; `h` shows every key | — |
 | — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
@@ -480,11 +480,20 @@ other project reads. The access a project gets is the lesser of the mount's
 own access and the grant: a write mount on a guarded knowledge base with no
 grant still reads only.
 
-In `view`, `m` on a vault opens its mounts screen: on a project, `a` mounts a
-knowledge base and `u` unmounts one; on a knowledge base, `w` grants write,
-`r` grants read, `x` revokes a grant, and `a` grants a project by name.
+In `view`, `m` on a vault opens its mounts screen. On a project, `a` lists the
+knowledge bases it does not mount yet and mounts the one you choose, `w` and
+`r` change what the mount under the cursor asks for, and `u` unmounts after
+asking. On a knowledge base, `w` grants write, `r` grants read, `x` revokes a
+grant, and `a` lists the projects and grants the one you choose. Nothing is
+typed by name, so a typo cannot pick the wrong vault. Creating a project
+offers the same list: the `Mounts` step mounts one knowledge base with write
+access, and `none` is the default.
+
 When a grant's project is gone, `revoke KB PROJECT` cannot find it by name;
-`revoke KB ID` drops it by its id instead.
+`revoke KB ID` drops it by its id instead. A knowledge base that moved out of
+reach still unmounts: the mount is named by id, and the symlink that leads
+nowhere goes with it. An empty folder where the symlink belongs goes too; a
+folder holding files is left alone and named.
 
 A `[[link]]` in a project page resolves to a knowledge base page through the
 mount, in Obsidian, in the graph, in backlinks, and in lint.

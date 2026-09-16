@@ -415,9 +415,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "n":
-			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Project))
+			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Project).withKnowledge(v.items))
 		case "N":
-			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Knowledge))
+			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Knowledge).withKnowledge(v.items))
 		case "a":
 			return v.openAdd(v.adoptModel())
 		case "R":

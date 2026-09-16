@@ -757,7 +757,32 @@ func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, erro
 	if _, err := vaults.Register(e.home, cfg, choice.Path); err != nil {
 		return "", err
 	}
+	if err := mountChoice(cfg, choice); err != nil {
+		return choice.Path, err
+	}
 	return choice.Path, nil
+}
+
+// mountChoice mounts the knowledge base a new project chose on the add screen. The
+// project is already written, so a failure here names the mount and leaves the vault.
+func mountChoice(cfg *home.Config, choice tui.AddVault) error {
+	if choice.MountID == "" {
+		return nil
+	}
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		return err
+	}
+	kb := ix.ByID(choice.MountID)
+	if kb == nil {
+		return fmt.Errorf("no knowledge base with id %s to mount", choice.MountID)
+	}
+	project := ix.ByPath(choice.Path)
+	if project == nil {
+		return fmt.Errorf("%s is not in the scan yet; mount %s by hand", choice.Name, kb.Name)
+	}
+	_, err = vaults.Mount(*project, *kb, vault.AccessWrite, "", time.Now())
+	return err
 }
 
 // recordFacts writes the identity fields the template does not carry: a project's tags,
@@ -816,6 +841,9 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 		},
 		Unmount: func(project registry.Entry, target string) error {
 			return vaults.Unmount(project, target, time.Now())
+		},
+		EditMount: func(project registry.Entry, target, access string) (vault.Mount, error) {
+			return vaults.SetMountAccess(project, target, access, time.Now())
 		},
 		Grant: func(kb, project registry.Entry, access string) error {
 			return vaults.Grant(kb, project, access, time.Now())
