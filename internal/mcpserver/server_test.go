@@ -783,8 +783,10 @@ func TestTheProjectsIngestRemovesAnInboxFileTheKnowledgeBaseCaptured(t *testing.
 	if msg := c.call("inbox", nil, &list); msg != "" {
 		t.Fatal(msg)
 	}
-	f := list.Files[0]
-	if len(list.Files) != 1 || !f.Captured || f.CapturedIn != "kb" || f.SourceID != captured.Sources[0].SourceID || f.StoredPath != stored {
+	if len(list.Files) != 1 {
+		t.Fatalf("the inbox lists one file: %+v", list.Files)
+	}
+	if f := list.Files[0]; !f.Captured || f.CapturedIn != "kb" || f.SourceID != captured.Sources[0].SourceID || f.StoredPath != stored {
 		t.Fatalf("the inbox names the knowledge base that captured the file: %+v", list.Files)
 	}
 	var st Status
