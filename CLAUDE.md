@@ -11,7 +11,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 
 | Thing | Location |
 |---|---|
-| v2: knowledge bases, projects, mounts, access (phases 1–5 built: kinds, the registry, mounts, the view's mount keys, projects inside repositories) | `docs/v2-design.md` |
+| v2: knowledge bases, projects, mounts, access (phases 1–6 built) | `docs/v2-design.md` |
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side before v2 (superseded by `v2-design.md`) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
@@ -230,7 +230,7 @@ make install
 ```
 
 `make install` stamps the binary with the same version, so `doctor` and
-`status` can tell when the two drift. Uncommitted skill edits can be tried
+`status` can tell when the two drift. 1.0.0 is the first v2 release. Uncommitted skill edits can be tried
 with `claude --plugin-dir .` from inside a vault. End-to-end by hand:
 `claude -p "..."` inside a vault with
 `--allowedTools "mcp__plugin_claude-atlas_atlas__*,Read,Grep,Glob,Skill"`.

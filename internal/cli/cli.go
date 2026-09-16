@@ -2135,7 +2135,7 @@ func (e *env) plant(args []string) (int, error) {
 
 func (e *env) stub(args []string) (int, error) {
 	fs := newFlags("stub", e.stderr)
-	pageType := fs.String("type", "", "the type of every stub: concept, entity, question, or session (note or moc in lyt mode)")
+	pageType := fs.String("type", "", "the type of every stub: concept or entity; in a project also question or session; in lyt mode note or moc")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil

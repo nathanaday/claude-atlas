@@ -24,6 +24,7 @@ one command, so scripts and muscle memory both work:
 | `m` mounts: on a project `a` mount, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant by name | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
 | `R` refresh | `refresh` |
 | Space folds a folder, `-` and `+` fold and unfold all | — |
+| — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
 
 ## Create a vault
 
@@ -246,6 +247,37 @@ claude-atlas lint sensor-triage
 claude-atlas lint sensor-triage --json
 claude-atlas lint sensor-triage --strict     # exit 1 when there are findings
 ```
+
+## Stubs and wanted pages
+
+A **wanted page** is a title more than one page links to that nobody has
+written yet. Lint reports it, and a session's start line names a few and
+counts the rest:
+
+```text
+Stubs: 2 pages to fill (Backpropagation, Loss Landscape). Wanted: 1 linked
+page does not exist yet (Contrastive Learning). Fill or stub them with the
+wiki-lint skill.
+```
+
+`stub` creates a seed page for each: frontmatter and the section headings its
+type usually carries, left for a session or a person to fill in.
+
+```bash
+claude-atlas stub sensor-triage
+claude-atlas stub sensor-triage "Backpropagation" "Loss Landscape" --type concept
+```
+
+With no title, `stub` seeds every wanted page and every empty page a link
+already points to. `--type` sets the type for a title that names none:
+concept or entity; in a project also question or session; in `lyt` mode note
+or moc as well. The default is concept, or note in `lyt` mode.
+
+The `stub` tool takes the same arguments in a session. A title's `target`
+names a mount: the stub lands in that knowledge base instead of the
+project's own wiki, and the tool returns its path through the mount,
+`kb/<name>/<path inside the knowledge base>`. A stub never lands in a
+read-only mount.
 
 ## Filing mode
 

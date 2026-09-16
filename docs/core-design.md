@@ -1,8 +1,8 @@
 # The atlas core: a self-contained plugin
 
-Status: implemented, 2026-09-12. The engine described here stays in v2
-(`v2-design.md`); v2 changes the identity file, gives a vault a kind, and
-removes the atlas vault. Decisions taken after the proposal: no claim ledger, hand edits are auto-committed, the binary is installed first and the plugin finds it, Go stays at 1.24 with the SDK pinned to v1.4.0.
+Status: implemented, 2026-09-12. v2 (`v2-design.md`) supersedes what this
+document says about the atlas and about a single vault kind; the engine
+rules below stand. Decisions taken after the proposal: no claim ledger, hand edits are auto-committed, the binary is installed first and the plugin finds it, Go stays at 1.24 with the SDK pinned to v1.4.0.
 
 claude-atlas stops wrapping the claude-obsidian plugin and ships its own
 core. The core is Go, exposed to Claude Code as an MCP server, and packaged
@@ -57,7 +57,7 @@ hook proved the path on this machine, Claude Code 2.1.270, Go 1.24.2:
 
 The three atlas-level rules (never write into a vault from the tree, a vault
 never learns the atlas exists, never store a computable fact) stay as they
-are. The atlas tree under `~/Documents/Atlas` is unchanged by this design.
+are.
 
 ## The vault
 
@@ -170,8 +170,8 @@ Kinds and their write scope, enforced at plan time:
 | `setup` | the template paths, from `Init` and `Adopt` only |
 
 Reserved everywhere: `wiki/log.md`, `.git`, `.vault-meta`, `.obsidian`,
-`inbox`. Limits: 256 writes, 16 MiB per write, one plan per vault at a time
-(a new plan replaces the old one).
+`inbox`, `kb/`, `repos/`. Limits: 256 writes, 16 MiB per write, one plan per
+vault at a time (a new plan replaces the old one).
 
 Plan time also validates content: frontmatter parses and carries the required
 keys for a wiki page, JSON files parse, `.base` files parse as YAML, and links
@@ -281,7 +281,7 @@ before, under `/claude-atlas:`.
 
 | Skill | Change beyond the rewrite |
 |---|---|
-| `wiki` | routes; setup points at `claude-atlas new-vault` and `claude-atlas adopt` |
+| `wiki` | routes; setup points at `claude-atlas new-project` or `new-knowledge` and `claude-atlas adopt` |
 | `wiki-ingest` | uses `inbox`, `capture`, `route`, `plan`, `apply`; ledger via the `sources` field |
 | `wiki-query` | read-only; retrieval is Grep and Glob until `search` exists |
 | `wiki-lint` | calls `lint`; repairs are a `repair` plan |
@@ -301,17 +301,17 @@ the read-only atlas tools.
 
 ## The CLI
 
-Kept: everything the atlas tree needs (`setup`, `new-vault`,
+Kept: everything the atlas tree needs (`setup`, `new-project`, `new-knowledge`,
 `view`, `open-vault`, `open-claude`, `link`, `unlink`, `links`, `list`,
 `refresh`, `info`, `doctor`, `version`).
 
 Changed:
 
-- `new-vault` creates the vault in-process and makes the first commit.
-- `new-vault --from` becomes `adopt PATH`, which also accepts a
-  claude-obsidian vault: it adds `.claude-atlas.json`, converts
-  `.claude-obsidian.json` if present, runs `git init` when needed, and commits
-  a baseline.
+- `new-project` and `new-knowledge` create the vault in-process and make the
+  first commit.
+- `adopt PATH` accepts a claude-obsidian vault too: it adds
+  `.claude-atlas.json`, converts `.claude-obsidian.json` if present, runs
+  `git init` when needed, and commits a baseline.
 - `setup` installs this plugin instead of claude-obsidian.
 - `doctor` checks the binary, the plugin, git, and every vault.
 - `open-claude` sets `CLAUDE_ATLAS_VAULT`.
@@ -332,8 +332,8 @@ macOS and Linux are supported; Windows is not.
    `lint`. `refresh` moves onto them and `internal/product` is deleted.
 2. MCP server, hooks, plugin manifests, wrapper script. In-process tool
    tests over the SDK's in-memory transport.
-3. Skills and agents ported. `setup`, `new-vault`, `adopt`, `doctor`,
-   `open-claude` updated. README, CLAUDE.md, About and Reference templates.
+3. Skills and agents ported. `setup`, `new-project`, `new-knowledge`, `adopt`,
+   `doctor`, `open-claude` updated. README, CLAUDE.md.
 4. Live run on this machine: a new vault, one ingest from the inbox, a query,
    a lint, an undo. Adopt `MyKnowledgeVault`.
 5. Later: `search`, Homebrew tap, release binaries, wrapper download.

@@ -1,8 +1,7 @@
 # Atlas v2: knowledge bases and projects
 
-Status: designed 2026-09-14. Phases 1–5 are built (kinds; the registry;
-mounts and access; the mount and grant keys in `view`; projects inside
-repositories). Phases 6 and 7 are not.
+Status: designed 2026-09-14. Phases 1–6 are built. Phase 7 (migration by
+hand) is not.
 This is a new version of the project. Existing vaults migrate by hand;
 nothing here keeps compatibility with the v1 identity file, the v1 layout,
 or the atlas vault.
@@ -539,9 +538,6 @@ check runs in phase 7 against a project with a mount.
 - `claude-atlas projects --kb NAME`: the projects that mount a knowledge base,
   for a change that runs through all of them.
 - The result of the Obsidian follow-symlink check, recorded in "Mounts" above.
-- `skills/wiki-lint/SKILL.md`'s category table is missing `task_errors`,
-  `kind_errors`, and `mount_errors`. That is phase 6 work, with the rest of
-  the skills, since a skill change needs a plugin version bump.
 - The add screen has no "in repository" option; the CLI's `new-project --in`
   has it.
 - The TUI's repository rows carry no host mark, though the CLI's `show` and
