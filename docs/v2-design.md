@@ -1,11 +1,11 @@
 # Atlas v2: knowledge bases and projects
 
-Status: designed 2026-09-14. Phases 1 and 2 are built (kinds; the registry).
-Phases 3–7 are not. This is a new version of the project. Existing vaults
-migrate by hand; nothing here keeps compatibility with the v1 identity file,
-the v1 layout, or the atlas vault. `core-design.md` still describes the
-engine. `atlas-design.md` and the atlas sections of `tasks-design.md` are
-superseded by this document.
+Status: designed 2026-09-14. Phases 1–3 are built (kinds; the registry;
+mounts and access). Phases 4–7 are not. This is a new version of the
+project. Existing vaults migrate by hand; nothing here keeps compatibility
+with the v1 identity file, the v1 layout, or the atlas vault.
+`core-design.md` still describes the engine. `atlas-design.md` and the atlas
+sections of `tasks-design.md` are superseded by this document.
 
 ## What changes and why
 
@@ -147,7 +147,11 @@ A project mounts a knowledge base as a symlink:
   resolves any duplicate.
 - The atlas tools return real paths. ripgrep does not follow symlinks by
   default, so a skill that greps a mount is handed the knowledge base's
-  `wiki/` path, not `kb/<name>`.
+  `wiki/` path, not `kb/<name>`. The one exception is a stub the `stub` tool
+  seeds through a title's `target`: it returns that page's path as
+  `kb/<name>/<path inside the knowledge base's wiki>`, readable from the
+  project through the symlink. The response's `operations[].vault` still
+  names the knowledge base's own root, where the page was committed.
 - A knowledge base never links a project and never records who mounts it. The
   atlas computes that list from the projects' identity files.
 - A rename in Obsidian through a mount edits the knowledge base's files. The
@@ -157,13 +161,18 @@ A project mounts a knowledge base as a symlink:
 - Two knowledge bases with one name on a machine: `mount` asks for the mount
   folder's name (`--as NAME`).
 
-Verify before phase 3 ships: Obsidian follows a symlinked folder on this
-machine and notices a file changed behind the link; iCloud Drive leaves a
-symlink under `~/Documents` alone (it does not carry symlinks to other
-devices, which is fine, since the link is local); and a bare `[[index]]` in
-the project's `wiki/hot.md` resolves to the project's own index, not the
-mount's. If any of these fails, the fallback is `obsidian://open` links that
-the atlas tools resolve.
+Checked 2026-09-15: `~/Documents` is not an iCloud zone on the author's
+machine (`brctl status` reports no client zone; only `Desktop` is linked into
+CloudDocs), and a symlink under `~/Documents/Vaults` survived unchanged.
+
+The Obsidian follow-symlink check needs a live Obsidian and is a manual step.
+Create a project and a knowledge base (`new-project`, `new-knowledge`),
+`mount` the knowledge base on the project, `open-vault` the project, and
+write `[[<a knowledge base page>]]` in the project's `wiki/hot.md` in
+Obsidian. Confirm the link opens the page, the graph shows it, and a bare
+`[[index]]` opens the project's own index, not the mount's. If any of these
+fails, the fallback is `obsidian://open` links that the atlas tools resolve.
+Not yet run.
 
 ## Access
 
@@ -266,9 +275,11 @@ knowledge kind is refused.
 | `status` | both | kind, id, name; a project's mounts with effective access; a knowledge base's access and the projects that mount it |
 | `inbox` | project | none |
 | `capture` | target: both; the file comes from the project's inbox | `via` on a knowledge base record |
-| `route` | project | answers across the project and its mounts |
-| `plan`, `apply` | both | the access check; kinds by vault kind |
-| `undo`, `history`, `mode` | both | none |
+| `route` | project | matches an existing page by title or alias across the project and its mounts |
+| `plan` | both | the access check; kinds by vault kind |
+| `apply` | both | consumes a plan the access check already admitted |
+| `undo`, `mode` (a `set`) | both | gated the same way as `plan` |
+| `history`, `mode` (a read) | both | none |
 | `lint` | both | resolves links through mounts |
 | `stub` | both | built (`stubs-design.md`); in a project, a title may name a writable mount as its `target`; the default is the project's own wiki |
 | `plant`, `tasks`, `repos` | project | none |
@@ -287,7 +298,9 @@ Kinds by vault kind:
 
 `txn.allowed` keeps its scope per kind. `kb/` and `repos/` are reserved
 everywhere: they are not the project's files, so no plan writes under them.
-Apply checks access when the plan's vault is a knowledge base. A plan names
+`plan` checks access when the target is a knowledge base; `apply` commits a
+plan the access check already admitted, and does not check again. `undo` and
+a `mode` that sets a new mode are gated the same way as `plan`. A plan names
 paths in one vault.
 
 ## Lint
@@ -299,7 +312,7 @@ findings come from its own lint.
 - A bare link resolves in the project's own `wiki/` first, then in the mounts.
   Obsidian resolves an ambiguous bare link to the nearest file, and the
   project's root pages sit together in `wiki/`, so the two agree for links
-  among them. The symlink check above confirms it.
+  among them. The Obsidian check above confirms it, once run.
 - A page name present in the project and in a mount, or in two mounts, is
   ambiguous, except the root pages (`index`, `log`, `hot`, `overview`) and the
   folder index pages (`canvases`), which every vault has and which resolve to
@@ -315,6 +328,8 @@ findings come from its own lint.
 - A knowledge base with `inbox/`, `ideas/`, `wiki/tasks/`, the task ledger,
   `wiki/questions/`, or `wiki/sessions/` is a finding. A project with `grants`
   or `scope` is a finding.
+- `mount_errors` lists a symlink under `kb/` that points at nothing or not at
+  a `wiki/` directory.
 
 ## A project inside a repository
 
@@ -397,8 +412,8 @@ tasks, and the signals. Every key is one command:
 | `t` tasks, `p` plant, `c` continue; `T` every project's tasks | `tasks`, `plant`, `open-claude --task` |
 | `o` Obsidian, `c` Claude Code, `i` ingest | `open-vault`, `open-claude`, `ingest` |
 | `R` refresh | `refresh` |
-| `m` mount, `u` unmount (phase 3) | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB` |
-| `g` grant, `G` revoke (phase 3) | `grant KB PROJECT --write\|--read`, `revoke KB PROJECT` |
+| `m` mount, `u` unmount (phase 4) | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME` |
+| `g` grant, `G` revoke (phase 4) | `grant KB PROJECT --write\|--read`, `revoke KB PROJECT` |
 
 Removed: `relate`, `unrelate`, `edit-link`, the `related` field, the category
 move, `Overview.md`, `Tree.md`, `categories/`, `repos/` pages, `About.md`,
@@ -516,4 +531,7 @@ mount.
 - A skill that grants access from a session.
 - `claude-atlas projects --kb NAME`: the projects that mount a knowledge base,
   for a change that runs through all of them.
-- The result of the symlink check, recorded here.
+- The result of the Obsidian follow-symlink check, recorded in "Mounts" above.
+- `skills/wiki-lint/SKILL.md`'s category table is missing `task_errors`,
+  `kind_errors`, and `mount_errors`. That is phase 6 work, with the rest of
+  the skills, since a skill change needs a plugin version bump.

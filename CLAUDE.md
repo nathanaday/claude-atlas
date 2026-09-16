@@ -11,7 +11,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 
 | Thing | Location |
 |---|---|
-| v2: knowledge bases, projects, mounts, access (phases 1–2 built: kinds, the registry) | `docs/v2-design.md` |
+| v2: knowledge bases, projects, mounts, access (phases 1–3 built: kinds, the registry, mounts) | `docs/v2-design.md` |
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side before v2 (superseded by `v2-design.md`) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
@@ -116,7 +116,9 @@ never goes inside another vault (`vaults.CheckNewPath`).
   `vault.Adopt`, `vault.Upgrade`, and `vault.UpdateConfig` are the only code
   that writes vault files directly, and only before or outside an operation.
   The template includes the vault's CSS snippet and an appearance file that
-  enables it; upgrade merges the snippet into an existing appearance file.
+  enables it; upgrade merges the snippet into an existing appearance file. The
+  symlinks under a project's `kb/`, which `mount` and `refresh` create, are
+  local state git ignores.
 - A vault has a kind, `knowledge` or `project` (`vault.Kind`, in the v2
   identity file with an `id` and a `name`). A knowledge base has no inbox,
   ideas, tasks, questions, or sessions; `txn`, the tools, lint, and the hook
@@ -138,8 +140,8 @@ never goes inside another vault (`vaults.CheckNewPath`).
   `wiki/log.md`, both ledgers, `wiki/tasks/tasks.md` and its old path
   `wiki/tasks/index.md`, `.git`, `.vault-meta`, `.obsidian`, `.raw` except
   through capture, `inbox` except deletes in an ingest, `inbox/tasks` except
-  deletes in a task operation. Only a `task` or `repair` plan may touch a page
-  under `wiki/tasks/`.
+  deletes in a task operation, `kb/`, `repos/`. Only a `task` or `repair` plan
+  may touch a page under `wiki/tasks/`.
 - A new vault lints clean, and `lint.TestNewVaultHasNoFindings` holds the
   template to that. A folder's index page takes the folder's name
   (`wiki/tasks/tasks.md`, `wiki/canvases/canvases.md`), so no page shares the
@@ -149,6 +151,10 @@ never goes inside another vault (`vaults.CheckNewPath`).
   `vault`, `CLAUDE_ATLAS_VAULT`, the nearest identity file, then the registry:
   a folder inside exactly one project's repository belongs to that project
   (`discover.Vault`).
+- A project session may write a mounted knowledge base when its mount is
+  effectively `write` (`registry.Effective` of the request and the grant); a
+  knowledge base session runs maintenance kinds only; a source captured into
+  a knowledge base records `via`, the project it came through.
 - The scan is the truth. `registry.Scan` walks the vaults directory at most
   five levels deep for identity files, skips dot-directories and
   `node_modules`, never descends into a vault it has found, and adds the paths
@@ -158,7 +164,10 @@ never goes inside another vault (`vaults.CheckNewPath`).
   decide on the code, `remove` forgets such an entry, and the view files it
   under `problems`. Every command that acts on a vault scans afresh;
   `registry.json` is for display only.
-- Lint and refresh are read-only toward every vault, offline, and idempotent.
+- In a project, lint resolves links through the symlinks under `kb/`;
+  findings are about the project's own pages.
+- Lint is read-only; refresh writes nothing a vault's git tracks (it recreates
+  the ignored `kb/` symlinks).
 - TUI models keep all logic in `Update`; tests drive them with `tea.KeyMsg`.
 - Tests never touch a real `~/.claude-atlas`, never install a plugin, and skip
   when `git` is missing. MCP tools are tested in-process over the SDK's

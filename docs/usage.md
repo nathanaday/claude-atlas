@@ -21,6 +21,8 @@ one command, so scripts and muscle memory both work:
 | `l` repositories on a project: `n` new, `a` link, `e` edit, `u` unlink | `new-repo NAME REPO`, `link NAME PATH`, `edit-repo NAME REPO`, `unlink NAME REPO`, `repos [NAME]` |
 | `e` edit a vault, `s` save | `edit NAME --…` |
 | `e` then `r` forget | `remove NAME` |
+| `m` mount, `u` unmount (phase 4) | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME` |
+| `g` grant, `G` revoke (phase 4) | `grant KB PROJECT --write\|--read`, `revoke KB PROJECT` |
 | `R` refresh | `refresh` |
 | Space folds a folder, `-` and `+` fold and unfold all | — |
 
@@ -55,9 +57,9 @@ A project's tags group it in `view`: the first tag is its folder there.
 `--tags usc,fall` puts `cs566` under `projects/usc`.
 
 `--access` states a knowledge base's intent for the projects that mount it:
-`open` lets every one of them write, `guarded` only the ones it grants.
-Mounting arrives in the next version; the field is recorded now. This is
-hygiene, not security. Any process on the machine can read the files.
+`open` lets every one of them write, `guarded` only the ones it grants. See
+"Mount a knowledge base" below. This is hygiene, not security. Any process on
+the machine can read the files.
 
 ## Edit a vault
 
@@ -117,6 +119,17 @@ In the session, the skills are on the slash menu:
 
 Claude shows a preview of every change before it applies it. Each applied
 change is one git commit in the vault.
+
+In a project, the tools see its mounts. Ingest into a knowledge base still
+runs in the project session: `capture` with `vault` set to the knowledge
+base's root takes a file from the project's inbox and records `via`, the
+project it came through; `plan` and `apply` with that `vault` and kind
+`ingest` or `save` need the mount to be effectively `write` — a read mount
+refuses with "cs566 mounts ai-ml read-only". A title's `target` set to a
+mount's name tells `stub` to seed the page inside that knowledge base; `stub`
+with `vault` set to the knowledge base's root stubs its own wanted pages
+instead. The `mounts` tool lists a project's mounts with their effective
+access and page counts.
 
 ## Tasks
 
@@ -290,6 +303,7 @@ deeper folder opens it and Esc comes back.
 | `i` `t` `l` | on a project: ingest sources, tasks, repositories |
 | `T` | every project's open tasks on one board |
 | `e` | edit the vault; `s` saves, `r` forgets it |
+| `m` `u` `g` `G` (phase 4) | mount, unmount, grant, revoke |
 | `R` | refresh in the background |
 | `q` | quit |
 
@@ -397,6 +411,40 @@ cloned to a location you confirm; it asks before initializing git in a plain
 folder, and asks how changes should land when the repository has a remote. `e`
 edits the remote, the folder, and the change policy. `u` unlinks after asking.
 Each action takes effect at once and refreshes in the background.
+
+## Mount a knowledge base
+
+A project reaches a knowledge base through a mount: `kb/<name>` in the
+project, a symlink to the knowledge base's `wiki/`. `mount`, `unmount`,
+`grant`, and `revoke` manage it:
+
+```bash
+claude-atlas mount cs566 ai-ml
+claude-atlas mount cs566 ai-ml --read
+claude-atlas mount cs566 field-optics --as optics   # two knowledge bases of one name
+claude-atlas unmount cs566 ai-ml
+claude-atlas grant ai-ml cs566 --write
+claude-atlas grant field-optics cs566 --read
+claude-atlas revoke field-optics cs566
+```
+
+`mount` creates the symlink and records the mount, by id, in the project's
+identity file. `--read` mounts it read-only; the default is write. `--as`
+names the mount folder, for a knowledge base whose name collides with an
+existing mount. `unmount` drops the record; the knowledge base is untouched.
+`refresh` recreates a missing or wrong symlink from the identity file and the
+atlas config; `doctor` reports one that needs it.
+
+A knowledge base sets `access`, `open` or `guarded`, at `new-knowledge` or
+with `edit --access`. `open` lets every project that mounts it write; a
+`guarded` knowledge base lets only a project `grant` names write, and every
+other project reads. The access a project gets is the lesser of the mount's
+own access and the grant: a write mount on a guarded knowledge base with no
+grant still reads only. `grant KB PROJECT --write|--read` and
+`revoke KB PROJECT` edit a guarded knowledge base's grants.
+
+A `[[link]]` in a project page resolves to a knowledge base page through the
+mount, in Obsidian, in the graph, in backlinks, and in lint.
 
 ## Adopt an existing vault
 
