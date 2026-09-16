@@ -839,14 +839,14 @@ func (v view) footer(hints ...string) string {
 	return out
 }
 
-// tabBar is the first line: every tab with its count, the active one in its color, and
-// the refresh stamp at the right.
+// tabBar is the first line: every tab with its count in parentheses, a bar between
+// tabs, the active one in its color, and the refresh stamp at the right.
 func (v view) tabBar() string {
 	var parts []string
 	for _, t := range v.tabs() {
 		text := tabNames[t]
 		if n, ok := v.count(t); ok {
-			text += fmt.Sprintf(" %d", n)
+			text += fmt.Sprintf(" (%d)", n)
 		}
 		style := dim
 		if t == v.tab {
@@ -861,7 +861,7 @@ func (v view) tabBar() string {
 		}
 		parts = append(parts, style.Render(text))
 	}
-	left := title.Render("Atlas") + "   " + strings.Join(parts, "   ")
+	left := title.Render("Atlas") + "   " + strings.Join(parts, dim.Render(" | "))
 	stamp := "not refreshed yet"
 	if t, err := time.Parse("2006-01-02T15:04:05Z", v.refreshed); err == nil {
 		stamp = "refreshed " + t.Local().Format("2006-01-02 15:04")

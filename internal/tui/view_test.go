@@ -130,7 +130,7 @@ func TestTabBarAndArrows(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
 	out := v.View()
 	t.Logf("\n%s", out)
-	for _, want := range []string{"Atlas", "Projects 3", "Knowledge 2", "Tasks 3", "Problems 1", "A project holds tasks", "refreshed 2026-09-1"} {
+	for _, want := range []string{"Atlas   Projects (3) | Knowledge (2) | Tasks (3) | Problems (1)", "A project holds tasks", "refreshed 2026-09-1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -225,15 +225,16 @@ func TestEnterExpandsEscCollapsesThenQuits(t *testing.T) {
 	v = pressV(v, tea.KeyEnter)
 	out := v.View()
 	t.Logf("\n%s", out)
-	for _, want := range []string{"Path", "/v/p3", "Id", "id-p3", "Mode", "generic", "Created", "2026-09-01", "Tags", "itl",
-		"Repositories", "atlas", "/code/atlas", "changes: pr", "git@example.com:atlas.git",
-		"Vault check", "ok", "Pages", "4", "Open threads", "- thread", "Tasks", "3 open: 1 active", "Refreshed", "Enter collapse"} {
+	for _, want := range []string{"Path", "/v/p3", "Created", "2026-09-01", "Vault check", "ok", "Last touched",
+		"Open threads", "- thread", "Tasks", "3 open: 1 active", "Repositories", "atlas", "git@example.com:atlas.git", "Enter collapse"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if strings.Contains(out, "Mounts") {
-		t.Error("the connectors carry the mounts")
+	for _, gone := range []string{"Mounts", "Id", "Mode", "Tags", "Pages", "Refreshed", "/code/atlas"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("the block is short; %q belongs to show", gone)
+		}
 	}
 	v = findVault(t, v, "welcome")
 	v = pressV(v, tea.KeyEnter)
@@ -355,7 +356,7 @@ func TestAWriteLandsOnTheVaultsTab(t *testing.T) {
 	if v.tab != tabKnowledge || v.current() == nil || v.current().Entry.Name != "fresh" || v.status != "refreshed" {
 		t.Fatalf("after the refresh: tab=%d current=%v status=%q", v.tab, v.current(), v.status)
 	}
-	if !strings.Contains(v.View(), "Knowledge 3") {
+	if !strings.Contains(v.View(), "Knowledge (3)") {
 		t.Fatalf("the count follows:\n%s", v.View())
 	}
 }

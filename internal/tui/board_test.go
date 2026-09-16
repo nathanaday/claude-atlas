@@ -113,7 +113,7 @@ func TestToggleExpandsUnderTheBox(t *testing.T) {
 	if r.end-r.start <= before || !b.expanded["/v/papers"] {
 		t.Fatalf("expanded row did not grow: %d -> %d", before, r.end-r.start)
 	}
-	for _, want := range []string{"◀╌╌╌╌ p3   read", "Path", "/v/papers", "Id", "id-papers", "Vault check"} {
+	for _, want := range []string{"◀╌╌╌╌ p3   read", "Path", "/v/papers", "Access", "open", "Vault check"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("expanded block missing %q:\n%s", want, text)
 		}

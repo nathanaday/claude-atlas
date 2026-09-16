@@ -406,10 +406,10 @@ effective access beside each; the Knowledge tab is a box per knowledge base
 with how many projects mount it, one line per project once expanded; the Tasks
 tab hosts every project's open tasks; a Problems tab appears for a vault the
 scan could not read. The arrow always points at the knowledge base. Enter
-expands a vault in place: id, path, mode, and either a project's tags or a
-knowledge base's scope, access, and grants; then the repositories with what
-git says, the state the last refresh derived, the open tasks, and the signals.
-Every key is one command:
+expands a vault in place: path, created, a knowledge base's scope, access,
+and grants, the vault check, the last touch, the open threads, the open
+tasks, and a project's repositories with their remotes. `show NAME` prints
+the rest. Every key is one command:
 
 | Key | Command |
 |---|---|

@@ -3,11 +3,8 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -228,11 +225,11 @@ func problemFix(e registry.Entry) string {
 	return e.Error
 }
 
-// detailLines is everything the atlas knows about one vault, for the block under its
-// box: the identity file, the repositories, the state the last refresh derived, and the
-// signals. The box carries the name and the connectors carry the mounts, so neither
-// repeats here.
-func detailLines(e registry.Entry, today time.Time) []string {
+// detailLines is the block under an expanded box: where the vault is, when it was
+// made, a knowledge base's scope and grants, the vault check and last touch, the open
+// threads and tasks, and a project's repositories with their remotes. The box carries
+// the name and the connectors carry the mounts; `show NAME` prints everything else.
+func detailLines(e registry.Entry) []string {
 	var out []string
 	row := func(k, val string) { out = append(out, label.Width(detailWidth).Render(k)+dash(val)) }
 	if e.Error != "" {
@@ -241,10 +238,7 @@ func detailLines(e registry.Entry, today time.Time) []string {
 		row("Fix", problemFix(e))
 		return out
 	}
-	s := e.State
 	row("Path", home.Display(e.Path))
-	row("Id", e.ID)
-	row("Mode", string(e.Mode))
 	row("Created", e.Created)
 	if e.Kind == vault.Knowledge {
 		row("Scope", e.Scope)
@@ -256,63 +250,38 @@ func detailLines(e registry.Entry, today time.Time) []string {
 			}
 			row("Grant", text)
 		}
+	}
+	if s := e.State; s == nil {
+		out = append(out, dim.Render("never refreshed; press R"))
 	} else {
-		row("Tags", strings.Join(e.Tags, ", "))
+		check := okSt.Render("ok")
+		if !s.VaultOK {
+			check = errSt.Render(dash(s.VaultError))
+		}
+		row("Vault check", check)
+		row("Last touched", s.LastTouched)
+		for i, t := range s.OpenThreads {
+			k := "Open threads"
+			if i > 0 {
+				k = ""
+			}
+			out = append(out, label.Width(detailWidth).Render(k)+"- "+refresh.PlainText(t))
+		}
+		if s.Tasks != nil {
+			row("Tasks", taskSummaryText(s.Tasks))
+		}
 	}
 	if len(e.Repos) > 0 {
 		out = append(out, catSt.Render("Repositories"))
 		for _, r := range e.Repos {
-			where := home.Display(r.Path) + " · changes: " + links.Policy(r.Changes, r.Remote)
-			if r.Remote != "" {
-				where += " · " + r.Remote
+			where := dim.Render(r.Remote)
+			switch {
+			case r.Path == "":
+				where = errSt.Render(r.Error)
+			case r.Remote == "":
+				where = dim.Render(home.Display(r.Path))
 			}
-			if r.Path == "" {
-				where = r.Error
-			}
-			out = append(out, fmt.Sprintf("  %-24s %s", r.Name, dim.Render(where)))
-			if s != nil {
-				if fact, ok := s.RepoFacts[r.Name]; ok {
-					facts := refresh.LinkSummary(fact)
-					if !fact.OK {
-						facts = errSt.Render(facts)
-					}
-					out = append(out, strings.Repeat(" ", 27)+dim.Render(facts))
-				}
-			}
-		}
-	}
-	if s == nil {
-		out = append(out, dim.Render("never refreshed; press R"))
-		return out
-	}
-	out = append(out, "")
-	check := okSt.Render("ok")
-	if !s.VaultOK {
-		check = errSt.Render(dash(s.VaultError))
-	}
-	row("Vault check", check)
-	row("Heat", heatMark(s)+" "+dash(s.Heat))
-	row("Last touched", s.LastTouched)
-	row("Last operation", s.LastOperation)
-	row("Pages", pagesText(s))
-	row("Unfinished", s.Unfinished.Text())
-	for i, t := range s.OpenThreads {
-		k := "Open threads"
-		if i > 0 {
-			k = ""
-		}
-		out = append(out, label.Width(detailWidth).Render(k)+"- "+refresh.PlainText(t))
-	}
-	if s.Tasks != nil {
-		row("Tasks", taskSummaryText(s.Tasks))
-	}
-	if t, err := time.Parse("2006-01-02T15:04:05Z", s.GeneratedAt); err == nil {
-		row("Refreshed", t.Local().Format("2006-01-02 15:04"))
-	}
-	if signals := refresh.Signals(e, today); len(signals) > 0 {
-		out = append(out, catSt.Render("Signals"))
-		for _, signal := range signals {
-			out = append(out, "  - "+signal)
+			out = append(out, fmt.Sprintf("  %-24s %s", r.Name, where))
 		}
 	}
 	return out

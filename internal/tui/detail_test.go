@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
@@ -136,23 +135,29 @@ func TestDetailLinesByKind(t *testing.T) {
 	four, zero := 4, 0
 	p := registry.Entry{ID: "id-p3", Kind: vault.Project, Name: "p3", Path: "/v/p3", Mode: vault.Generic, Created: "2026-09-01", Tags: []string{"itl"},
 		Mounts: []registry.Mount{{ID: "id-ai-ml", Name: "ai-ml", Access: "write", Effective: "write", Path: "/v/ai-ml/wiki"}},
-		Repos:  []registry.Repo{{Name: "atlas", Path: "/code/atlas", Remote: "git@example.com:atlas.git", Changes: "pr"}},
-		State: &registry.State{VaultOK: true, Heat: "hot", Pages: &four, DaysIdle: &zero, GeneratedAt: "2026-09-12T18:00:00Z",
+		Repos: []registry.Repo{{Name: "atlas", Path: "/code/atlas", Remote: "git@example.com:atlas.git", Changes: "pr"},
+			{Name: "local", Path: "/code/local"}, {Name: "lost", Error: "no folder for lost"}},
+		State: &registry.State{VaultOK: true, Heat: "hot", Pages: &four, DaysIdle: &zero, GeneratedAt: "2026-09-12T18:00:00Z", LastTouched: "2026-09-12",
 			OpenThreads: []string{"thread"}, Tasks: &registry.TaskSummary{Counts: tasks.Counts{Open: 3, Active: 1, Planned: 2}}}}
-	out := strings.Join(detailLines(p, time.Now()), "\n")
-	for _, want := range []string{"Path", "/v/p3", "Id", "id-p3", "Mode", "generic", "Created", "2026-09-01", "Tags", "itl",
-		"Repositories", "atlas", "/code/atlas", "changes: pr", "git@example.com:atlas.git",
-		"Vault check", "ok", "Heat", "🔥 hot", "Pages", "4", "Open threads", "- thread", "Tasks", "3 open: 1 active", "Refreshed"} {
+	out := strings.Join(detailLines(p), "\n")
+	for _, want := range []string{"Path", "/v/p3", "Created", "2026-09-01", "Vault check", "ok", "Last touched", "2026-09-12",
+		"Open threads", "- thread", "Tasks", "3 open: 1 active",
+		"Repositories", "atlas", "git@example.com:atlas.git", "local", "/code/local", "lost", "no folder for lost"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("project detail missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "Mounts") {
-		t.Errorf("the connectors carry the mounts:\n%s", out)
+	for _, gone := range []string{"Mounts", "Id", "Mode", "Tags", "Heat", "Pages", "Unfinished", "Refreshed", "Signals", "changes: pr", "/code/atlas"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("the block is short; %q belongs to show:\n%s", gone, out)
+		}
+	}
+	if path, created := strings.Index(out, "Path"), strings.Index(out, "Created"); !(path < created && created < strings.Index(out, "Vault check") && strings.Index(out, "Tasks") < strings.Index(out, "Repositories")) {
+		t.Errorf("order: path, created, vault check, last touched, open threads, tasks, repositories:\n%s", out)
 	}
 	kb := registry.Entry{Kind: vault.Knowledge, Name: "papers", Path: "/v/papers", Scope: "papers sources",
 		Grants: []registry.Grant{{ID: "gone", Name: "gone", Access: "read", Error: "no project with id gone"}}}
-	out = strings.Join(detailLines(kb, time.Now()), "\n")
+	out = strings.Join(detailLines(kb), "\n")
 	for _, want := range []string{"Scope", "papers sources", "Access", "open", "Grant", "gone  read  no project with id gone", "never refreshed; press R"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("knowledge detail missing %q:\n%s", want, out)
@@ -162,14 +167,14 @@ func TestDetailLinesByKind(t *testing.T) {
 		t.Errorf("knowledge detail:\n%s", out)
 	}
 	bad := registry.Entry{Path: "/v/old", Error: "v1 vault; run claude-atlas adopt /v/old --as knowledge|project", Reason: registry.ReasonV1}
-	out = strings.Join(detailLines(bad, time.Now()), "\n")
+	out = strings.Join(detailLines(bad), "\n")
 	for _, want := range []string{"Path", "/v/old", "Reason", "v1", "Fix", "press a to adopt it"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("problem detail missing %q:\n%s", want, out)
 		}
 	}
 	gone := registry.Entry{Path: "/v/gone", Error: "not found", Reason: registry.ReasonMissing}
-	if out := strings.Join(detailLines(gone, time.Now()), "\n"); !strings.Contains(out, "press e then r to forget it") {
+	if out := strings.Join(detailLines(gone), "\n"); !strings.Contains(out, "press e then r to forget it") {
 		t.Errorf("missing folder detail:\n%s", out)
 	}
 }

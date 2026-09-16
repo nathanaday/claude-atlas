@@ -239,7 +239,7 @@ func (b *board) render(it *Item, selected bool) {
 		b.lines = append(b.lines, line)
 	}
 	if b.expanded[e.Path] {
-		for _, line := range detailLines(e, now()) {
+		for _, line := range detailLines(e) {
 			b.lines = append(b.lines, "   "+line)
 		}
 	}

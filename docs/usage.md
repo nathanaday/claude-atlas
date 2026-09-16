@@ -321,9 +321,10 @@ lists every knowledge base with how many projects mount it; Enter turns the
 count into one line per project. The arrow always points at the knowledge
 base. The Tasks tab is every project's open tasks. A Problems tab appears when
 the scan found a vault it could not read. Enter on any vault expands it in
-place: path, id, mode, tags or scope and grants, repositories, what the last
-refresh derived, open tasks, and signals. One sentence under the tab bar says
-what the tab holds.
+place: path, created, a knowledge base's scope, access, and grants, the vault
+check, the last touch, open threads, open tasks, and a project's repositories
+with their remotes; `show NAME` prints the rest. One sentence under the tab
+bar says what the tab holds.
 
 | Key | What it does |
 |---|---|
