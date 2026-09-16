@@ -30,15 +30,25 @@ func Available() bool {
 var ErrNotRepo = errors.New("not a git repository")
 
 func (r Repo) cmd(args ...string) *exec.Cmd {
+	return r.cmdEnv(nil, args...)
+}
+
+// cmdEnv is cmd with more environment variables, for a command that needs its own index.
+func (r Repo) cmdEnv(env []string, args ...string) *exec.Cmd {
 	full := append([]string{"-c", "core.quotePath=false", "-c", "commit.gpgsign=false"}, args...)
 	cmd := exec.Command("git", full...)
 	cmd.Dir = r.Dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(cmd.Env, env...)
 	return cmd
 }
 
 func (r Repo) run(args ...string) (string, error) {
-	cmd := r.cmd(args...)
+	return r.runEnv(nil, args...)
+}
+
+func (r Repo) runEnv(env []string, args ...string) (string, error) {
+	cmd := r.cmdEnv(env, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -234,16 +244,164 @@ func (r Repo) identityArgs() []string {
 
 // Commit records the index with message and returns the new commit. It falls back to a
 // local identity when the user has none configured, and skips commit hooks. With a
-// prefix, it commits only the working tree under it and leaves the index outside alone.
+// prefix, it records the paths staged under it and leaves everything else alone.
 func (r Repo) Commit(message string) (string, error) {
-	args := append(r.identityArgs(), "commit", "-q", "--no-verify", "-m", message)
 	if r.Prefix != "" {
-		args = append(args, "--", r.Prefix)
+		return r.commitPrefix(message)
 	}
+	args := append(r.identityArgs(), "commit", "-q", "--no-verify", "-m", message)
 	if _, err := r.run(args...); err != nil {
 		return "", err
 	}
 	return r.Head()
+}
+
+// commitPrefix records the paths staged under the prefix and nothing else.
+// `git commit -- <prefix>` cannot do that: a pathspec puts git in --only mode, which
+// records the working tree of every tracked file under the prefix, so a page the user
+// changed by hand and never staged would land in the commit. The tree is built instead in
+// a temporary index that starts at HEAD, and plumbing writes the commit, which runs no
+// hooks.
+func (r Repo) commitPrefix(message string) (string, error) {
+	hasHead := r.hasCommit()
+	paths, err := r.stagedPaths(hasHead)
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", fmt.Errorf("nothing staged under %s", r.Prefix)
+	}
+	head := ""
+	if hasHead {
+		if head, err = r.Head(); err != nil {
+			return "", err
+		}
+	}
+	dir, err := os.MkdirTemp("", "claude-atlas-index")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(dir)
+	index := []string{"GIT_INDEX_FILE=" + filepath.Join(dir, "index")}
+	read := []string{"read-tree", "--empty"}
+	if hasHead {
+		read = []string{"read-tree", head}
+	}
+	if _, err := r.runEnv(index, read...); err != nil {
+		return "", err
+	}
+	if err := r.updateIndex(index, paths); err != nil {
+		return "", err
+	}
+	tree, err := r.runEnv(index, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	args := append(r.identityArgs(), "commit-tree", strings.TrimSpace(tree))
+	if hasHead {
+		args = append(args, "-p", head)
+	}
+	out, err := r.run(append(args, "-m", message)...)
+	if err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(out)
+	subject, _, _ := strings.Cut(message, "\n")
+	move := []string{"update-ref", "-m", "commit: " + subject, "HEAD", sha}
+	if hasHead {
+		move = append(move, head)
+	}
+	if _, err := r.run(move...); err != nil {
+		return "", err
+	}
+	// The real index still holds what the caller staged. Reading those paths again makes
+	// its entries match the new HEAD, so they read as clean.
+	if err := r.updateIndex(nil, paths); err != nil {
+		return "", err
+	}
+	return sha, nil
+}
+
+// stagedPaths lists the paths staged under the prefix, relative to Dir, with deletions.
+// Renames are not detected, so a rename gives both the old path and the new one.
+func (r Repo) stagedPaths(hasHead bool) ([]string, error) {
+	args := []string{"diff", "--cached", "--name-only", "-z", "--no-renames", "--", r.Prefix}
+	if !hasHead {
+		args = []string{"ls-files", "-z", "--", r.Prefix}
+	}
+	out, err := r.run(args...)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
+// updateIndex reads the given paths from the working tree into an index, adding the new
+// ones and removing the ones that are gone. The paths go in on stdin, so their number and
+// their characters do not matter.
+func (r Repo) updateIndex(env, paths []string) error {
+	cmd := r.cmdEnv(env, "update-index", "--add", "--remove", "-z", "--stdin")
+	cmd.Stdin = strings.NewReader(strings.Join(paths, "\x00") + "\x00")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git update-index: %s", strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// unfinished are the files git leaves behind while an operation of several steps is still
+// open, with the name of that operation.
+var unfinished = []struct{ path, what string }{
+	{"MERGE_HEAD", "merge"},
+	{"rebase-merge", "rebase"},
+	{"rebase-apply", "rebase"},
+	{"CHERRY_PICK_HEAD", "cherry-pick"},
+	{"REVERT_HEAD", "revert"},
+}
+
+// InProgress names the operation the repository is in the middle of: merge, rebase,
+// cherry-pick, or revert. It is "" when there is none.
+func (r Repo) InProgress() string {
+	args := []string{"rev-parse"}
+	for _, u := range unfinished {
+		args = append(args, "--git-path", u.path)
+	}
+	out, err := r.run(args...)
+	if err != nil {
+		return ""
+	}
+	for i, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if i >= len(unfinished) {
+			break
+		}
+		p := strings.TrimSpace(line)
+		if p == "" {
+			continue
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(r.Dir, p)
+		}
+		if _, err := os.Lstat(p); err == nil {
+			return unfinished[i].what
+		}
+	}
+	return ""
+}
+
+// CheckIdle refuses the write while the repository is in the middle of another operation.
+// A commit made then joins that operation's work, or an abort throws it away.
+func (r Repo) CheckIdle() error {
+	if what := r.InProgress(); what != "" {
+		return fmt.Errorf("%s is in the middle of a %s; finish or abort it first", r.Dir, what)
+	}
+	return nil
 }
 
 // RestoreFromHead puts the given tracked paths back to their HEAD content.
@@ -274,7 +432,8 @@ type Commit struct {
 	Trailers map[string]string
 }
 
-// Log returns the newest n commits, or all of them when n is 0.
+// Log returns the newest n commits, or all of them when n is 0. Git counts n after it
+// filters by path, so with a prefix Log(1) is the newest commit that touched the prefix.
 func (r Repo) Log(n int) ([]Commit, error) {
 	if !r.hasCommit() {
 		return nil, nil
@@ -347,6 +506,13 @@ func (r Repo) RevertNoCommit(sha string) error {
 		return err
 	}
 	return nil
+}
+
+// ClearRevert drops the state a revert leaves behind once its commit is made. A commit
+// written by plumbing does not clear REVERT_HEAD, so the next write would find a revert
+// in progress.
+func (r Repo) ClearRevert() {
+	r.run("revert", "--quit")
 }
 
 // undoRevert puts the tree back after a revert failed. With a prefix it restores only the

@@ -328,6 +328,9 @@ func fileState(v *vault.Vault, rel string) (string, int, bool, error) {
 
 // Prepare validates a request against the vault's current state and returns a plan.
 func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
+	if err := v.Repo().CheckIdle(); err != nil {
+		return nil, err
+	}
 	if !validKind(req.Kind) {
 		return nil, fmt.Errorf("unknown operation kind %q", req.Kind)
 	}
@@ -684,6 +687,9 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 	if err := requireHistory(repo); err != nil {
 		return nil, err
 	}
+	if err := repo.CheckIdle(); err != nil {
+		return nil, err
+	}
 	if _, err := recoverLocked(v); err != nil {
 		return nil, err
 	}
@@ -983,6 +989,9 @@ func UndoOperation(v *vault.Vault, operationID string, now time.Time) (*Result, 
 	if err := requireHistory(repo); err != nil {
 		return nil, err
 	}
+	if err := repo.CheckIdle(); err != nil {
+		return nil, err
+	}
 	if _, err := recoverLocked(v); err != nil {
 		return nil, err
 	}
@@ -1010,6 +1019,7 @@ func UndoOperation(v *vault.Vault, operationID string, now time.Time) (*Result, 
 	if err != nil {
 		return nil, err
 	}
+	repo.ClearRevert()
 	res.ChangedPaths, _ = repo.ChangedPaths(res.Commit)
 	sort.Strings(res.ChangedPaths)
 	return res, nil
@@ -1035,13 +1045,15 @@ func Inspect(v *vault.Vault) (*Status, error) {
 	if !st.HasHistory {
 		return st, nil
 	}
-	st.Head, _ = repo.Head()
 	entries, err := repo.Status()
 	if err != nil {
 		return nil, err
 	}
 	st.Dirty = len(entries)
+	// The head is the newest commit that touched the vault. Inside a repository that is not
+	// the repository's own head, which the code moves on without the vault.
 	if commits, err := repo.Log(1); err == nil && len(commits) == 1 {
+		st.Head = commits[0].SHA
 		st.LastCommit = commits[0].Date.Format("2006-01-02")
 		st.LastSubject = commits[0].Subject
 	}

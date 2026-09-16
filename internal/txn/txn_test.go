@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -432,6 +433,73 @@ func TestAConflictingUndoInsideARepositoryLeavesTheCodeAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(host.Dir, ".git", "REVERT_HEAD")); err == nil {
 		t.Fatal("a failed revert must leave no state behind")
+	}
+}
+
+// TestTheEngineWaitsOutAMergeInTheHost covers a conflicted merge in the code repository.
+// A commit made then would join the merge, and `git merge --abort` would throw the
+// operation away with it.
+func TestTheEngineWaitsOutAMergeInTheHost(t *testing.T) {
+	v, host := inRepoVault(t)
+	git := func(args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = host.Dir
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	code := func(text string) {
+		os.WriteFile(filepath.Join(host.Dir, "main.go"), []byte(text), 0o644)
+		if out, err := git("commit", "-q", "-a", "-m", "code"); err != nil {
+			t.Fatalf("commit: %s %v", out, err)
+		}
+	}
+	if out, err := git("checkout", "-q", "-b", "other"); err != nil {
+		t.Fatalf("branch: %s %v", out, err)
+	}
+	code("package main // other\n")
+	if out, err := git("checkout", "-q", "main"); err != nil {
+		t.Fatalf("checkout: %s %v", out, err)
+	}
+	code("package main // main\n")
+	conflict := func() {
+		t.Helper()
+		if out, err := git("merge", "other"); err == nil {
+			t.Fatalf("the merge must conflict: %s", out)
+		}
+		if got := host.InProgress(); got != "merge" {
+			t.Fatalf("InProgress %q", got)
+		}
+	}
+	abort := func() {
+		t.Helper()
+		if out, err := git("merge", "--abort"); err != nil {
+			t.Fatalf("merge --abort: %s %v", out, err)
+		}
+	}
+
+	req := Request{Kind: Save, Summary: "add A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: mkpage("A", "# A\n\none\n")}}}
+	conflict()
+	if _, err := Prepare(v, req, now); err == nil || !strings.Contains(err.Error(), "in the middle of a merge") {
+		t.Fatalf("plan during a merge: %v", err)
+	}
+	abort()
+	plan, err := Prepare(v, req, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict()
+	if _, err := Apply(v, plan, now); err == nil || !strings.Contains(err.Error(), "in the middle of a merge") {
+		t.Fatalf("apply during a merge: %v", err)
+	}
+	if _, err := os.Stat(v.Path("wiki/concepts/A.md")); err == nil {
+		t.Fatal("a refused apply must write nothing")
+	}
+	abort()
+	if _, err := Apply(v, plan, now); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, v, "wiki/concepts/A.md") != string(mkpage("A", "# A\n\none\n")) {
+		t.Fatal("the page after the merge is finished")
 	}
 }
 

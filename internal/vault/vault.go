@@ -533,6 +533,9 @@ func InitIn(repoRoot string, opts Options, now time.Time) (*InitResult, error) {
 	if whole.Ignored(InRepoDir + "/") {
 		return nil, fmt.Errorf("%s ignores %s/; remove that rule from .gitignore first", host, InRepoDir)
 	}
+	if outer := FindAbove(host); outer != "" {
+		return nil, fmt.Errorf("%s is inside the vault %s; a vault does not go inside another", host, outer)
+	}
 	repo := gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
 	if strings.TrimSpace(opts.Name) == "" {
 		opts.Name = filepath.Base(host)
@@ -768,6 +771,9 @@ func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 	}
 	res := &UpgradeResult{}
 	repo := v.Repo()
+	if err := repo.CheckIdle(); err != nil {
+		return res, err
+	}
 	if v.Config.Kind == Project {
 		if res.Moved, err = moveLegacy(repo, abs); err != nil {
 			return res, err
@@ -866,6 +872,9 @@ func UpdateConfig(root, summary string, now time.Time, change func(*Config) erro
 	defer unlock()
 	v, err := Open(root)
 	if err != nil {
+		return err
+	}
+	if err := v.Repo().CheckIdle(); err != nil {
 		return err
 	}
 	cfg := v.Config

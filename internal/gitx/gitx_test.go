@@ -88,8 +88,15 @@ func TestRestoreAndRevert(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(r.Dir, "wiki/a.md")); string(data) != "one" {
 		t.Fatalf("revert gave %q", data)
 	}
+	if r.InProgress() != "revert" {
+		t.Fatalf("a revert is open: %q", r.InProgress())
+	}
 	if _, err := r.Commit("undo"); err != nil {
 		t.Fatal(err)
+	}
+	r.ClearRevert()
+	if r.InProgress() != "" || r.CheckIdle() != nil {
+		t.Fatalf("the revert is finished: %q", r.InProgress())
 	}
 	shown, err := r.ShowFile(first, "wiki/a.md")
 	if err != nil || string(shown) != "one" {
@@ -208,6 +215,97 @@ func TestPrefixScopesEveryCommand(t *testing.T) {
 	}
 	if dirty, _ := r.Dirty(); dirty {
 		t.Fatal("the vault is clean")
+	}
+}
+
+// TestAPrefixedCommitRecordsOnlyWhatWasStaged covers git's --only mode: `git commit --
+// atlas/` would record every tracked file under the prefix, so a page the user changed by
+// hand and never staged would land in the commit.
+func TestAPrefixedCommitRecordsOnlyWhatWasStaged(t *testing.T) {
+	whole := repo(t)
+	scoped := Repo{Dir: whole.Dir, Prefix: "atlas/"}
+	write(t, whole, "src/x.go", "package main\n")
+	write(t, whole, "atlas/a.md", "one\n")
+	write(t, whole, "atlas/hot.md", "hot\n")
+	write(t, whole, "atlas/gone.md", "gone\n")
+	if err := whole.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := whole.Commit("base"); err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, whole, "atlas/a.md", "two\n")
+	write(t, whole, "atlas/new.md", "new\n")
+	os.Remove(filepath.Join(whole.Dir, "atlas", "gone.md"))
+	// The user is typing in Obsidian, and a change of the code waits in the index.
+	write(t, whole, "atlas/hot.md", "half a sentence\n")
+	write(t, whole, "src/x.go", "package main // staged\n")
+	if err := whole.Add("src/x.go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := scoped.Add("a.md", "new.md", "gone.md"); err != nil {
+		t.Fatal(err)
+	}
+
+	sha, err := scoped.Commit("vault")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := scoped.ChangedPaths(sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(changed)
+	if strings.Join(changed, ",") != "a.md,gone.md,new.md" {
+		t.Fatalf("the commit recorded %v", changed)
+	}
+	if data, err := scoped.ShowFile("HEAD", "hot.md"); err != nil || string(data) != "hot\n" {
+		t.Fatalf("the hand edit must stay out of the commit: %q %v", data, err)
+	}
+	var codes []string
+	entries, err := whole.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		codes = append(codes, e.Code+" "+e.Path)
+	}
+	sort.Strings(codes)
+	if strings.Join(codes, ",") != " M atlas/hot.md,M  src/x.go" {
+		t.Fatalf("after the commit: %v", codes)
+	}
+	if _, err := scoped.Commit("nothing staged"); err == nil || !strings.Contains(err.Error(), "nothing staged") {
+		t.Fatalf("a commit with nothing staged: %v", err)
+	}
+}
+
+// TestAPrefixedCommitStartsAHistory covers the first commit, when there is no HEAD to
+// build the tree on.
+func TestAPrefixedCommitStartsAHistory(t *testing.T) {
+	whole := repo(t)
+	scoped := Repo{Dir: whole.Dir, Prefix: "atlas/"}
+	write(t, whole, "src/x.go", "package main\n")
+	write(t, whole, "atlas/a.md", "one\n")
+	if err := scoped.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := scoped.Commit("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, _ := scoped.ChangedPaths(sha)
+	if strings.Join(changed, ",") != "a.md" {
+		t.Fatalf("the first commit recorded %v", changed)
+	}
+	if head, err := whole.Head(); err != nil || head != sha {
+		t.Fatalf("head %q %v", head, err)
+	}
+	if ref, err := whole.run("symbolic-ref", "HEAD"); err != nil || strings.TrimSpace(ref) != "refs/heads/main" {
+		t.Fatalf("the branch %q %v", ref, err)
+	}
+	if dirty, _ := scoped.Dirty(); dirty {
+		t.Fatal("the vault is clean after its first commit")
 	}
 }
 

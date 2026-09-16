@@ -148,6 +148,17 @@ func TestInitInRefusals(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ignoring, InRepoDir)); err == nil {
 		t.Fatal("a refusal must write nothing")
 	}
+	// A repository inside a vault: the project would sit in two vaults at once.
+	outer := filepath.Join(t.TempDir(), "outer")
+	if _, err := Init(outer, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	inner := filepath.Join(outer, "code")
+	os.MkdirAll(inner, 0o755)
+	gitx.Repo{Dir: inner}.Init()
+	if _, err := InitIn(inner, Options{Kind: Project}, now); err == nil || !strings.Contains(err.Error(), "inside the vault") {
+		t.Fatalf("a repository inside a vault: %v", err)
+	}
 }
 
 func TestIdentityFile(t *testing.T) {
@@ -848,5 +859,61 @@ func TestUpdateConfigCommitsOnceAndValidates(t *testing.T) {
 	}
 	if !ValidAccess("guarded", true) || ValidAccess("read", true) || !ValidAccess("read", false) || ValidAccess("open", false) {
 		t.Fatal("ValidAccess")
+	}
+}
+
+// TestUpdateConfigInsideARepositoryCommitsOnlyTheIdentityFile covers the vault's second
+// rule: an edit of the project's own facts must leave what the user is typing alone, in a
+// repository as in a vault of its own.
+func TestUpdateConfigInsideARepositoryCommitsOnlyTheIdentityFile(t *testing.T) {
+	needGit(t)
+	repoRoot := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(repoRoot, 0o755)
+	host := gitx.Repo{Dir: repoRoot}
+	if err := host.Init(); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(repoRoot, "main.go"), []byte("package main\n"), 0o644)
+	if err := host.AddAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Commit("code"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InitIn(repoRoot, Options{Kind: Project, Name: "Notes"}, now); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(repoRoot, InRepoDir)
+	hot := filepath.Join(root, filepath.FromSlash(HotPage))
+	if err := os.WriteFile(hot, []byte("# hot\n\nhalf a sentence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(repoRoot, "main.go"), []byte("package main // typing\n"), 0o644)
+
+	if err := UpdateConfig(root, "edit name", now, func(c *Config) error { c.Name = "Renamed"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	v, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := v.Repo()
+	commits, err := repo.Log(1)
+	if err != nil || len(commits) != 1 || commits[0].Subject != "setup: edit name" {
+		t.Fatalf("commit %+v %v", commits, err)
+	}
+	changed, err := repo.ChangedPaths(commits[0].SHA)
+	if err != nil || len(changed) != 1 || changed[0] != Marker {
+		t.Fatalf("the setup commit recorded %v %v", changed, err)
+	}
+	st, err := repo.Status()
+	if err != nil || len(st) != 1 || st[0].Path != HotPage || st[0].Code != " M" {
+		t.Fatalf("the hand edit must still be uncommitted: %+v %v", st, err)
+	}
+	if data, _ := os.ReadFile(hot); string(data) != "# hot\n\nhalf a sentence\n" {
+		t.Fatalf("the page on disk: %q", data)
+	}
+	if out, _ := host.Status(); len(out) != 2 {
+		t.Fatalf("the code must stay as the user left it: %+v", out)
 	}
 }
