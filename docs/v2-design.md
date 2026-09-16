@@ -481,6 +481,40 @@ everything. On this machine:
 3. `adopt --as knowledge` or `--as project` for the rest, one at a time.
 4. Delete `~/Documents/Atlas`. `setup` writes the v2 config.
 
+### The end-to-end check, 2026-09-16
+
+The check ran at the end of phase 6, before any of the migration above,
+against the 1.0.0 build on a temp atlas home and a temp vaults directory.
+`setup` is non-interactive with `-y`, `--vaults-dir`, `--first-vault`, and
+`--no-plugin`. `new-knowledge ai-ml`, `new-project cs566`, `mount`,
+`edit --access guarded`, and `grant --write` behaved as `docs/usage.md` says:
+effective access is the lesser of the mount and the grant, and `show`
+reported each step. One ingest ran through `claude-atlas mcp` over stdio.
+`status` named the mount. `capture` with the knowledge base as its `vault`
+took a file out of the project's inbox. `plan` and `apply` wrote a source
+page and a concept page in the knowledge base, in one commit that also
+carried the log and the source ledger. `lint` in the project found no wanted
+page for the link across the mount. `stub` with a `target` landed a page at
+`kb/ai-ml/concepts/Gradient Descent.md` and committed it in the knowledge
+base. `route` for the concept's title returned the match under `mounts[0]`.
+`refresh` recreated a deleted `kb/` symlink and `doctor` exited 0.
+`new-project notes --in` put a project inside a scratch repository; `show`
+and `repos` named the host, and a `save` operation committed only `atlas/`
+paths while the host's own uncommitted work stayed untouched. `claude -p`
+inside the project with `--plugin-dir` loaded the plugin, ran the `wiki-lint`
+skill, and reported the counts.
+
+The check found one defect. A session reaches the vault by the path its shell
+resolved, and on macOS that turns `/tmp` into `/private/tmp`.
+`registry.Index.ByPath` compared path strings, so the entry the scan recorded
+no longer matched: the SessionStart hook printed no mount line, and the
+`status` and `route` tools saw a project with no mounts. `ByPath` now falls
+back to comparing symlink-resolved paths, with a test for both directions.
+Every vault under a symlinked parent was affected, not only one under `/tmp`.
+
+The Obsidian follow-symlink check is still not run; it stays in "Left for
+later".
+
 ## Phases
 
 The stubs work (`superpowers/plans/2026-09-14-stubs-status.md`) landed on
@@ -489,7 +523,7 @@ atlas counts move to the registry in phase 2; the mount rule, the near match
 across mounts, and the stub `target` go in phase 3, which also wrote the
 mounts and access documentation; the session-start counts line, the skills,
 and the final review of the deferred findings go in phase 6; the end-to-end
-check runs in phase 7 against a project with a mount.
+check ran at the end of phase 6 against a project with a mount.
 
 1. Engine: the v2 identity file with id, kind, and name; templates by kind;
    operation kinds by vault kind; `new-knowledge`, `new-project`,
