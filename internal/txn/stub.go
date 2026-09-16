@@ -125,7 +125,7 @@ func candidatesFrom(v *vault.Vault, report *lint.Report, withEmpty bool) (*stubS
 			continue
 		}
 		title := vault.PageTitle(s.Path)
-		key := strings.ToLower(title)
+		key := strings.ToLower(strings.TrimSpace(title))
 		if _, taken := set.refused[key]; taken {
 			continue
 		}
