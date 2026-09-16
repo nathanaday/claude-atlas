@@ -190,7 +190,7 @@ session in one project does not write a knowledge base by accident.
   mount. `plan` refuses a write into a knowledge base the project may not
   write. The `guard` hook denies Write and Edit under `kb/`, and under every
   vault's `wiki/`, `.raw/`, and identity file, as today.
-- `claude-atlas grant KB PROJECT --write|--read` and `revoke KB PROJECT` edit
+- `claude-atlas grant KB PROJECT --write|--read` and `revoke KB PROJECT|ID` edit
   `grants`. There is no block list: `guarded` with an empty list is read-only
   for every project.
 
