@@ -21,8 +21,7 @@ one command, so scripts and muscle memory both work:
 | `l` repositories on a project: `n` new, `a` link, `e` edit, `u` unlink | `new-repo NAME REPO`, `link NAME PATH`, `edit-repo NAME REPO`, `unlink NAME REPO`, `repos [NAME]` |
 | `e` edit a vault, `s` save | `edit NAME --…` |
 | `e` then `r` forget | `remove NAME` |
-| `m` mount, `M` unmount (phase 4) | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME` |
-| `g` grant, `G` revoke (phase 4) | `grant KB PROJECT --write\|--read`, `revoke KB PROJECT` |
+| `m` mounts: on a project `a` mount, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant by name | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
 | `R` refresh | `refresh` |
 | Space folds a folder, `-` and `+` fold and unfold all | — |
 
@@ -303,7 +302,7 @@ deeper folder opens it and Esc comes back.
 | `i` `t` `l` | on a project: ingest sources, tasks, repositories |
 | `T` | every project's open tasks on one board |
 | `e` | edit the vault; `s` saves, `r` forgets it |
-| `m` `M` `g` `G` (phase 4) | mount, unmount, grant, revoke |
+| `m` | mounts: mount and unmount on a project; grants on a knowledge base |
 | `R` | refresh in the background |
 | `q` | quit |
 
@@ -442,6 +441,12 @@ other project reads. The access a project gets is the lesser of the mount's
 own access and the grant: a write mount on a guarded knowledge base with no
 grant still reads only.
 
+In `view`, `m` on a vault opens its mounts screen: on a project, `a` mounts a
+knowledge base and `u` unmounts one; on a knowledge base, `w` grants write,
+`r` grants read, `x` revokes a grant, and `a` grants a project by name.
+When a grant's project is gone, `revoke KB PROJECT` cannot find it by name;
+`revoke KB ID` drops it by its id instead.
+
 A `[[link]]` in a project page resolves to a knowledge base page through the
 mount, in Obsidian, in the graph, in backlinks, and in lint.
 
@@ -477,7 +482,10 @@ claude-atlas version
 
 Setup shows its plan and asks before it acts: the atlas home, the plugin in
 Claude Code, and your first project. `doctor` checks git, Claude Code, the
-plugin's version against the binary's, and every vault the scan found.
+plugin's version against the binary's, and every vault the scan found. It also
+checks a knowledge base's grants: a grant whose project is gone fails, and a
+grant on an already open knowledge base is a note, since the grant applies
+only once the knowledge base turns guarded.
 
 ## Scripts
 

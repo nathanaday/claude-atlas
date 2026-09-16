@@ -11,7 +11,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 
 | Thing | Location |
 |---|---|
-| v2: knowledge bases, projects, mounts, access (phases 1–3 built: kinds, the registry, mounts) | `docs/v2-design.md` |
+| v2: knowledge bases, projects, mounts, access (phases 1–4 built: kinds, the registry, mounts, the view's mount keys) | `docs/v2-design.md` |
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side before v2 (superseded by `v2-design.md`) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |

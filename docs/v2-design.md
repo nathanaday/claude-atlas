@@ -1,9 +1,10 @@
 # Atlas v2: knowledge bases and projects
 
-Status: designed 2026-09-14. Phases 1–3 are built (kinds; the registry;
-mounts and access). Phases 4–7 are not. This is a new version of the
-project. Existing vaults migrate by hand; nothing here keeps compatibility
-with the v1 identity file, the v1 layout, or the atlas vault.
+Status: designed 2026-09-14. Phases 1–4 are built (kinds; the registry;
+mounts and access; the mount and grant keys in `view`). Phases 5–7 are not.
+This is a new version of the project. Existing vaults migrate by hand;
+nothing here keeps compatibility with the v1 identity file, the v1 layout,
+or the atlas vault.
 `core-design.md` still describes the engine. `atlas-design.md` and the atlas
 sections of `tasks-design.md` are superseded by this document.
 
@@ -417,8 +418,7 @@ tasks, and the signals. Every key is one command:
 | `t` tasks, `p` plant, `c` continue; `T` every project's tasks | `tasks`, `plant`, `open-claude --task` |
 | `o` Obsidian, `c` Claude Code, `i` ingest | `open-vault`, `open-claude`, `ingest` |
 | `R` refresh | `refresh` |
-| `m` mount, `u` unmount (phase 4) | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME` |
-| `g` grant, `G` revoke (phase 4) | `grant KB PROJECT --write\|--read`, `revoke KB PROJECT` |
+| `m` mounts: on a project `a` mount, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant by name | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
 
 Removed: `relate`, `unrelate`, `edit-link`, the `related` field, the category
 move, `Overview.md`, `Tree.md`, `categories/`, `repos/` pages, `About.md`,

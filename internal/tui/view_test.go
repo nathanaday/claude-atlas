@@ -42,6 +42,8 @@ func sample() []Item {
 	// p3 mounts a knowledge base and works in one repository.
 	items[1].Entry.Mounts = []registry.Mount{{ID: "id-ai-ml", Name: "ai-ml", Access: vault.AccessWrite, Effective: vault.AccessWrite, Path: "/v/ai-ml/wiki"}}
 	items[1].Entry.Repos = []registry.Repo{{Name: "atlas", Path: "/code/atlas", Remote: "git@example.com:atlas.git", Changes: "pr"}}
+	// papers has a stale grant: the project that granted it is gone.
+	items[3].Entry.Grants = []registry.Grant{{ID: "gone-0000", Name: "gone-0000", Access: vault.AccessRead, Error: "no project with id gone-0000"}}
 	// One vault the scan found but could not read.
 	items = append(items, Item{Entry: registry.Entry{Path: "/v/old-notes", Error: v1Error}})
 	return items
@@ -277,7 +279,7 @@ func TestDetailShowsEverything(t *testing.T) {
 	t.Logf("\n%s", out)
 	for _, want := range []string{"p3", "projects/itl/p3", "🔥 hot", "created 2026-09-01",
 		"Kind", "project", "Id", "id-p3", "Path", "/v/p3", "Mode", "generic", "Tags", "itl",
-		"Mounts", "ai-ml", "write", "Repositories", "atlas", "/code/atlas", "changes: pr", "git@example.com:atlas.git",
+		"Mounts", "ai-ml", "write · /v/ai-ml/wiki · symlink missing", "Repositories", "atlas", "/code/atlas", "changes: pr", "git@example.com:atlas.git",
 		"Vault check", "ok", "Heat", "Pages", "4", "Open threads", "- thread", "Refreshed", "Esc back"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
@@ -296,6 +298,14 @@ func TestDetailShowsEverything(t *testing.T) {
 	}
 	if strings.Contains(out, "Tags") || strings.Contains(out, "i ingest") {
 		t.Errorf("a knowledge base has no tags and no ingest:\n%s", out)
+	}
+	v = pressV(v, tea.KeyEsc)
+	v = pressV(findVault(t, v, "papers"), tea.KeyEnter)
+	out = v.View()
+	for _, want := range []string{"gone-0000", "no project with id", "gone-0000  read  no project with id gone-0000"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("papers detail missing %q:\n%s", want, out)
+		}
 	}
 }
 

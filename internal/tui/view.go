@@ -18,6 +18,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // Item is one vault in the view: what the scan found, with the state the last refresh
@@ -1209,7 +1210,11 @@ func (v view) viewDetail() string {
 		row("Scope", e.Scope)
 		row("Access", e.Access)
 		for _, g := range e.Grants {
-			row("Grant", g.Name+"  "+g.Access)
+			text := g.Name + "  " + g.Access
+			if g.Error != "" {
+				text += "  " + g.Error
+			}
+			row("Grant", text)
 		}
 		for _, m := range e.MountedBy {
 			row("Mounted by", m.Name+"  "+m.Access)
@@ -1220,11 +1225,20 @@ func (v view) viewDetail() string {
 	if len(e.Mounts) > 0 {
 		b.WriteString("\n  " + catSt.Render("Mounts") + "\n")
 		for _, m := range e.Mounts {
-			detail := dim.Render(m.Effective + " · " + home.Display(m.Path))
-			if m.Error != "" {
-				detail = errSt.Render(m.Error)
+			text := m.Effective + " · " + home.Display(m.Path)
+			style := dim
+			switch state := vaults.MountState(e, m); {
+			case m.Error != "":
+				text = m.Error
+				style = errSt
+			case state == vaults.MountMissing:
+				text += " · symlink missing"
+				style = errSt
+			case state == vaults.MountWrong:
+				text += " · symlink points elsewhere"
+				style = errSt
 			}
-			fmt.Fprintf(&b, "    %-24s %s\n", m.Name, detail)
+			fmt.Fprintf(&b, "    %-24s %s\n", m.Name, style.Render(text))
 		}
 	}
 	if len(e.Repos) > 0 {
