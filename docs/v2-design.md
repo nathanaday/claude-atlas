@@ -330,7 +330,11 @@ findings come from its own lint.
   or `scope` is a finding.
 - `mount_errors` lists four states under `kb/`: an entry that is not a symlink,
   a symlink that points at nothing, a target that is not a directory, and a
-  target that is a directory other than a knowledge base's `wiki/`.
+  target that is a directory other than a knowledge base's `wiki/`. The CLI's
+  `lint` reads the symlinks and reports them; the MCP `lint` tool passes the
+  registry's mounts instead, so it resolves links even before `refresh` has
+  recreated a link, and it reports no `mount_errors`. `doctor`, `refresh`, and
+  the session hook name a broken link.
 
 ## A project inside a repository
 
