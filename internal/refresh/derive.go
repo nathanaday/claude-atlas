@@ -196,6 +196,14 @@ func Signals(e registry.Entry, today time.Time) []string {
 			notes = append(notes, fmt.Sprintf("repo %s: %s", r.Name, fact.Error))
 		}
 	}
+	if e.Kind == vault.Knowledge {
+		for _, g := range e.Grants {
+			if g.Error == "" {
+				continue
+			}
+			notes = append(notes, fmt.Sprintf("grant %s (%s): %s; run `claude-atlas revoke %s %s`", g.Name, g.ID, g.Error, e.Name, g.ID))
+		}
+	}
 	if state.Tasks != nil {
 		var blocked, stale []string
 		for _, t := range state.Tasks.Open {

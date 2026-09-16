@@ -65,7 +65,7 @@ Knowledge bases a project reaches (a mount is a folder kb/NAME inside the projec
   mount PROJECT KB          mount a knowledge base in a project; --read mounts it read-only, --as NAME renames it
   unmount PROJECT KB|NAME   drop that mount; the knowledge base stays
   grant KB PROJECT          let one project into a guarded knowledge base: --read or --write
-  revoke KB PROJECT         take that grant back
+  revoke KB PROJECT|ID      take that grant back, by project or by a stale grant's id
 
 Repositories (a project's deliverables; memory stays in the vault):
   link NAME PATH|URL        link a repository to a project, or clone one from a URL; --init makes a plain folder one first
@@ -1289,7 +1289,11 @@ func (e *env) show(args []string) (int, error) {
 		row("Scope", entry.Scope)
 		row("Access", entry.Access)
 		for _, g := range entry.Grants {
-			row("Grant", g.Name+"  "+g.Access)
+			val := g.Name + "  " + g.Access
+			if g.Error != "" {
+				val += "  " + g.Error
+			}
+			row("Grant", val)
 		}
 		for _, m := range entry.MountedBy {
 			row("Mounted by", m.Name+"  "+m.Access)
@@ -1599,7 +1603,7 @@ func (e *env) grant(args []string) (int, error) {
 
 func (e *env) revoke(args []string) (int, error) {
 	if len(args) != 2 {
-		return 2, errors.New("usage: claude-atlas revoke KB PROJECT")
+		return 2, errors.New("usage: claude-atlas revoke KB PROJECT|ID")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
@@ -1609,18 +1613,32 @@ func (e *env) revoke(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	project, err := e.entry(cfg, args[1])
-	if err != nil {
-		return 1, err
-	}
-	if err := vaults.Revoke(kb, project, time.Now()); err != nil {
-		return 1, err
+	id := args[1]
+	if project, perr := e.entry(cfg, args[1]); perr == nil {
+		if err := vaults.Revoke(kb, project, time.Now()); err != nil {
+			return 1, err
+		}
+		id = project.ID
+	} else {
+		found := false
+		for _, g := range kb.Grants {
+			if g.ID == args[1] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 1, perr
+		}
+		if err := vaults.RevokeID(kb, args[1], time.Now()); err != nil {
+			return 1, err
+		}
 	}
 	entries, _, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
-	e.console.Step(console.OK, "revoked", fmt.Sprintf("%s on %s", project.Name, kb.Name))
+	e.console.Step(console.OK, "revoked", fmt.Sprintf("%s on %s", id, kb.Name))
 	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
@@ -2636,6 +2654,19 @@ func (e *env) doctor(args []string) (int, error) {
 			if r.Error != "" {
 				ok = false
 				c.Step(console.Fail, en.Name+" · "+r.Name, r.Error)
+			}
+		}
+		if en.Kind != vault.Knowledge {
+			continue
+		}
+		for _, g := range en.Grants {
+			if g.Error != "" {
+				ok = false
+				c.Step(console.Fail, en.Name+" · grant "+g.Name, g.Error+"; run `claude-atlas revoke "+en.Name+" "+g.ID+"`")
+				continue
+			}
+			if en.Access == vault.AccessOpen {
+				c.Step(console.Skip, en.Name+" · grant "+g.Name, en.Name+" is open; the grant applies when it is guarded")
 			}
 		}
 	}

@@ -303,6 +303,40 @@ func TestGrantAndRevoke(t *testing.T) {
 	}
 }
 
+func TestRevokeIDDropsAGrantWhoseProjectIsGone(t *testing.T) {
+	cfg, project, kb, _ := mountFixture(t)
+	if err := EditIdentity(kb, Edit{Access: strPtr(vault.AccessGuarded)}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.UpdateConfig(kb.Path, "grant gone-0000", identityNow, func(c *vault.Config) error {
+		c.Grants = append(c.Grants, vault.Grant{ID: "gone-0000", Name: "gone", Access: vault.AccessWrite})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kb = refreshEntry(t, cfg, kb.ID)
+
+	if err := RevokeID(kb, "gone-0000", identityNow); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(kb.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Grants) != 0 {
+		t.Fatalf("grants after revoke: %+v", v.Config.Grants)
+	}
+	kb = refreshEntry(t, cfg, kb.ID)
+
+	if err := RevokeID(kb, "gone-0000", identityNow); err == nil || !strings.Contains(err.Error(), "no grant") {
+		t.Fatalf("revoke again: %v", err)
+	}
+
+	if err := RevokeID(project, "gone-0000", identityNow); err == nil || !strings.Contains(err.Error(), "not a knowledge base") {
+		t.Fatalf("revoke on a project entry: %v", err)
+	}
+}
+
 func TestEnsureMountsRecreatesAndPrunes(t *testing.T) {
 	cfg, project, kb, kb2 := mountFixture(t)
 

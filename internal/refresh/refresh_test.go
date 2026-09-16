@@ -202,3 +202,16 @@ func TestSignalsNameAMissingSymlink(t *testing.T) {
 		t.Fatalf("a symlink that is right needs no signal: %v", got)
 	}
 }
+
+func TestSignalsNameAStaleGrant(t *testing.T) {
+	e := registry.Entry{
+		Kind:   vault.Knowledge,
+		Name:   "ai-ml",
+		Grants: []registry.Grant{{ID: "gone-0000", Name: "x", Access: "write", Error: "no project with id gone-0000"}},
+		State:  &registry.State{VaultOK: true},
+	}
+	got := strings.Join(Signals(e, time.Now()), "\n")
+	if !strings.Contains(got, "no project with id gone-0000") || !strings.Contains(got, "revoke") {
+		t.Fatalf("a stale grant:\n%s", got)
+	}
+}

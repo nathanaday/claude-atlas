@@ -205,34 +205,46 @@ func Grant(kb, project registry.Entry, access string, now time.Time) error {
 	})
 }
 
-// Revoke removes project's grant from kb.
-func Revoke(kb, project registry.Entry, now time.Time) error {
+// RevokeID removes kb's grant for projectID, whether or not the scan still holds that
+// project. It refuses a project entry as kb and an id kb grants nothing to.
+func RevokeID(kb registry.Entry, projectID string, now time.Time) error {
+	if kb.Kind != vault.Knowledge {
+		return fmt.Errorf("%s is not a knowledge base", kb.Name)
+	}
 	has := false
 	for _, g := range kb.Grants {
-		if g.ID == project.ID {
+		if g.ID == projectID {
 			has = true
 			break
 		}
 	}
 	if !has {
-		return fmt.Errorf("%s has no grant for %s", kb.Name, project.Name)
+		return fmt.Errorf("%s has no grant for %s", kb.Name, projectID)
 	}
-	return vault.UpdateConfig(kb.Path, "revoke "+project.Name, now, func(c *vault.Config) error {
+	return vault.UpdateConfig(kb.Path, "revoke "+projectID, now, func(c *vault.Config) error {
 		var keep []vault.Grant
 		removed := false
 		for _, g := range c.Grants {
-			if g.ID == project.ID {
+			if g.ID == projectID {
 				removed = true
 				continue
 			}
 			keep = append(keep, g)
 		}
 		if !removed {
-			return fmt.Errorf("%s has no grant for %s", kb.Name, project.Name)
+			return fmt.Errorf("%s has no grant for %s", kb.Name, projectID)
 		}
 		c.Grants = keep
 		return nil
 	})
+}
+
+// Revoke removes project's grant from kb.
+func Revoke(kb, project registry.Entry, now time.Time) error {
+	if project.Kind != vault.Project {
+		return fmt.Errorf("%s is not a project", project.Name)
+	}
+	return RevokeID(kb, project.ID, now)
 }
 
 // MountRepair is what one run of EnsureMounts did to a project's mount symlinks: Created

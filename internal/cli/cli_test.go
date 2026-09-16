@@ -402,6 +402,52 @@ func TestMountGrantAndRevokeCommands(t *testing.T) {
 	}
 }
 
+func TestDoctorAndRevokeSeeAStaleGrant(t *testing.T) {
+	h, vaults := setup(t)
+	if code := h.run("new-knowledge", "ai-ml"); code != 0 {
+		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
+	}
+	if code := h.run("edit", "ai-ml", "--access", "guarded"); code != 0 {
+		t.Fatalf("edit --access exit %d %s", code, h.err.String())
+	}
+	err := vault.UpdateConfig(filepath.Join(vaults, "knowledge", "ai-ml"), "grant gone-0000", time.Now(), func(c *vault.Config) error {
+		c.Grants = append(c.Grants, vault.Grant{ID: "gone-0000", Name: "gone", Access: vault.AccessWrite})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.run("doctor")
+	if !strings.Contains(h.out.String(), "no project with id gone-0000") || !strings.Contains(h.out.String(), "revoke ai-ml gone-0000") {
+		t.Fatalf("doctor should name the stale grant:\n%s", h.out.String())
+	}
+
+	if code := h.run("show", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "gone-0000") || !strings.Contains(h.out.String(), "no project") {
+		t.Fatalf("show should carry the stale grant: exit %d\n%s", code, h.out.String())
+	}
+
+	if code := h.run("revoke", "ai-ml", "gone-0000"); code != 0 || !strings.Contains(h.out.String(), "revoked") {
+		t.Fatalf("revoke by id: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+
+	h.run("doctor")
+	if strings.Contains(h.out.String(), "gone-0000") {
+		t.Fatalf("doctor should not still see the revoked grant:\n%s", h.out.String())
+	}
+
+	if code := h.run("edit", "ai-ml", "--access", "open"); code != 0 {
+		t.Fatalf("edit --access open: exit %d %s", code, h.err.String())
+	}
+	if code := h.run("grant", "ai-ml", "welcome", "--write"); code != 0 {
+		t.Fatalf("grant exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	h.run("doctor")
+	if !strings.Contains(h.out.String(), "is open; the grant applies when it is guarded") {
+		t.Fatalf("doctor should name a grant on an open knowledge base:\n%s", h.out.String())
+	}
+}
+
 // mountLineFor is the line `show` printed for one mount.
 func mountLineFor(out, name string) string {
 	for _, line := range strings.Split(out, "\n") {

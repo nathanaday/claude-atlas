@@ -40,6 +40,15 @@ type Ref struct {
 	Access string `json:"access,omitempty"` // the effective access, on a mount or a mounted-by
 }
 
+// Grant is what a knowledge base grants one project, resolved against the scan: Name is
+// the project's current name when the scan holds it, and Error says when it does not.
+type Grant struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Access string `json:"access"`
+	Error  string `json:"error,omitempty"`
+}
+
 // Mount is a project's mount resolved against the scan.
 type Mount struct {
 	ID        string `json:"id"`
@@ -62,18 +71,18 @@ type Repo struct {
 // Entry is one vault the atlas knows: its identity file, where it is, and how its
 // mounts and repositories resolve. Refresh adds the derived State.
 type Entry struct {
-	ID      string        `json:"id"`
-	Kind    vault.Kind    `json:"kind"`
-	Name    string        `json:"name"`
-	Path    string        `json:"path"`
-	Mode    vault.Mode    `json:"mode"`
-	Created string        `json:"created"`
-	Tags    []string      `json:"tags,omitempty"`
-	Scope   string        `json:"scope,omitempty"`
-	Access  string        `json:"access,omitempty"`
-	Grants  []vault.Grant `json:"grants,omitempty"`
-	Mounts  []Mount       `json:"mounts,omitempty"`
-	Repos   []Repo        `json:"repos,omitempty"`
+	ID      string     `json:"id"`
+	Kind    vault.Kind `json:"kind"`
+	Name    string     `json:"name"`
+	Path    string     `json:"path"`
+	Mode    vault.Mode `json:"mode"`
+	Created string     `json:"created"`
+	Tags    []string   `json:"tags,omitempty"`
+	Scope   string     `json:"scope,omitempty"`
+	Access  string     `json:"access,omitempty"`
+	Grants  []Grant    `json:"grants,omitempty"`
+	Mounts  []Mount    `json:"mounts,omitempty"`
+	Repos   []Repo     `json:"repos,omitempty"`
 	// MountedBy lists the projects that mount a knowledge base, with their effective access.
 	MountedBy []Ref `json:"mounted_by,omitempty"`
 	// Error is set for a vault the atlas knows but could not read: a v1 identity file, one
@@ -312,7 +321,9 @@ func buildEntry(root string, cfg vault.Config) Entry {
 		Tags:    cfg.Tags,
 		Scope:   cfg.Scope,
 		Access:  cfg.Access,
-		Grants:  cfg.Grants,
+	}
+	for _, g := range cfg.Grants {
+		e.Grants = append(e.Grants, Grant{ID: g.ID, Name: g.Name, Access: g.Access})
 	}
 	if cfg.Kind == vault.Project {
 		for _, m := range cfg.Mounts {
@@ -363,6 +374,20 @@ func resolve(ix *Index, cfg *home.Config) {
 				continue
 			}
 			r.Error = "no folder; link it with claude-atlas link"
+		}
+	}
+	for i := range ix.Entries {
+		e := &ix.Entries[i]
+		if e.Error != "" || e.Kind != vault.Knowledge {
+			continue
+		}
+		for j := range e.Grants {
+			g := &e.Grants[j]
+			if proj, ok := byID[g.ID]; ok {
+				g.Name = proj.Name
+				continue
+			}
+			g.Error = "no project with id " + g.ID
 		}
 	}
 }

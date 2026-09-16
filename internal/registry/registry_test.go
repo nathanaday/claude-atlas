@@ -185,6 +185,35 @@ func TestScanResolvesMountsReposAndGrants(t *testing.T) {
 	}
 }
 
+func TestAGrantForAnUnknownProjectCarriesAnError(t *testing.T) {
+	cfg, vs := fixture(t)
+	kb, p := vs["ai-ml"], vs["cs566"]
+	if err := vault.UpdateConfig(kb.Root, "guard", now, func(c *vault.Config) error {
+		c.Access = vault.AccessGuarded
+		c.Grants = []vault.Grant{
+			{ID: p.Config.ID, Name: "old name", Access: vault.AccessRead},
+			{ID: "gone-0000", Name: "gone", Access: vault.AccessWrite},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ix.ByID(kb.Config.ID)
+	if len(e.Grants) != 2 {
+		t.Fatalf("grants %+v", e.Grants)
+	}
+	if e.Grants[0].Name != p.Config.Name || e.Grants[0].Error != "" {
+		t.Fatalf("grant for a scanned project: %+v", e.Grants[0])
+	}
+	if e.Grants[1].Error != "no project with id gone-0000" {
+		t.Fatalf("grant for an unknown project: %+v", e.Grants[1])
+	}
+}
+
 func TestStateFileRoundTrips(t *testing.T) {
 	cfg, _ := fixture(t)
 	ix, _ := Scan(cfg)
@@ -270,7 +299,7 @@ func TestEffectiveAndKbDir(t *testing.T) {
 	if got := GrantedAccess(open, "p1"); got != vault.AccessWrite {
 		t.Errorf("an open knowledge base grants write, got %q", got)
 	}
-	guarded := Entry{Access: vault.AccessGuarded, Grants: []vault.Grant{{ID: "p1", Access: vault.AccessWrite}}}
+	guarded := Entry{Access: vault.AccessGuarded, Grants: []Grant{{ID: "p1", Access: vault.AccessWrite}}}
 	if got := GrantedAccess(guarded, "p1"); got != vault.AccessWrite {
 		t.Errorf("a guarded knowledge base grants what it granted, got %q", got)
 	}
