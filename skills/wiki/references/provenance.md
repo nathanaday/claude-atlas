@@ -16,9 +16,13 @@ Keep the source, the page, and the claim distinguishable.
   "review_status": "active",
   "captured_at": "2026-09-12",
   "ingested_at": "2026-09-12",
-  "pages": ["wiki/sources/DINOv2.md"]
+  "pages": ["wiki/sources/DINOv2.md"],
+  "via": { "id": "proj-cs566", "name": "cs566" }
 }
 ```
+
+`via` names the project a source came through, and appears only on a record
+captured into a knowledge base through a mount. It is provenance, not a link.
 
 The core writes the ledger. `capture` creates records; the `sources` field of a
 plan updates them:

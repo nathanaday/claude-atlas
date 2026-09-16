@@ -3,6 +3,9 @@
 A task is a page under `wiki/tasks/`. Its status is the truth; the core keeps
 the ledger and the index. Read this before any task skill changes a page.
 
+Tasks exist only in a project. A knowledge base has no `wiki/tasks/`; the
+`plant`, `tasks`, and `route` tools, and a `task` plan, all refuse it there.
+
 ## The page
 
 ```yaml

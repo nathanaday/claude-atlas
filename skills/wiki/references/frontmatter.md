@@ -26,9 +26,11 @@ sources:
 ```
 
 Types: `source`, `entity`, `concept`, `question`, `session`, `comparison`,
-`overview`, `meta`, `fold`, `task`, and in lyt mode `note` and `moc`. The
-`route` tool returns a skeleton with the right properties for a type; a task's
-properties are in [tasks.md](tasks.md).
+`overview`, `meta`, `fold`, `task`, and in lyt mode `note` and `moc`.
+`question` and `session` exist only in a project; a knowledge base holds
+`source`, `entity`, and `concept` pages. The `route` tool returns a skeleton
+with the right properties for a type; a task's properties are in
+[tasks.md](tasks.md).
 
 Statuses commonly progress `seed`, `developing`, `evergreen`; a question uses
 `answered` or `provisional`; anything can be `contested`, `deprecated`, or

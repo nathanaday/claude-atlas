@@ -23,8 +23,10 @@ The tools are on the atlas MCP server, named `mcp__plugin_claude-atlas_atlas__<t
 | `lint` | the health check |
 | `mode` | read or prepare a change of filing mode |
 | `plant` | create a task page with status planted, as one commit |
+| `stub` | seed a page for every wanted link, or for `titles[]` (each `title`, `type`, and, in a project, `target`: a mount name); `type` sets the default for titles that name none |
 | `tasks` | the task ledger: open tasks in board order, counts, notes waiting |
 | `repos` | the repositories mounted on the project, and how changes land in each |
+| `mounts` | (read-only) a project's mounted knowledge bases: id, name, path, effective access, scope, page count |
 
 ## Workflow
 
@@ -65,18 +67,26 @@ The kind bounds what a plan may write. The core rejects anything outside it.
 | Kind | May write |
 |---|---|
 | `ingest` | `wiki/**`; may also `delete` a file under `inbox/` once it is captured |
-| `save`, `markdown`, `repair`, `fold` | `wiki/**` |
+| `save`, `markdown`, `repair`, `fold`, `stub` | `wiki/**` |
 | `canvas` | `wiki/canvases/**/*.canvas` and `wiki/canvases/canvases.md` |
 | `base` | `wiki/**/*.base` |
 | `task` | task pages under `wiki/tasks/` and `wiki/tasks/archive/`, `wiki/hot.md`; may `delete` a note under `inbox/tasks/` |
 | `config` | only through the `mode` tool |
 
+`task` is refused in a knowledge base: it has no tasks. `ingest` and `save`
+on a knowledge base run only from a project session whose mount is
+effectively `write`. Every other kind (`markdown`, `repair`, `fold`,
+`canvas`, `base`, `config`, `stub`) also runs in the knowledge base's own
+session. `plan` checks access when the target is a knowledge base; `apply`
+commits a plan the check already admitted and does not check again.
+
 Never writable: `wiki/log.md` (the core writes the entry from your summary),
 `wiki/meta/ledgers/source-ledger.json` (use the `sources` field),
 `wiki/tasks/tasks.md` and `wiki/meta/ledgers/task-ledger.json` (the core
 rewrites them from the task pages), `.raw/`, `.git/`, `.vault-meta/`,
-`.obsidian/`, and `.claude-atlas.json`. Only a `task` or `repair` plan may
-touch a task page.
+`.obsidian/`, `.claude-atlas.json`, `kb/` (a mounted knowledge base's pages
+change only in its own operation), and `repos/` (not the vault's files).
+Only a `task` or `repair` plan may touch a task page.
 
 ## Content rules the core enforces
 
@@ -106,7 +116,9 @@ touch a task page.
 - An interrupted apply is restored from git by the next `status` or by
   `claude-atlas recover`. The user runs recovery; tell them when it is needed.
 - Hand edits the user made in Obsidian are committed as `manual` operations
-  before yours runs. They are never lost and never mixed into your commit.
+  before yours runs. They are never lost and never mixed into your commit;
+  `apply`'s result names that commit in `manual_commit` when one ran ("N
+  pages changed by hand").
 
 ## Undo
 
