@@ -87,7 +87,7 @@ internal/registry/      the scan for identity files, the resolved entries, the r
 internal/refresh/       derive one vault's state, rewrite the registry, list a vault's signals
 internal/vaults/        create, adopt, register, edit identity files, link and create repositories
 internal/links/         git init, create and clone, change policies, the facts git reports
-internal/tui/           Bubble Tea screens: the view, the vault editor, the repositories screen, tasks, ingest, the add and adopt screens
+internal/tui/           Bubble Tea screens: the view (a tab per kind, boards of boxes with connectors), the vault editor, the repositories screen, tasks, ingest, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
 internal/home/          ~/.claude-atlas and config.json
 internal/console/       prompts and step lines
@@ -235,7 +235,7 @@ with `claude --plugin-dir .` from inside a vault. End-to-end by hand:
 `claude -p "..."` inside a vault with
 `--allowedTools "mcp__plugin_claude-atlas_atlas__*,Read,Grep,Glob,Skill"`.
 
-1.0.0 is the first v2 release.
+1.0.0 is the first v2 release; 1.1.0 is the view with tabs.
 
 ## Open questions
 

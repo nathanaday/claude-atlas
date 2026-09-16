@@ -5,7 +5,7 @@ Knowledge vaults for Claude Code, and one view across all of them.
 [![License: MIT](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](.claude-plugin/plugin.json)
-[![Version](https://img.shields.io/badge/version-1.0.0-d97745.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-1.1.0-d97745.svg)](.claude-plugin/plugin.json)
 
 ## About
 
@@ -170,9 +170,9 @@ files, adds the paths you keep elsewhere, and derives the rest:
 ```
 
 `claude-atlas refresh` rewrites the registry in full, so nothing in it goes
-stale, and `claude-atlas view` shows it: projects grouped by their first tag,
-knowledge bases beside them, and any folder the scan could not read under
-`problems`.
+stale, and `claude-atlas view` shows it: a tab per kind, projects grouped by
+their first tag on the Projects tab, knowledge bases on their own tab, and a
+Problems tab for any folder the scan could not read.
 
 A project reaches a knowledge base through a mount, `kb/<name>` in the
 project: `claude-atlas mount PROJECT KB` links it, `unmount` drops it. A

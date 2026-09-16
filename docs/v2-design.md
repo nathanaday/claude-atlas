@@ -400,14 +400,16 @@ Default locations (`vaults.PathFor`): `<vaults dir>/knowledge/<name>` and
 inside another vault; `repos/<name>/` inside a project is the one exception,
 and the project's git ignores it.
 
-`view` is one tree. A project sits at `projects/<first tag>/<name>`, or
-`projects/<name>` with no tag; a knowledge base at `knowledge/<name>`; a vault
-the scan could not read under `problems`. Each is a box with its heat, name,
-page count, unfinished count, and days idle. Enter opens the detail: id, path,
-mode, and either a project's tags or a knowledge base's scope, access, grants,
-and the projects that mount it; then the mounts with effective access, the
-repositories with what git says, the state the last refresh derived, the open
-tasks, and the signals. Every key is one command:
+`view` is one screen with a tab per kind. The Projects tab is a box per
+project with a dashed connector to every knowledge base it mounts, the
+effective access beside each; the Knowledge tab is a box per knowledge base
+with how many projects mount it, one line per project once expanded; the Tasks
+tab hosts every project's open tasks; a Problems tab appears for a vault the
+scan could not read. The arrow always points at the knowledge base. Enter
+expands a vault in place: id, path, mode, and either a project's tags or a
+knowledge base's scope, access, and grants; then the repositories with what
+git says, the state the last refresh derived, the open tasks, and the signals.
+Every key is one command:
 
 | Key | Command |
 |---|---|
@@ -562,9 +564,12 @@ check ran at the end of phase 6 against a project with a mount.
 | Categories | a `tags` list on the project |
 | Migration | by hand; `adopt --as` writes the identity file and drops task scaffolding from a knowledge base |
 | A project inside a repository | opt-in, at `REPO/atlas/`, commits with a pathspec |
+| The view | tabs per kind with connectors; expansion in place; spec in docs/superpowers/specs/2026-09-16-tui-overhaul-design.md |
 
 ## Left for later
 
+- `move NAME PATH`, so the editor could change a vault's location. Today a
+  move is `mv` and then `refresh`, which recreates the symlinks.
 - `promote`: move a page from a project into a knowledge base and rewrite the
   links.
 - A `search` tool across a project and its mounts.

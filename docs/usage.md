@@ -23,7 +23,7 @@ one command, so scripts and muscle memory both work:
 | `e` then `r` forget | `remove NAME` |
 | `m` mounts: on a project `a` mount, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant by name | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
 | `R` refresh | `refresh` |
-| Space folds a folder, `-` and `+` fold and unfold all | — |
+| `←` `→` switch tabs; Enter expands a vault in place | — |
 | — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
 
 ## Create a vault
@@ -53,7 +53,7 @@ cannot find it there. Nothing else depends on where a vault is.
 
 A vault cannot go inside another vault.
 
-A project's tags group it in `view`: the first tag is its folder there.
+A project's tags group it in `view`: the first tag is its group on the Projects tab.
 `--tags usc,fall` puts `cs566` under `projects/usc`.
 
 `--access` states a knowledge base's intent for the projects that mount it:
@@ -314,25 +314,28 @@ claude-atlas open-vault
 
 ## The atlas
 
-`claude-atlas` with no command, or `claude-atlas view`, is an interactive tree
-of every vault the atlas found. Projects sit under `projects/`, grouped by
-their first tag; knowledge bases sit under `knowledge/`; a vault the scan
-found but could not read sits under `problems` with the reason. Each vault is a
-box with its heat, its name, its page count, how much is unfinished, and how
-long it has been idle. The tree shows three folder layers at a time; Enter on a
-deeper folder opens it and Esc comes back.
+`claude-atlas` with no command, or `claude-atlas view`, is one screen with a
+tab per kind. The Projects tab lists every project as a box with a dashed line
+to each knowledge base it mounts and the access it has there. The Knowledge tab
+lists every knowledge base with how many projects mount it; Enter turns the
+count into one line per project. The arrow always points at the knowledge
+base. The Tasks tab is every project's open tasks. A Problems tab appears when
+the scan found a vault it could not read. Enter on any vault expands it in
+place: path, id, mode, tags or scope and grants, repositories, what the last
+refresh derived, open tasks, and signals. One sentence under the tab bar says
+what the tab holds.
 
 | Key | What it does |
 |---|---|
+| `←` `→` | previous tab, next tab |
 | `↑` `↓` | move |
-| Enter | on a vault, everything the atlas knows about it; on a folder, fold or unfold |
-| Space | fold the folder under the cursor |
-| `-` `+` | fold and unfold every folder |
+| Enter | expand the vault under the cursor, or collapse it |
+| Esc | collapse what is expanded; on the Tasks tab, back to Projects; otherwise quit |
 | `n` `N` | create a project, create a knowledge base |
-| `a` | adopt a folder as a vault |
+| `a` | adopt a folder as a vault; on the Problems tab, the folder under the cursor |
 | `o` `c` | open the vault in Obsidian, start Claude Code in it |
 | `i` `t` `l` | on a project: ingest sources, tasks, repositories |
-| `T` | every project's open tasks on one board |
+| `T` | the Tasks tab |
 | `e` | edit the vault; `s` saves, `r` forgets it |
 | `m` | mounts: mount and unmount on a project; grants on a knowledge base |
 | `R` | refresh in the background |
