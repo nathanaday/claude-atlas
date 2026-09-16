@@ -877,14 +877,18 @@ func (v view) updateLinks(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, cmd
 }
 
-// openMounts shows what a project mounts.
+// openMounts shows what a project mounts, or which projects mount a knowledge base.
 func (v view) openMounts(item *Item) (tea.Model, tea.Cmd) {
-	if v.hooks.Load == nil || v.hooks.Mount == nil {
-		v.errMsg = "mounts are not available here"
+	if item.Entry.Error != "" {
+		v.errMsg = item.Entry.Error
 		return v, nil
 	}
-	if item.Entry.Kind != vault.Project {
-		v.errMsg = "a knowledge base is mounted by projects; press m on a project"
+	ready := v.hooks.Mount != nil
+	if item.Entry.Kind == vault.Knowledge {
+		ready = v.hooks.Grant != nil
+	}
+	if v.hooks.Load == nil || !ready {
+		v.errMsg = "mounts are not available here"
 		return v, nil
 	}
 	s := newMounts(v.hooks, item.Entry, v.items, v.width)
