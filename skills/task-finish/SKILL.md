@@ -8,6 +8,9 @@ description: "Finish a task: done with an outcome, or cancelled with a reason; m
 Read [tasks.md](../wiki/references/tasks.md). Tools: `tasks`, `plan`,
 `apply`, and `plant` for what is left over.
 
+Tasks live in a project. In a knowledge base session this skill does not
+apply; the hook's first line names the projects that mount it.
+
 ## Close it
 
 1. Call `tasks` and take the task the user means. Read its page.

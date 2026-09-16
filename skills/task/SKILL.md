@@ -8,6 +8,9 @@ description: "Orient in the vault's tasks and route: list what is open, show one
 Read [tasks.md](../wiki/references/tasks.md). Tools: `status`, `tasks`, `plan`,
 `apply` on the atlas MCP server.
 
+Tasks live in a project. In a knowledge base session this skill does not
+apply; the hook's first line names the projects that mount it.
+
 ## See what is open
 
 1. Call `status` for the counts, stale tasks, and notes waiting in

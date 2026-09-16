@@ -9,6 +9,9 @@ Read [tasks.md](../wiki/references/tasks.md). Tools: `status`, `tasks`,
 `plan`, `apply`. The task page is the only memory between sessions; keep it
 true.
 
+Tasks live in a project. In a knowledge base session this skill does not
+apply; the hook's first line names the projects that mount it.
+
 ## Start or resume
 
 1. Call `tasks`. Take the task named, else the active one whose workdir is

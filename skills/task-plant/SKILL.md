@@ -8,6 +8,9 @@ description: "Plant a task from a sentence or from the notes in inbox/tasks/: a 
 Planting costs nothing. The idea goes on a page as the user said it; the
 ceremony comes later, if ever. Tools: `status`, `inbox`, `plant`.
 
+Tasks live in a project. In a knowledge base session this skill does not
+apply; the hook's first line names the projects that mount it.
+
 ## From a sentence
 
 1. Take the title from the user's words: short, imperative, under 80

@@ -8,6 +8,9 @@ description: "Plan a task: read it, ask what changes the plan, choose an approac
 Read [tasks.md](../wiki/references/tasks.md). Tools: `status`, `tasks`,
 `plan`, `apply`.
 
+Tasks live in a project. In a knowledge base session this skill does not
+apply; the hook's first line names the projects that mount it.
+
 ## Understand
 
 1. Call `tasks` and pick the task the user means; a planted one unless told
