@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -135,6 +136,40 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	kb = keyV(kb, "t")
 	if kb.tasks != nil || !strings.Contains(kb.errMsg, "knowledge base") {
 		t.Fatalf("t on a knowledge base: tasks=%v err=%q", kb.tasks, kb.errMsg)
+	}
+}
+
+// A long board scrolls: the window follows the cursor and the footer stays on screen.
+func TestTheTasksBoardScrolls(t *testing.T) {
+	var recs []tasks.Record
+	for i := 1; i <= 6; i++ {
+		recs = append(recs, tasks.Record{Task: tasks.Task{
+			ID: fmt.Sprintf("task-2026090%d-aaaa", i), Path: "wiki/tasks/x.md",
+			Title: fmt.Sprintf("Task %d", i), Status: "active", Priority: "normal"}})
+	}
+	var planted []string
+	v := keyV(newView(sample(), Opener{}, taskHooks(map[string]*tasks.Ledger{"/v/p3": {Tasks: recs}}, &planted)), "T")
+	next, _ := v.Update(tea.WindowSizeMsg{Width: 80, Height: 16}) // eight lines for the boxes
+	v = next.(view)
+	if v.tasksTab == nil || len(v.tasksTab.rows) != 6 || v.tasksTab.avail != 8 {
+		t.Fatalf("six tasks in an eight-line window: %+v", v.tasksTab)
+	}
+	out := v.View()
+	t.Logf("\n%s", out)
+	if !strings.Contains(out, "Task 1") || !strings.Contains(out, "Task 2") || strings.Contains(out, "Task 3") {
+		t.Fatalf("the first two boxes:\n%s", out)
+	}
+	if !strings.Contains(out, "more lines") || !strings.Contains(out, "p plant") {
+		t.Fatalf("the rest is counted and the hints stay:\n%s", out)
+	}
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	out = v.View()
+	t.Logf("\n%s", out)
+	if v.tasksTab.cursor != 5 || !strings.Contains(out, "Task 6") || strings.Contains(out, "Task 1") {
+		t.Fatalf("the window follows the cursor: cursor=%d\n%s", v.tasksTab.cursor, out)
+	}
+	if !strings.Contains(out, "p plant") {
+		t.Fatalf("the hints stay on screen:\n%s", out)
 	}
 }
 

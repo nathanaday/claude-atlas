@@ -245,7 +245,8 @@ func (b *board) render(it *Item, selected bool) {
 	b.rows = append(b.rows, boardRow{item: it, start: start, end: len(b.lines) - 1})
 }
 
-// ensureVisible scrolls so the cursor's lines fit in avail lines.
+// ensureVisible scrolls so the cursor's lines fit in avail lines. A row taller than the
+// window keeps its top on screen.
 func (b *board) ensureVisible(avail int) {
 	if len(b.rows) == 0 {
 		b.offset = 0
@@ -259,7 +260,7 @@ func (b *board) ensureVisible(avail int) {
 		b.offset = start
 	}
 	if end >= b.offset+avail {
-		b.offset = end - avail + 1
+		b.offset = min(start, end-avail+1)
 	}
 	if b.offset < 0 {
 		b.offset = 0

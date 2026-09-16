@@ -48,6 +48,10 @@ type tasksScreen struct {
 	// hosted is set when the view shows the board as its Tasks tab: the tab bar replaces
 	// the header, and the hints name the tabs.
 	hosted bool
+	// avail is how many lines the boxes may take; 0 means no limit. offset is the first
+	// box line on screen.
+	avail  int
+	offset int
 	// launch is set when a key asked for Claude Code; the view runs it.
 	launch *taskLaunch
 }
@@ -104,6 +108,88 @@ func (s *tasksScreen) reload(items []Item) {
 	if s.cursor >= len(s.rows) {
 		s.cursor = max(0, len(s.rows)-1)
 	}
+	s.ensureVisible()
+}
+
+// taskSpan is the lines one task box covers.
+type taskSpan struct{ start, end int }
+
+// boxes renders the task boxes and records the lines each one covers.
+func (s tasksScreen) boxes() ([]string, []taskSpan) {
+	var lines []string
+	var spans []taskSpan
+	width := min(76, max(32, s.width-6))
+	for i, row := range s.rows {
+		style := boxSt
+		name := row.rec.Title
+		if i == s.cursor && s.mode == tasksList {
+			style = boxSelSt
+			name = selSt.Render(name)
+		}
+		badge := row.rec.Status + " · " + row.rec.Priority
+		if tasks.Stale(row.rec, now()) {
+			badge = errSt.Render(badge + " · stale")
+		} else {
+			badge = dim.Render(badge)
+		}
+		pad := max(1, width-2-len(row.rec.Title)-len(stripANSI(badge)))
+		box := []string{name + strings.Repeat(" ", pad) + badge}
+		second := row.rec.ID
+		if row.rec.LastTouched != "" {
+			second += " · touched " + row.rec.LastTouched
+		}
+		if row.rec.Due != "" {
+			second += " · due " + row.rec.Due
+		}
+		second = dim.Render(second)
+		if s.item == nil {
+			second = projectSt.Render(row.project.Entry.Name) + dim.Render(" · ") + second
+		}
+		box = append(box, second)
+		if row.rec.Workdir != "" {
+			box = append(box, dim.Render("workdir "+home.Display(row.rec.Workdir)))
+		}
+		start := len(lines)
+		lines = append(lines, strings.Split(indent(style.Width(width).Render(strings.Join(box, "\n")), "  "), "\n")...)
+		spans = append(spans, taskSpan{start: start, end: len(lines) - 1})
+	}
+	return lines, spans
+}
+
+// ensureVisible scrolls so the box under the cursor fits in avail lines. A box taller
+// than the window keeps its top on screen.
+func (s *tasksScreen) ensureVisible() {
+	if s.avail <= 0 {
+		s.offset = 0
+		return
+	}
+	_, spans := s.boxes()
+	if s.cursor >= len(spans) {
+		s.offset = 0
+		return
+	}
+	start, end := spans[s.cursor].start, spans[s.cursor].end
+	if start < s.offset {
+		s.offset = start
+	}
+	if end >= s.offset+s.avail {
+		s.offset = min(start, end-s.avail+1)
+	}
+	if s.offset < 0 {
+		s.offset = 0
+	}
+}
+
+// window is the box lines on screen and how many more follow them.
+func (s tasksScreen) window(lines []string) ([]string, int) {
+	if s.avail <= 0 {
+		return lines, 0
+	}
+	end := min(len(lines), s.offset+s.avail)
+	if s.offset >= end {
+		return nil, 0
+	}
+	return lines[s.offset:end], len(lines) - end
 }
 
 func (s tasksScreen) current() *taskRow {
@@ -137,10 +223,12 @@ func (s tasksScreen) update(msg tea.Msg) (tasksScreen, tea.Cmd) {
 		case tea.KeyUp:
 			if s.cursor > 0 {
 				s.cursor--
+				s.ensureVisible()
 			}
 		case tea.KeyDown:
 			if s.cursor < len(s.rows)-1 {
 				s.cursor++
+				s.ensureVisible()
 			}
 		case tea.KeyEsc:
 			s.closed = true
@@ -212,6 +300,7 @@ func (s tasksScreen) plant() tasksScreen {
 			s.cursor = i
 		}
 	}
+	s.ensureVisible()
 	return s
 }
 
@@ -271,38 +360,13 @@ func (s tasksScreen) view() string {
 			b.WriteString("  " + dim.Render("no open tasks in any project; press t on a project to plant one") + "\n")
 		}
 	}
-	width := min(76, max(32, s.width-6))
-	for i, row := range s.rows {
-		style := boxSt
-		name := row.rec.Title
-		if i == s.cursor && s.mode == tasksList {
-			style = boxSelSt
-			name = selSt.Render(name)
-		}
-		badge := row.rec.Status + " · " + row.rec.Priority
-		if tasks.Stale(row.rec, now()) {
-			badge = errSt.Render(badge + " · stale")
-		} else {
-			badge = dim.Render(badge)
-		}
-		pad := max(1, width-2-len(row.rec.Title)-len(stripANSI(badge)))
-		lines := []string{name + strings.Repeat(" ", pad) + badge}
-		second := row.rec.ID
-		if row.rec.LastTouched != "" {
-			second += " · touched " + row.rec.LastTouched
-		}
-		if row.rec.Due != "" {
-			second += " · due " + row.rec.Due
-		}
-		second = dim.Render(second)
-		if s.item == nil {
-			second = projectSt.Render(row.project.Entry.Name) + dim.Render(" · ") + second
-		}
-		lines = append(lines, second)
-		if row.rec.Workdir != "" {
-			lines = append(lines, dim.Render("workdir "+home.Display(row.rec.Workdir)))
-		}
-		b.WriteString(indent(style.Width(width).Render(strings.Join(lines, "\n")), "  ") + "\n")
+	all, _ := s.boxes()
+	lines, more := s.window(all)
+	for _, line := range lines {
+		b.WriteString(line + "\n")
+	}
+	if more > 0 {
+		fmt.Fprintf(&b, "  %s\n", dim.Render(fmt.Sprintf("… %d more lines", more)))
 	}
 	if s.notes > 0 {
 		fmt.Fprintf(&b, "  %s\n", dim.Render(fmt.Sprintf("%d task note%s waiting in inbox/tasks/; c then /claude-atlas:task-plant turns them into tasks", s.notes, plural(s.notes))))

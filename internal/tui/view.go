@@ -211,6 +211,8 @@ func (v *view) goTo(t tab) {
 	if t == tabTasks && v.tasksTab == nil && v.hooks.Tasks != nil {
 		s := newTasks(v.hooks, v.opener, nil, v.items, v.width)
 		s.hosted = true
+		s.avail = v.bodyHeight()
+		s.ensureVisible()
 		v.tasksTab = &s
 	}
 	if b := v.board(); b != nil {
@@ -273,6 +275,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if v.tasksTab != nil {
 			v.tasksTab.width = msg.Width
+			v.tasksTab.avail = v.bodyHeight()
+			v.tasksTab.ensureVisible()
 		}
 		if v.links != nil {
 			v.links.width = msg.Width
@@ -282,6 +286,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if v.tasks != nil {
 			v.tasks.width = msg.Width
+			v.tasks.avail = v.bodyHeight()
+			v.tasks.ensureVisible()
 		}
 		if b := v.board(); b != nil {
 			b.ensureVisible(v.bodyHeight())
@@ -656,6 +662,8 @@ func (v view) openTasks(item *Item) (tea.Model, tea.Cmd) {
 		return v, nil
 	}
 	s := newTasks(v.hooks, v.opener, item, v.items, v.width)
+	s.avail = v.bodyHeight()
+	s.ensureVisible()
 	v.tasks = &s
 	return v, nil
 }

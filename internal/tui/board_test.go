@@ -207,6 +207,24 @@ func TestWindowKeepsTheCursorVisible(t *testing.T) {
 	}
 }
 
+func TestATallRowKeepsItsTopOnScreen(t *testing.T) {
+	b := newBoard(boardProjects, boardItems(), 80)
+	b.moveTo("/v/p3")
+	b.toggle() // the expanded block makes the row taller than the window
+	r := b.rows[b.cursor]
+	if r.end-r.start+1 <= 5 {
+		t.Fatalf("the row must not fit: %d lines", r.end-r.start+1)
+	}
+	b.ensureVisible(5)
+	if b.offset != r.start {
+		t.Fatalf("offset %d, want the row's top %d", b.offset, r.start)
+	}
+	lines, _ := b.window(5)
+	if len(lines) != 5 || lines[0] != b.lines[r.start] {
+		t.Fatalf("the window starts at the box's top border: %q", lines)
+	}
+}
+
 func TestBoxWidthFollowsTheScreen(t *testing.T) {
 	for w, want := range map[int]int{40: 26, 60: 26, 80: 36, 100: 40, 200: 40} {
 		if got := boxWidth(w); got != want {
