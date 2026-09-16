@@ -285,23 +285,6 @@ func (v *view) reload(path string) {
 
 func (v view) Init() tea.Cmd { return nil }
 
-func heatMark(state *registry.State) string {
-	if state == nil {
-		return "—"
-	}
-	switch state.Heat {
-	case "new":
-		return "✨"
-	case "hot":
-		return "🔥"
-	case "warm":
-		return "🌤️"
-	case "cold":
-		return "❄️"
-	}
-	return "⛔"
-}
-
 func unfinishedCount(state *registry.State) string {
 	if state == nil {
 		return "—"
@@ -321,13 +304,6 @@ func idleText(state *registry.State) string {
 	default:
 		return fmt.Sprintf("%dd", *state.DaysIdle)
 	}
-}
-
-func pagesText(state *registry.State) string {
-	if state == nil || state.Pages == nil {
-		return "—"
-	}
-	return fmt.Sprint(*state.Pages)
 }
 
 // layout renders the tree into lines and records where each selectable row lands.
@@ -1169,13 +1145,6 @@ func (v view) treeHints() string {
 	return hints
 }
 
-func dash(s string) string {
-	if s == "" {
-		return "—"
-	}
-	return s
-}
-
 func (v view) viewDetail() string {
 	e := v.detail.Entry
 	s := e.State
@@ -1297,25 +1266,6 @@ func (v view) viewDetail() string {
 	}
 	b.WriteString("\n" + v.footer(vaultKeys(e)+" · R refresh · Esc back · q quit"))
 	return b.String()
-}
-
-// taskSummaryText is one line of task counts for the details screen.
-func taskSummaryText(t *registry.TaskSummary) string {
-	c := t.Counts
-	if c.Open == 0 {
-		if c.Notes > 0 {
-			return fmt.Sprintf("none open · %d note%s waiting", c.Notes, plural(c.Notes))
-		}
-		return "none open"
-	}
-	out := fmt.Sprintf("%d open: %d active · %d blocked · %d planned · %d planted", c.Open, c.Active, c.Blocked, c.Planned, c.Planted)
-	if c.Stale > 0 {
-		out += errSt.Render(fmt.Sprintf(" · %d stale", c.Stale))
-	}
-	if c.Notes > 0 {
-		out += fmt.Sprintf(" · %d note%s waiting", c.Notes, plural(c.Notes))
-	}
-	return out
 }
 
 // RunView shows the tree until the user quits. It reports whether any vault changed.
