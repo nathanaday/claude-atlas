@@ -1626,25 +1626,26 @@ func (e *env) revoke(args []string) (int, error) {
 		return 1, err
 	}
 	label := args[1]
-	if project, perr := e.entry(cfg, args[1]); perr == nil {
+	byID := false
+	for _, g := range kb.Grants {
+		if g.ID == args[1] {
+			byID = true
+			break
+		}
+	}
+	if byID {
+		if err := vaults.RevokeID(kb, args[1], time.Now()); err != nil {
+			return 1, err
+		}
+	} else {
+		project, err := e.entry(cfg, args[1])
+		if err != nil {
+			return 1, err
+		}
 		if err := vaults.Revoke(kb, project, time.Now()); err != nil {
 			return 1, err
 		}
 		label = project.Name
-	} else {
-		found := false
-		for _, g := range kb.Grants {
-			if g.ID == args[1] {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return 1, perr
-		}
-		if err := vaults.RevokeID(kb, args[1], time.Now()); err != nil {
-			return 1, err
-		}
 	}
 	entries, _, err := e.refreshAll(cfg)
 	if err != nil {

@@ -436,6 +436,34 @@ func TestDoctorAndRevokeSeeAStaleGrant(t *testing.T) {
 		t.Fatalf("doctor should not still see the revoked grant:\n%s", h.out.String())
 	}
 
+	// A grant whose id belongs to another knowledge base is also stale: `e.entry`
+	// resolves it, but not to a project, so revoke must try the grant id first.
+	if code := h.run("new-knowledge", "robotics"); code != 0 {
+		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
+	}
+	robotics, err := vault.Open(filepath.Join(vaults, "knowledge", "robotics"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = vault.UpdateConfig(filepath.Join(vaults, "knowledge", "ai-ml"), "grant robotics", time.Now(), func(c *vault.Config) error {
+		c.Grants = append(c.Grants, vault.Grant{ID: robotics.Config.ID, Name: "robotics", Access: vault.AccessWrite})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.run("doctor")
+	if !strings.Contains(h.out.String(), "no project with id "+robotics.Config.ID) {
+		t.Fatalf("doctor should name the grant on a knowledge base id:\n%s", h.out.String())
+	}
+	if code := h.run("revoke", "ai-ml", robotics.Config.ID); code != 0 {
+		t.Fatalf("revoke by a knowledge base's id: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	h.run("doctor")
+	if strings.Contains(h.out.String(), robotics.Config.ID) {
+		t.Fatalf("doctor should not still see the revoked grant:\n%s", h.out.String())
+	}
+
 	if code := h.run("edit", "ai-ml", "--access", "open"); code != 0 {
 		t.Fatalf("edit --access open: exit %d %s", code, h.err.String())
 	}

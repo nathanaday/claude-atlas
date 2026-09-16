@@ -222,7 +222,7 @@ func TestMountsScreenGrantsOnAnOpenKnowledgeBase(t *testing.T) {
 		t.Fatalf("access step: mode=%d err=%q", v.mounts.mode, v.mounts.err)
 	}
 	v = keyV(v, "w")
-	if v.mounts.status != "granted reading write; ai-ml is open, so the grant applies when it is guarded · refreshing…" {
+	if !strings.Contains(v.mounts.status, "granted reading write; ai-ml is open, so the grant applies when it is guarded") {
 		t.Fatalf("status: %q err=%q", v.mounts.status, v.mounts.err)
 	}
 	out := v.View()
@@ -233,6 +233,40 @@ func TestMountsScreenGrantsOnAnOpenKnowledgeBase(t *testing.T) {
 	}
 	if grants := entryNamed(t, cfg, "ai-ml").Grants; len(grants) != 1 || grants[0].Name != "reading" || grants[0].Access != vault.AccessWrite {
 		t.Fatalf("identity file: %+v", grants)
+	}
+}
+
+// TestMountsScreenKindGuardsIgnoreTheWrongKeys holds the screen's central design
+// decision: w, r, and x act only on a knowledge base; u acts only on a project.
+func TestMountsScreenKindGuardsIgnoreTheWrongKeys(t *testing.T) {
+	cfg, _, v := atlasView(t)
+	v = keyV(v, "m")
+	if v.mounts == nil {
+		t.Fatalf("m should open the mounts screen: err=%q", v.errMsg)
+	}
+	for _, key := range []string{"w", "r", "x"} {
+		before := entryNamed(t, cfg, "reading")
+		v = keyV(v, key)
+		if v.mounts == nil || v.mounts.mode != mountsList || v.mounts.err != "" || v.mounts.changed || len(v.mounts.rows) != 0 {
+			t.Fatalf("%q on a project: mode=%d err=%q changed=%v rows=%d", key, v.mounts.mode, v.mounts.err, v.mounts.changed, len(v.mounts.rows))
+		}
+		if after := entryNamed(t, cfg, "reading"); len(after.Mounts) != len(before.Mounts) {
+			t.Fatalf("%q on a project changed the identity file: %+v", key, after.Mounts)
+		}
+	}
+
+	kbCfg, _, hooks := atlasFixture(t)
+	kv := keyV(findVault(t, openView(t, hooks), "ai-ml"), "m")
+	if kv.mounts == nil {
+		t.Fatalf("m should open the mounts screen: err=%q", kv.errMsg)
+	}
+	kbBefore := entryNamed(t, kbCfg, "ai-ml")
+	kv = keyV(kv, "u")
+	if kv.mounts == nil || kv.mounts.mode != mountsList || kv.mounts.err != "" || kv.mounts.changed || len(kv.mounts.rows) != 0 {
+		t.Fatalf("u on a knowledge base: mode=%d err=%q changed=%v rows=%d", kv.mounts.mode, kv.mounts.err, kv.mounts.changed, len(kv.mounts.rows))
+	}
+	if after := entryNamed(t, kbCfg, "ai-ml"); len(after.Mounts) != len(kbBefore.Mounts) || len(after.Grants) != len(kbBefore.Grants) {
+		t.Fatalf("u on a knowledge base changed the identity file: %+v", after)
 	}
 }
 

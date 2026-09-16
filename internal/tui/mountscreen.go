@@ -49,6 +49,7 @@ type mountsScreen struct {
 	mode    mountsMode
 	name    textinput.Model // the knowledge base (project screen) or project (knowledge base screen) to add
 	picked  *registry.Entry // the vault the typed name resolved to
+	confirm string          // mountsConfirm: what y would run, "unmount" or "revoke"
 	status  string
 	err     string
 	changed bool
@@ -88,7 +89,8 @@ func (s *mountsScreen) build() {
 		s.buildProjects()
 	} else {
 		for _, m := range s.entry.Mounts {
-			s.rows = append(s.rows, mountRow{mount: &m, name: m.Name, state: mountState(s.entry, m)})
+			mm := m
+			s.rows = append(s.rows, mountRow{mount: &mm, name: mm.Name, state: mountState(s.entry, mm)})
 		}
 	}
 	if s.cursor >= len(s.rows) {
@@ -228,6 +230,7 @@ func (s mountsScreen) update(msg tea.Msg) (mountsScreen, tea.Cmd) {
 				return s, s.name.Focus()
 			case "u":
 				if s.entry.Kind == vault.Project && s.current() != nil {
+					s.confirm = "unmount"
 					s.mode = mountsConfirm
 				}
 			case "w":
@@ -278,7 +281,7 @@ func (s mountsScreen) update(msg tea.Msg) (mountsScreen, tea.Cmd) {
 		if isKey {
 			switch strings.ToLower(key.String()) {
 			case "y":
-				if s.entry.Kind == vault.Knowledge {
+				if s.confirm == "revoke" {
 					return s.revoke(), nil
 				}
 				return s.unmount(), nil
@@ -396,6 +399,7 @@ func (s mountsScreen) askRevoke() mountsScreen {
 		s.err = row.name + " has no grant"
 		return s
 	}
+	s.confirm = "revoke"
 	s.mode = mountsConfirm
 	return s
 }
@@ -436,6 +440,10 @@ func (s mountsScreen) revoke() mountsScreen {
 func (s mountsScreen) mount(access string) mountsScreen {
 	s.mode = mountsList
 	if s.picked == nil {
+		return s
+	}
+	if s.hooks.Mount == nil {
+		s.err = "mounting is not available here"
 		return s
 	}
 	kb := *s.picked
@@ -552,11 +560,14 @@ func (s mountsScreen) view() string {
 		}
 		fmt.Fprintf(&b, "  %s Unmount %s? The knowledge base stays.  %s\n", errSt.Render("▲"), row.name, yn)
 	default:
-		hint := "a mount · u unmount · esc back"
+		hint := "a mount · u unmount"
 		if kb {
-			hint = "w grant write · r grant read · x revoke · a grant by name · esc back"
+			hint = "w grant write · r grant read · x revoke · a grant by name"
 		}
-		b.WriteString("  " + dim.Render(hint) + "\n")
+		if len(s.rows) > 0 {
+			hint = "↑↓ move · " + hint
+		}
+		b.WriteString("  " + dim.Render(hint+" · esc back") + "\n")
 	}
 	if s.status != "" {
 		b.WriteString("  " + okSt.Render(s.status) + "\n")
