@@ -4,9 +4,34 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
+
+// ansiProfile is termenv.ANSI. Lip Gloss renders plain text under go test, where there
+// is no TTY; this profile makes it emit escape codes for one test. The termenv module
+// is not imported directly, so the value is spelled out.
+const ansiProfile = 2
+
+func TestOnlyTheRowUnderTheCursorIsColored(t *testing.T) {
+	was := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(ansiProfile)
+	t.Cleanup(func() { lipgloss.SetColorProfile(was) })
+	b := newBoard(boardProjects, boardItems(), 100)
+	b.moveTo("/v/p3")
+	b.toggle() // the expanded block belongs to the row too
+	b.moveTo("/v/course")
+	b.layout()
+	for _, r := range b.rows {
+		text := strings.Join(b.lines[r.start:r.end+1], "\n")
+		colored := strings.Contains(text, "\x1b[")
+		if want := r.item == b.current(); colored != want {
+			t.Errorf("%s colored=%v, want %v:\n%s", r.item.Entry.Name, colored, want, text)
+		}
+	}
+}
 
 // boardItems is four projects (one untagged, one under itl, two under usc), two knowledge
 // bases, and one vault the scan could not read. p3 mounts three knowledge bases: one

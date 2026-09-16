@@ -150,7 +150,8 @@ func (s tasksScreen) boxes() ([]string, []taskSpan) {
 			box = append(box, dim.Render("workdir "+home.Display(row.rec.Workdir)))
 		}
 		start := len(lines)
-		lines = append(lines, strings.Split(indent(style.Width(width).Render(strings.Join(box, "\n")), "  "), "\n")...)
+		rendered := strings.Split(indent(style.Width(width).Render(strings.Join(box, "\n")), "  "), "\n")
+		lines = append(lines, focus(rendered, i == s.cursor && s.mode == tasksList)...)
 		spans = append(spans, taskSpan{start: start, end: len(lines) - 1})
 	}
 	return lines, spans
@@ -398,25 +399,6 @@ func (s tasksScreen) view() string {
 	}
 	if s.err != "" {
 		b.WriteString("  " + errSt.Render(s.err) + "\n")
-	}
-	return b.String()
-}
-
-// stripANSI measures styled text.
-func stripANSI(s string) string {
-	var b strings.Builder
-	inEsc := false
-	for _, r := range s {
-		switch {
-		case inEsc:
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-				inEsc = false
-			}
-		case r == 0x1b:
-			inEsc = true
-		default:
-			b.WriteRune(r)
-		}
 	}
 	return b.String()
 }

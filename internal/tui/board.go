@@ -223,6 +223,7 @@ func (b board) kbName(m registry.Mount) string {
 
 // render writes one vault: its box with the connectors beside it, and the detail block
 // under it when expanded. The box grows to hold as many lines as the connectors need.
+// Only the vault under the cursor keeps its colors.
 func (b *board) render(it *Item, selected bool) {
 	e := it.Entry
 	content := boxLines(e)
@@ -231,18 +232,20 @@ func (b *board) render(it *Item, selected bool) {
 		content = append(content, "")
 	}
 	box := boxStyle(e.Kind, selected).Width(boxWidth(b.width)).Render(strings.Join(content, "\n"))
-	start := len(b.lines)
+	var lines []string
 	for i, line := range strings.Split(box, "\n") {
 		if i >= 1 && i-1 < len(side) {
 			line += side[i-1]
 		}
-		b.lines = append(b.lines, line)
+		lines = append(lines, line)
 	}
 	if b.expanded[e.Path] {
 		for _, line := range detailLines(e) {
-			b.lines = append(b.lines, "   "+line)
+			lines = append(lines, "   "+line)
 		}
 	}
+	start := len(b.lines)
+	b.lines = append(b.lines, focus(lines, selected)...)
 	b.rows = append(b.rows, boardRow{item: it, start: start, end: len(b.lines) - 1})
 }
 

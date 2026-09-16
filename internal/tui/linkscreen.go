@@ -454,7 +454,8 @@ func (s linksScreen) view() string {
 	for i, row := range s.rows {
 		style := boxSt
 		name := row.repo.Name
-		if i == s.cursor && s.mode != linksAdd {
+		selected := i == s.cursor && s.mode != linksAdd
+		if selected {
 			style = boxSelSt
 			name = selSt.Render(row.repo.Name)
 		}
@@ -472,7 +473,8 @@ func (s linksScreen) view() string {
 			facts = errSt.Render(row.facts)
 		}
 		lines = append(lines, facts)
-		b.WriteString(indent(style.Width(width).Render(strings.Join(lines, "\n")), "  ") + "\n")
+		rendered := strings.Split(indent(style.Width(width).Render(strings.Join(lines, "\n")), "  "), "\n")
+		b.WriteString(strings.Join(focus(rendered, selected), "\n") + "\n")
 	}
 	b.WriteString("\n")
 	switch s.mode {

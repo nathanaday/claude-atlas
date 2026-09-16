@@ -405,7 +405,8 @@ project with a dashed connector to every knowledge base it mounts, the
 effective access beside each; the Knowledge tab is a box per knowledge base
 with how many projects mount it, one line per project once expanded; the Tasks
 tab hosts every project's open tasks; a Problems tab appears for a vault the
-scan could not read. The arrow always points at the knowledge base. Enter
+scan could not read. The arrow always points at the knowledge base. The row
+under the cursor is the colored one; every other row is plain. Enter
 expands a vault in place: path, created, a knowledge base's scope, access,
 and grants, the vault check, the last touch, the open threads, the open
 tasks, and a project's repositories with their remotes. `show NAME` prints

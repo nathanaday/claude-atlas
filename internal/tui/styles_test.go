@@ -27,6 +27,16 @@ func TestKindColorsAndBoxes(t *testing.T) {
 	}
 }
 
+func TestFocusKeepsColorOnlyUnderTheCursor(t *testing.T) {
+	styled := []string{"\x1b[34mname\x1b[0m │", "\x1b[33mdetail\x1b[0m"}
+	if got := focus(styled, false); got[0] != "name │" || got[1] != "detail" {
+		t.Fatalf("a row not under the cursor is plain: %q", got)
+	}
+	if got := focus(styled, true); got[0] != styled[0] || got[1] != styled[1] {
+		t.Fatalf("the row under the cursor keeps its colors: %q", got)
+	}
+}
+
 func TestAHostedBoardHasNoHeaderAndNamesTheTabs(t *testing.T) {
 	hooks := Hooks{Tasks: func(registry.Entry) (tasks.Ledger, []string, error) { return tasks.Empty(), nil, nil }}
 	items := []Item{{Entry: registry.Entry{Kind: vault.Project, Name: "p3", Path: "/v/p3"}}}

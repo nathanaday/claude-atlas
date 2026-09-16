@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -54,4 +56,36 @@ func boxStyle(k vault.Kind, selected bool) lipgloss.Style {
 		return boxSt.BorderForeground(kindColor(k))
 	}
 	return boxSt
+}
+
+// focus keeps a row's colors when it is under the cursor and strips them otherwise, so
+// the selected row is the colored one and every other row reads plain.
+func focus(lines []string, selected bool) []string {
+	if selected {
+		return lines
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = stripANSI(line)
+	}
+	return out
+}
+
+// stripANSI drops escape sequences: it measures styled text and renders a row plain.
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for _, r := range s {
+		switch {
+		case inEsc:
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+		case r == 0x1b:
+			inEsc = true
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

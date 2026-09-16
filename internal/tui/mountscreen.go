@@ -516,7 +516,8 @@ func (s mountsScreen) view() string {
 		other = vault.Project
 	}
 	for i, row := range s.rows {
-		style := boxStyle(other, i == s.cursor && s.mode != mountsPickName)
+		selected := i == s.cursor && s.mode != mountsPickName
+		style := boxStyle(other, selected)
 		name := kindStyle(other).Render(row.name)
 		var lines []string
 		if kb {
@@ -524,7 +525,8 @@ func (s mountsScreen) view() string {
 		} else {
 			lines = s.mountLines(row, name, width)
 		}
-		b.WriteString(indent(style.Width(width).Render(strings.Join(lines, "\n")), "  ") + "\n")
+		rendered := strings.Split(indent(style.Width(width).Render(strings.Join(lines, "\n")), "  "), "\n")
+		b.WriteString(strings.Join(focus(rendered, selected), "\n") + "\n")
 	}
 	b.WriteString("\n")
 	switch s.mode {
