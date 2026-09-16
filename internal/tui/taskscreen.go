@@ -45,6 +45,9 @@ type tasksScreen struct {
 	err     string
 	changed bool
 	closed  bool
+	// hosted is set when the view shows the board as its Tasks tab: the tab bar replaces
+	// the header, and the hints name the tabs.
+	hosted bool
 	// launch is set when a key asked for Claude Code; the view runs it.
 	launch *taskLaunch
 }
@@ -250,14 +253,16 @@ func (s tasksScreen) open() tasksScreen {
 
 func (s tasksScreen) view() string {
 	var b strings.Builder
-	if s.item != nil {
-		fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render(s.item.Entry.Name), catSt.Render("tasks"), dim.Render(home.Display(s.item.Entry.Path)))
-	} else {
-		projects := map[string]bool{}
-		for _, row := range s.rows {
-			projects[row.project.Entry.Path] = true
+	if !s.hosted {
+		if s.item != nil {
+			fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render(s.item.Entry.Name), catSt.Render("tasks"), dim.Render(home.Display(s.item.Entry.Path)))
+		} else {
+			projects := map[string]bool{}
+			for _, row := range s.rows {
+				projects[row.project.Entry.Path] = true
+			}
+			fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render("Atlas"), catSt.Render("tasks"), dim.Render(fmt.Sprintf("%d open across %d project%s", len(s.rows), len(projects), plural(len(projects)))))
 		}
-		fmt.Fprintf(&b, "\n  %s   %s   %s\n\n", title.Render("Atlas"), catSt.Render("tasks"), dim.Render(fmt.Sprintf("%d open across %d project%s", len(s.rows), len(projects), plural(len(projects)))))
 	}
 	if len(s.rows) == 0 {
 		if s.item != nil {
@@ -289,10 +294,11 @@ func (s tasksScreen) view() string {
 		if row.rec.Due != "" {
 			second += " · due " + row.rec.Due
 		}
+		second = dim.Render(second)
 		if s.item == nil {
-			second = row.project.Entry.Name + " · " + second
+			second = projectSt.Render(row.project.Entry.Name) + dim.Render(" · ") + second
 		}
-		lines = append(lines, dim.Render(second))
+		lines = append(lines, second)
 		if row.rec.Workdir != "" {
 			lines = append(lines, dim.Render("workdir "+home.Display(row.rec.Workdir)))
 		}
@@ -317,7 +323,11 @@ func (s tasksScreen) view() string {
 		} else if s.item != nil {
 			hints += " · c Claude Code"
 		}
-		b.WriteString("  " + dim.Render(hints+" · Esc back") + "\n")
+		back := " · Esc back"
+		if s.hosted {
+			back = " · ←→ tabs · R refresh · q quit"
+		}
+		b.WriteString("  " + dim.Render(hints+back) + "\n")
 	}
 	if s.status != "" {
 		b.WriteString("  " + okSt.Render(s.status) + "\n")

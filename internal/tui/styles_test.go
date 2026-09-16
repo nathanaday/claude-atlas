@@ -1,0 +1,42 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/vault"
+)
+
+func TestKindColorsAndBoxes(t *testing.T) {
+	if kindColor(vault.Project) == kindColor(vault.Knowledge) {
+		t.Fatal("the kinds share a color")
+	}
+	if got := boxStyle(vault.Knowledge, true).GetBorderTopForeground(); got != knowledgeColor {
+		t.Fatalf("selected knowledge border %v", got)
+	}
+	if got := boxStyle(vault.Project, true).GetBorderTopForeground(); got != projectColor {
+		t.Fatalf("selected project border %v", got)
+	}
+	if got := boxStyle(vault.Project, false).GetBorderTopForeground(); got != muted {
+		t.Fatalf("unselected border %v", got)
+	}
+	if kindStyle(vault.Knowledge).GetForeground() != knowledgeColor || kindStyle(vault.Project).GetForeground() != projectColor {
+		t.Fatal("kindStyle wears the wrong color")
+	}
+}
+
+func TestAHostedBoardHasNoHeaderAndNamesTheTabs(t *testing.T) {
+	hooks := Hooks{Tasks: func(registry.Entry) (tasks.Ledger, []string, error) { return tasks.Empty(), nil, nil }}
+	items := []Item{{Entry: registry.Entry{Kind: vault.Project, Name: "p3", Path: "/v/p3"}}}
+	s := newTasks(hooks, Opener{}, nil, items, 80)
+	if out := s.view(); !strings.Contains(out, "Atlas") || !strings.Contains(out, "Esc back") {
+		t.Fatalf("a board of its own has a header and Esc:\n%s", out)
+	}
+	s.hosted = true
+	out := s.view()
+	if strings.Contains(out, "Atlas") || strings.Contains(out, "Esc back") || !strings.Contains(out, "←→ tabs") {
+		t.Fatalf("hosted:\n%s", out)
+	}
+}

@@ -511,13 +511,13 @@ func (s mountsScreen) view() string {
 		b.WriteString("  " + dim.Render(empty) + "\n")
 	}
 	width := min(72, max(32, s.width-6))
+	other := vault.Knowledge // the kind on the other side of every row
+	if kb {
+		other = vault.Project
+	}
 	for i, row := range s.rows {
-		style := boxSt
-		name := row.name
-		if i == s.cursor && s.mode != mountsPickName {
-			style = boxSelSt
-			name = selSt.Render(row.name)
-		}
+		style := boxStyle(other, i == s.cursor && s.mode != mountsPickName)
+		name := kindStyle(other).Render(row.name)
 		var lines []string
 		if kb {
 			lines = projectLines(row, name)

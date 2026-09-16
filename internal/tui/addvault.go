@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -36,20 +35,6 @@ const (
 	stepFacts // tags for a project, scope for a knowledge base
 	stepPath
 	stepConfirm
-)
-
-// muted replaces gray for secondary text; gray is unreadable on dark terminals.
-const muted = lipgloss.Color("#FFC600")
-
-var (
-	title    = lipgloss.NewStyle().Bold(true)
-	label    = lipgloss.NewStyle().Foreground(muted).Width(11)
-	activeL  = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true).Width(11)
-	dim      = lipgloss.NewStyle().Foreground(muted)
-	value    = lipgloss.NewStyle()
-	cursorSt = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
-	errSt    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	rule     = lipgloss.NewStyle().Foreground(muted)
 )
 
 // fieldPad indents what sits under a field: two spaces and the label.

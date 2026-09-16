@@ -6,7 +6,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/home"
@@ -125,12 +124,6 @@ type editor struct {
 	discard  bool
 	outcome  editOutcome
 }
-
-var (
-	selSt = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
-	okSt  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	modSt = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5F00"))
-)
 
 func draftOf(e registry.Entry) draft {
 	d := draft{Name: e.Name, Tags: strings.Join(e.Tags, ", "), Scope: e.Scope, Access: e.Access}

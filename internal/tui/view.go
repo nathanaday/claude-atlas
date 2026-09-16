@@ -231,10 +231,7 @@ type view struct {
 }
 
 var (
-	boxSt    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(muted).Padding(0, 1)
-	boxSelSt = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("12")).Padding(0, 1)
-	guideSt  = lipgloss.NewStyle().Foreground(muted)
-	catSt    = lipgloss.NewStyle().Bold(true)
+	guideSt = lipgloss.NewStyle().Foreground(muted)
 )
 
 func newView(items []Item, opener Opener, hooks Hooks) view {
