@@ -35,8 +35,8 @@ before the first save that targets a mount.
 3. Pick the smallest useful type: `question` for an answered analysis,
    `concept` for an idea worth naming, `session` for approved conversation
    content, `note` in lyt mode. `route` gives the path and skeleton. A
-   knowledge base files only `source`, `entity`, and `concept`; a `question`
-   or a `session` stays in the project.
+   knowledge base files only `source`, `entity`, and `concept` (and `note`
+   or `moc` in lyt mode); a `question` or a `session` stays in the project.
 4. Write declarative prose with wikilinks and frontmatter that says what the
    page is.
 
