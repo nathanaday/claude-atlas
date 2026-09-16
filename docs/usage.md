@@ -250,9 +250,9 @@ claude-atlas lint sensor-triage --strict     # exit 1 when there are findings
 
 ## Stubs and wanted pages
 
-A **wanted page** is a title more than one page links to that nobody has
-written yet. Lint reports it, and a session's start line names a few and
-counts the rest:
+A **wanted page** is a title one or more pages link to that nobody has written
+yet. Lint reports it, and a session's start line names a few and counts the
+rest:
 
 ```text
 Stubs: 2 pages to fill (Backpropagation, Loss Landscape). Wanted: 1 linked

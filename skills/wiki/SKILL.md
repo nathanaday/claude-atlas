@@ -41,12 +41,12 @@ interrupted, tell the user to run `claude-atlas recover` before anything else.
 
 ## Never write wiki pages directly
 
-Write, Edit, and MultiEdit are refused under `wiki/` by a hook. Read pages with
-Read, Grep, and Glob as usual; change them only through `plan` and `apply`. The
-core writes `wiki/log.md` and the source ledger itself; a plan that names either
-is rejected.
+Write, Edit, MultiEdit, and NotebookEdit are refused under `wiki/` by a hook.
+Read pages with Read, Grep, and Glob as usual; change them only through `plan`
+and `apply`. The core writes `wiki/log.md` and the source ledger itself; a plan
+that names either is rejected.
 
-The same hook refuses Write, Edit, and MultiEdit under `kb/`: a mounted
+The same hook refuses those four tools under `kb/`: a mounted
 knowledge base's pages change only in its own operation. Write one with
 `plan` and `apply` passing `vault: <the knowledge base's root>` from the
 project session; see [references/mounts.md](references/mounts.md).

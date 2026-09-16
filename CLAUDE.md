@@ -81,7 +81,7 @@ internal/capture/       inbox listing and capture into .raw/captured/
 internal/ledger/        the source ledger
 internal/lint/          the health check (ported from claude-obsidian's engine)
 internal/mcpserver/     the tools, thin over the packages above
-internal/hooks/         session-start (a vault or a project's repository, open tasks, hot cache), guard, stop
+internal/hooks/         session-start (the kind line for a vault or a project's repository, the Knowledge: mount lines, the search sentence, the stubs and wanted counts, open tasks, hot cache), guard, stop
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
 internal/registry/      the scan for identity files, the resolved entries, the registry state file
 internal/refresh/       derive one vault's state, rewrite the registry, list a vault's signals

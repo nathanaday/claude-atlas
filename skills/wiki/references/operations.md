@@ -67,7 +67,8 @@ The kind bounds what a plan may write. The core rejects anything outside it.
 | Kind | May write |
 |---|---|
 | `ingest` | `wiki/**`; may also `delete` a file under `inbox/` once it is captured |
-| `save`, `markdown`, `repair`, `fold`, `stub` | `wiki/**` |
+| `save`, `markdown`, `repair`, `fold` | `wiki/**` |
+| `stub` | `wiki/**`, only through the `stub` tool; `plan` refuses this kind |
 | `canvas` | `wiki/canvases/**/*.canvas` and `wiki/canvases/canvases.md` |
 | `base` | `wiki/**/*.base` |
 | `task` | task pages under `wiki/tasks/` and `wiki/tasks/archive/`, `wiki/hot.md`; may `delete` a note under `inbox/tasks/` |

@@ -21,7 +21,9 @@ root is missing or the `status` tool does not resolve it.
 
 1. Call `status`, then `lint` (with `exclude` globs when the parent asks for a
    narrower scope). Keep the exact report.
-2. Summarize page and link counts plus findings by category.
+2. Summarize page and link counts plus findings by category. Wanted pages and
+   stubs are counts to report, not findings: the `stub` tool and the wiki-lint
+   skill handle them.
 3. Read affected pages to validate surprising results: ambiguous wikilinks,
    aliases, heading and block references, escaped pipes, code fences,
    frontmatter, empty sections, and stale index entries. Separate likely tool
