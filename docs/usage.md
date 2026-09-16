@@ -21,7 +21,7 @@ one command, so scripts and muscle memory both work:
 | `l` repositories on a project: `n` new, `a` link, `e` edit, `u` unlink | `new-repo NAME REPO`, `link NAME PATH`, `edit-repo NAME REPO`, `unlink NAME REPO`, `repos [NAME]` |
 | `e` edit a vault, `s` save | `edit NAME --…` |
 | `e` then `r` forget | `remove NAME` |
-| `m` mount, `u` unmount (phase 4) | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME` |
+| `m` mount, `M` unmount (phase 4) | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME` |
 | `g` grant, `G` revoke (phase 4) | `grant KB PROJECT --write\|--read`, `revoke KB PROJECT` |
 | `R` refresh | `refresh` |
 | Space folds a folder, `-` and `+` fold and unfold all | — |
@@ -303,7 +303,7 @@ deeper folder opens it and Esc comes back.
 | `i` `t` `l` | on a project: ingest sources, tasks, repositories |
 | `T` | every project's open tasks on one board |
 | `e` | edit the vault; `s` saves, `r` forgets it |
-| `m` `u` `g` `G` (phase 4) | mount, unmount, grant, revoke |
+| `m` `M` `g` `G` (phase 4) | mount, unmount, grant, revoke |
 | `R` | refresh in the background |
 | `q` | quit |
 
@@ -412,7 +412,7 @@ folder, and asks how changes should land when the repository has a remote. `e`
 edits the remote, the folder, and the change policy. `u` unlinks after asking.
 Each action takes effect at once and refreshes in the background.
 
-## Mount a knowledge base
+### Mount a knowledge base
 
 A project reaches a knowledge base through a mount: `kb/<name>` in the
 project, a symlink to the knowledge base's `wiki/`. `mount`, `unmount`,
@@ -440,8 +440,7 @@ with `edit --access`. `open` lets every project that mounts it write; a
 `guarded` knowledge base lets only a project `grant` names write, and every
 other project reads. The access a project gets is the lesser of the mount's
 own access and the grant: a write mount on a guarded knowledge base with no
-grant still reads only. `grant KB PROJECT --write|--read` and
-`revoke KB PROJECT` edit a guarded knowledge base's grants.
+grant still reads only.
 
 A `[[link]]` in a project page resolves to a knowledge base page through the
 mount, in Obsidian, in the graph, in backlinks, and in lint.

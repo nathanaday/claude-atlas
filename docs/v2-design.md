@@ -328,8 +328,9 @@ findings come from its own lint.
 - A knowledge base with `inbox/`, `ideas/`, `wiki/tasks/`, the task ledger,
   `wiki/questions/`, or `wiki/sessions/` is a finding. A project with `grants`
   or `scope` is a finding.
-- `mount_errors` lists a symlink under `kb/` that points at nothing or not at
-  a `wiki/` directory.
+- `mount_errors` lists four states under `kb/`: an entry that is not a symlink,
+  a symlink that points at nothing, a target that is not a directory, and a
+  target that is a directory other than a knowledge base's `wiki/`.
 
 ## A project inside a repository
 
@@ -480,10 +481,10 @@ everything. On this machine:
 The stubs work (`superpowers/plans/2026-09-14-stubs-status.md`) landed on
 `main` through Task 7 and stays. What it left open joins these phases: the
 atlas counts move to the registry in phase 2; the mount rule, the near match
-across mounts, the stub `target`, and the session-start counts line go in
-phase 3; the skills, the docs, and the final review of the deferred findings
-go in phase 6; the end-to-end check runs in phase 7 against a project with a
-mount.
+across mounts, and the stub `target` go in phase 3, which also wrote the
+mounts and access documentation; the session-start counts line, the skills,
+and the final review of the deferred findings go in phase 6; the end-to-end
+check runs in phase 7 against a project with a mount.
 
 1. Engine: the v2 identity file with id, kind, and name; templates by kind;
    operation kinds by vault kind; `new-knowledge`, `new-project`,

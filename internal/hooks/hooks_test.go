@@ -330,8 +330,24 @@ func TestSessionStartListsMountsAndMountedBy(t *testing.T) {
 		t.Errorf("missing guarded in kb session:\n%s", out.String())
 	}
 
+	// A symlink that leads somewhere else is not the same problem as one that is gone.
+	link := filepath.Join(projectRoot, vault.KbDir, "ai-ml")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+projectRoot+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "symlink points elsewhere; run claude-atlas refresh") {
+		t.Errorf("wrong-target symlink warning:\n%s", out.String())
+	}
+
 	// A missing symlink warns the project session to refresh.
-	if err := os.Remove(filepath.Join(projectRoot, vault.KbDir, "ai-ml")); err != nil {
+	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()

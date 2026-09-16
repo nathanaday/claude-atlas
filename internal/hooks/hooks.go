@@ -198,8 +198,11 @@ func mountLines(ix *registry.Index, entry *registry.Entry, now time.Time) string
 		}
 		parts = append(parts, "kb/"+m.Name)
 		line := strings.Join(parts, " · ")
-		if vaults.MountState(*entry, m) != vaults.MountOK {
+		switch vaults.MountState(*entry, m) {
+		case vaults.MountMissing:
 			line += " · symlink missing; run claude-atlas refresh"
+		case vaults.MountWrong:
+			line += " · symlink points elsewhere; run claude-atlas refresh"
 		}
 		b.WriteString(line + "\n")
 	}
