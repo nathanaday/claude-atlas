@@ -208,12 +208,13 @@ func TestSessionStartInAKnowledgeBase(t *testing.T) {
 	if !gitx.Available() {
 		t.Skip("git is not installed")
 	}
+	now := time.Now()
 	root := filepath.Join(t.TempDir(), "kb")
-	if _, err := vault.Init(root, vault.Options{Kind: vault.Knowledge, Name: "ai-ml"}, time.Now()); err != nil {
+	if _, err := vault.Init(root, vault.Options{Kind: vault.Knowledge, Name: "ai-ml"}, now); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, env(nil), true, time.Now()); err != nil {
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, env(nil), true, now); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -222,10 +223,30 @@ func TestSessionStartInAKnowledgeBase(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
-	for _, absent := range []string{"Open tasks", "task-plant", "inbox/tasks"} {
+	for _, absent := range []string{"Open tasks", "task-plant", "inbox/tasks", "Stubs:", "Wanted:"} {
 		if strings.Contains(text, absent) {
 			t.Errorf("a knowledge base session mentions %q:\n%s", absent, text)
 		}
+	}
+
+	// A knowledge base session prints the counts line too, right after the first line.
+	os.MkdirAll(filepath.Join(root, "wiki", "concepts"), 0o755)
+	training := vault.Skeleton("concept", "Training", now)
+	training = strings.Replace(training, "## Related\n\n", "## Related\n\n[[Optimizer]]\n\n", 1)
+	if err := os.WriteFile(filepath.Join(root, "wiki", "concepts", "Training.md"), []byte(training), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+root+`"}`), &out, env(nil), false, now); err != nil {
+		t.Fatal(err)
+	}
+	text = out.String()
+	want := "Wanted: 1 linked page does not exist yet (Optimizer). Fill or stub them with the wiki-lint skill."
+	if !strings.Contains(text, want) {
+		t.Errorf("missing %q in:\n%s", want, text)
+	}
+	if i, j := strings.Index(text, want), strings.Index(text, "Knowledge enters through a project"); i < 0 || j < 0 || i > j {
+		t.Errorf("counts line should come right after the first line, before the skills line:\n%s", text)
 	}
 }
 
