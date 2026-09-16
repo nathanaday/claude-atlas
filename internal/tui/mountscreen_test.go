@@ -239,34 +239,36 @@ func TestMountsScreenGrantsOnAnOpenKnowledgeBase(t *testing.T) {
 // TestMountsScreenKindGuardsIgnoreTheWrongKeys holds the screen's central design
 // decision: w, r, and x act only on a knowledge base; u acts only on a project.
 func TestMountsScreenKindGuardsIgnoreTheWrongKeys(t *testing.T) {
-	cfg, _, v := atlasView(t)
-	v = keyV(v, "m")
-	if v.mounts == nil {
-		t.Fatalf("m should open the mounts screen: err=%q", v.errMsg)
+	// Each screen holds one row, so the kind guard, not an empty list, is what stops a key.
+	cfg, _, hooks := atlasFixture(t)
+	guardKB(t, cfg)
+	v := keyV(findVault(t, openView(t, hooks), "reading"), "m")
+	if v.mounts == nil || len(v.mounts.rows) != 1 {
+		t.Fatalf("m should open the project's mounts with one row: err=%q", v.errMsg)
 	}
 	for _, key := range []string{"w", "r", "x"} {
-		before := entryNamed(t, cfg, "reading")
 		v = keyV(v, key)
-		if v.mounts == nil || v.mounts.mode != mountsList || v.mounts.err != "" || v.mounts.changed || len(v.mounts.rows) != 0 {
+		if v.mounts == nil || v.mounts.mode != mountsList || v.mounts.err != "" || v.mounts.changed || len(v.mounts.rows) != 1 {
 			t.Fatalf("%q on a project: mode=%d err=%q changed=%v rows=%d", key, v.mounts.mode, v.mounts.err, v.mounts.changed, len(v.mounts.rows))
 		}
-		if after := entryNamed(t, cfg, "reading"); len(after.Mounts) != len(before.Mounts) {
-			t.Fatalf("%q on a project changed the identity file: %+v", key, after.Mounts)
+		if kb := entryNamed(t, cfg, "ai-ml"); len(kb.Grants) != 0 {
+			t.Fatalf("%q on a project granted something: %+v", key, kb.Grants)
+		}
+		if p := entryNamed(t, cfg, "reading"); len(p.Mounts) != 1 || p.Mounts[0].Access != vault.AccessWrite {
+			t.Fatalf("%q on a project changed its mounts: %+v", key, p.Mounts)
 		}
 	}
 
-	kbCfg, _, hooks := atlasFixture(t)
 	kv := keyV(findVault(t, openView(t, hooks), "ai-ml"), "m")
-	if kv.mounts == nil {
-		t.Fatalf("m should open the mounts screen: err=%q", kv.errMsg)
+	if kv.mounts == nil || len(kv.mounts.rows) != 1 {
+		t.Fatalf("m should open the knowledge base's mounters with one row: err=%q", kv.errMsg)
 	}
-	kbBefore := entryNamed(t, kbCfg, "ai-ml")
 	kv = keyV(kv, "u")
-	if kv.mounts == nil || kv.mounts.mode != mountsList || kv.mounts.err != "" || kv.mounts.changed || len(kv.mounts.rows) != 0 {
+	if kv.mounts == nil || kv.mounts.mode != mountsList || kv.mounts.err != "" || kv.mounts.changed || len(kv.mounts.rows) != 1 {
 		t.Fatalf("u on a knowledge base: mode=%d err=%q changed=%v rows=%d", kv.mounts.mode, kv.mounts.err, kv.mounts.changed, len(kv.mounts.rows))
 	}
-	if after := entryNamed(t, kbCfg, "ai-ml"); len(after.Mounts) != len(kbBefore.Mounts) || len(after.Grants) != len(kbBefore.Grants) {
-		t.Fatalf("u on a knowledge base changed the identity file: %+v", after)
+	if p := entryNamed(t, cfg, "reading"); len(p.Mounts) != 1 {
+		t.Fatalf("u on a knowledge base unmounted something: %+v", p.Mounts)
 	}
 }
 
