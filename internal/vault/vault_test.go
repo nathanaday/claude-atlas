@@ -72,6 +72,74 @@ func TestInitRefusesInsideAnotherRepo(t *testing.T) {
 	}
 }
 
+func TestInitInCreatesAProjectInsideARepository(t *testing.T) {
+	needGit(t)
+	repoRoot := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(repoRoot, 0o755)
+	host := gitx.Repo{Dir: repoRoot}
+	if err := host.Init(); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(repoRoot, "main.go"), []byte("package main\n"), 0o644)
+	res, err := InitIn(repoRoot, Options{Kind: Project, Name: "Notes"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(repoRoot, InRepoDir)
+	if HostRepo(root) != repoRoot {
+		t.Fatalf("HostRepo %q", HostRepo(root))
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git")); err == nil {
+		t.Fatal("the vault must not have its own .git")
+	}
+	v, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Repo().Dir != repoRoot || v.Repo().Prefix != "atlas/" || v.Name() != "Notes" || v.Config.Kind != Project {
+		t.Fatalf("%+v %+v", v.Repo(), v.Config)
+	}
+	changed, err := host.ChangedPaths(res.Commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range changed {
+		if !strings.HasPrefix(p, "atlas/") {
+			t.Fatalf("the setup commit touched %s", p)
+		}
+	}
+	if st, _ := host.Status(); len(st) != 1 || st[0].Path != "main.go" {
+		t.Fatalf("main.go must stay uncommitted: %+v", st)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".gitignore")); err != nil {
+		t.Fatal("atlas/.gitignore must exist")
+	}
+}
+
+func TestInitInRefusals(t *testing.T) {
+	needGit(t)
+	plain := filepath.Join(t.TempDir(), "plain")
+	os.MkdirAll(plain, 0o755)
+	if _, err := InitIn(plain, Options{Kind: Project}, now); err == nil || !strings.Contains(err.Error(), "not the top level of a git repository") {
+		t.Fatalf("plain folder: %v", err)
+	}
+	repoRoot := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(repoRoot, 0o755)
+	gitx.Repo{Dir: repoRoot}.Init()
+	if _, err := InitIn(repoRoot, Options{Kind: Knowledge}, now); err == nil || !strings.Contains(err.Error(), "only a project") {
+		t.Fatalf("knowledge base: %v", err)
+	}
+	if _, err := InitIn(repoRoot, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InitIn(repoRoot, Options{Kind: Project}, now); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("twice: %v", err)
+	}
+	if HostRepo(filepath.Join(t.TempDir(), "atlas")) != "" {
+		t.Fatal("a folder named atlas outside a repository is not inside one")
+	}
+}
+
 func TestIdentityFile(t *testing.T) {
 	needGit(t)
 	kb := filepath.Join(t.TempDir(), "ai-ml")
@@ -407,6 +475,35 @@ func TestAdoptRepairsADamagedIdentityFile(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(filepath.Join(future, Marker)); string(after) != string(marker) {
 		t.Fatalf("the identity file must be untouched:\n%s", after)
+	}
+}
+
+func TestAdoptAcceptsAClonedProjectInsideARepository(t *testing.T) {
+	needGit(t)
+	repoRoot := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(repoRoot, 0o755)
+	gitx.Repo{Dir: repoRoot}.Init()
+	if _, err := InitIn(repoRoot, Options{Kind: Project, Name: "Notes"}, now); err != nil {
+		t.Fatal(err)
+	}
+	clone := filepath.Join(t.TempDir(), "clone")
+	if err := (gitx.Repo{Dir: clone}).Clone(repoRoot); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(clone, InRepoDir)
+	res, err := Adopt(root, Options{Kind: Project}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Kind != Project || res.FromV1 {
+		t.Fatalf("%+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git")); err == nil {
+		t.Fatal("adopt must not git init inside the clone")
+	}
+	v, _ := Open(root)
+	if v.Repo().Dir != clone || v.Name() != "Notes" {
+		t.Fatalf("%+v", v.Repo())
 	}
 }
 

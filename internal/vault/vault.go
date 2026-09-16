@@ -36,6 +36,7 @@ const (
 	InboxDir     = "inbox"
 	KbDir        = "kb"    // a project's mounted knowledge bases, as symlinks git ignores
 	ReposDir     = "repos" // a project's repositories; each keeps its own history
+	InRepoDir    = "atlas" // the folder a project inside a repository lives in: REPO/atlas/
 	RawDir       = ".raw"
 	CapturedDir  = ".raw/captured"
 	WikiDir      = "wiki"
@@ -180,8 +181,32 @@ func (v *Vault) Name() string { return v.Config.Name }
 // Path joins a vault-relative path onto the root.
 func (v *Vault) Path(rel string) string { return filepath.Join(v.Root, filepath.FromSlash(rel)) }
 
-// Repo is the vault's git repository.
-func (v *Vault) Repo() gitx.Repo { return gitx.Repo{Dir: v.Root} }
+// Repo is the vault's git repository: the vault itself, or the host repository scoped to
+// the vault's folder.
+func (v *Vault) Repo() gitx.Repo {
+	if host := HostRepo(v.Root); host != "" {
+		return gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
+	}
+	return gitx.Repo{Dir: v.Root}
+}
+
+// HostRepo is the working tree that holds a vault inside a repository: root is named
+// InRepoDir, has no .git of its own, and its parent has one. It is "" for a vault that is
+// its own repository. Nothing stores this, so a clone answers the same way.
+func HostRepo(root string) string {
+	abs, err := filepath.Abs(root)
+	if err != nil || filepath.Base(abs) != InRepoDir {
+		return ""
+	}
+	if _, err := os.Lstat(filepath.Join(abs, ".git")); err == nil {
+		return ""
+	}
+	parent := filepath.Dir(abs)
+	if _, err := os.Lstat(filepath.Join(parent, ".git")); err != nil {
+		return ""
+	}
+	return parent
+}
 
 var ErrNotVault = errors.New("not a claude-atlas vault")
 
@@ -442,9 +467,7 @@ func Init(root string, opts Options, now time.Time) (*InitResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if entries, err := os.ReadDir(abs); err == nil && len(entries) > 0 {
-		return nil, fmt.Errorf("%s already exists and is not empty; use `claude-atlas adopt` for an existing vault", abs)
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := checkEmpty(abs); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(abs, 0o755); err != nil {
@@ -466,6 +489,67 @@ func Init(root string, opts Options, now time.Time) (*InitResult, error) {
 	}
 	id := NewOperationID("setup", now)
 	sha, err := repo.Commit(CommitMessage("setup", fmt.Sprintf("initialize %s %s (%s mode)", cfg.Kind, cfg.Name, cfg.Mode), id))
+	if err != nil {
+		return nil, err
+	}
+	return &InitResult{Root: abs, OperationID: id, Commit: sha, Files: files}, nil
+}
+
+// checkEmpty refuses a root that exists and holds anything.
+func checkEmpty(abs string) error {
+	entries, err := os.ReadDir(abs)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("%s already exists and is not empty; use `claude-atlas adopt` for an existing vault", abs)
+	}
+	return nil
+}
+
+// InitIn creates a project at REPO/atlas/, tracked by the repository's git, and commits it
+// with the pathspec atlas/. repoRoot must be the top level of a git working tree, the
+// folder must not exist or must be empty, and the kind must be project. The project takes
+// the repository's name unless the caller gives one.
+func InitIn(repoRoot string, opts Options, now time.Time) (*InitResult, error) {
+	if err := requireGit(); err != nil {
+		return nil, err
+	}
+	host, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	if !(gitx.Repo{Dir: host}).IsRepo() {
+		return nil, fmt.Errorf("%s is not the top level of a git repository", host)
+	}
+	if opts.Kind != Project {
+		return nil, errors.New("only a project lives inside a repository")
+	}
+	if strings.TrimSpace(opts.Name) == "" {
+		opts.Name = filepath.Base(host)
+	}
+	abs := filepath.Join(host, InRepoDir)
+	cfg, err := newConfig(abs, opts, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkEmpty(abs); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return nil, err
+	}
+	files, err := writeMissing(abs, cfg, now, true)
+	if err != nil {
+		return nil, err
+	}
+	repo := gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
+	if err := repo.AddAll(); err != nil {
+		return nil, err
+	}
+	id := NewOperationID("setup", now)
+	summary := fmt.Sprintf("initialize project %s (%s mode) in %s", cfg.Name, cfg.Mode, filepath.Base(host))
+	sha, err := repo.Commit(CommitMessage("setup", summary, id))
 	if err != nil {
 		return nil, err
 	}
@@ -543,8 +627,7 @@ var legacyPaths = []Move{{From: LegacyTasksIndex, To: TasksIndex}}
 // moveLegacy puts the files an older version wrote at their current paths. When the
 // current path already exists, the file at the old path is a stale copy and goes, but
 // only if git holds it unchanged; otherwise it may be the user's and stays.
-func moveLegacy(root string) ([]Move, error) {
-	repo := gitx.Repo{Dir: root}
+func moveLegacy(repo gitx.Repo, root string) ([]Move, error) {
 	var moved []Move
 	for _, m := range legacyPaths {
 		from, to := filepath.Join(root, filepath.FromSlash(m.From)), filepath.Join(root, filepath.FromSlash(m.To))
@@ -676,8 +759,9 @@ func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 		return nil, err
 	}
 	res := &UpgradeResult{}
+	repo := v.Repo()
 	if v.Config.Kind == Project {
-		if res.Moved, err = moveLegacy(abs); err != nil {
+		if res.Moved, err = moveLegacy(repo, abs); err != nil {
 			return res, err
 		}
 	}
@@ -687,7 +771,6 @@ func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 	if len(res.Added)+len(res.Moved) == 0 {
 		return res, nil
 	}
-	repo := gitx.Repo{Dir: abs}
 	stage := append([]string{}, res.Added...)
 	var what []string
 	if len(res.Added) > 0 {
@@ -1096,15 +1179,21 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 		return nil, err
 	}
 	res.Kind = cfg.Kind
-	repo := gitx.Repo{Dir: abs}
-	if repo.InsideOtherRepo() {
-		return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
-	}
-	if !repo.IsRepo() {
-		if err := repo.Init(); err != nil {
-			return nil, err
+	var repo gitx.Repo
+	if host := HostRepo(abs); host != "" {
+		// A vault inside a repository: that repository holds its history.
+		repo = gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
+	} else {
+		repo = gitx.Repo{Dir: abs}
+		if repo.InsideOtherRepo() {
+			return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
 		}
-		res.GitInitialized = true
+		if !repo.IsRepo() {
+			if err := repo.Init(); err != nil {
+				return nil, err
+			}
+			res.GitInitialized = true
+		}
 	}
 	// Removing the project scaffolding is one step, but git holds it first.
 	if cfg.Kind == Knowledge && !res.AlreadyAdopted {
@@ -1119,7 +1208,7 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 		}
 	}
 	if res.AlreadyAdopted && cfg.Kind == Project {
-		if res.Moved, err = moveLegacy(abs); err != nil {
+		if res.Moved, err = moveLegacy(repo, abs); err != nil {
 			return nil, err
 		}
 	}

@@ -24,11 +24,16 @@ func mkpage(title, body string) []byte {
 	return []byte(strings.Replace(pageFront, "%s", title, 1) + body)
 }
 
-func newVault(t *testing.T) *vault.Vault {
+func needGit(t *testing.T) {
 	t.Helper()
 	if !gitx.Available() {
 		t.Skip("git is not installed")
 	}
+}
+
+func newVault(t *testing.T) *vault.Vault {
+	t.Helper()
+	needGit(t)
 	root := filepath.Join(t.TempDir(), "v")
 	if _, err := vault.Init(root, vault.Options{Kind: vault.Project, Mode: vault.Generic}, now); err != nil {
 		t.Fatal(err)
@@ -42,9 +47,7 @@ func newVault(t *testing.T) *vault.Vault {
 
 func newKnowledge(t *testing.T) *vault.Vault {
 	t.Helper()
-	if !gitx.Available() {
-		t.Skip("git is not installed")
-	}
+	needGit(t)
 	root := filepath.Join(t.TempDir(), "kb")
 	if _, err := vault.Init(root, vault.Options{Kind: vault.Knowledge}, now); err != nil {
 		t.Fatal(err)
@@ -274,6 +277,69 @@ func TestUndoRevertsAnOperation(t *testing.T) {
 	}
 	if dirty, _ := v.Repo().Dirty(); dirty {
 		t.Fatal("clean after undo")
+	}
+}
+
+func TestAnOperationInsideARepositoryCommitsOnlyTheVault(t *testing.T) {
+	needGit(t)
+	repoRoot := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(repoRoot, 0o755)
+	host := gitx.Repo{Dir: repoRoot}
+	host.Init()
+	os.WriteFile(filepath.Join(repoRoot, "main.go"), []byte("package main\n"), 0o644)
+	host.AddAll()
+	host.Commit("code")
+	if _, err := vault.InitIn(repoRoot, vault.Options{Kind: vault.Project, Name: "Notes"}, now); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(filepath.Join(repoRoot, vault.InRepoDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Half-written code outside the vault, and a hand edit inside it.
+	os.WriteFile(filepath.Join(repoRoot, "main.go"), []byte("package main // half\n"), 0o644)
+	os.WriteFile(v.Path("wiki/hot.md"), []byte("# hot\n\nby hand\n"), 0o644)
+	page := "---\ntype: concept\ntitle: A\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# A\n\ntext\n"
+	plan, err := Prepare(v, Request{Kind: Save, Summary: "add A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: []byte(page)}}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Apply(v, plan, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sha := range []string{res.ManualCommit, res.Commit} {
+		if sha == "" {
+			continue
+		}
+		paths, _ := host.ChangedPaths(sha)
+		for _, p := range paths {
+			if !strings.HasPrefix(p, "atlas/") {
+				t.Fatalf("commit %s touched %s", sha, p)
+			}
+		}
+	}
+	if res.ManualCommit == "" {
+		t.Fatal("the hand edit must be committed first")
+	}
+	if st, _ := host.Status(); len(st) != 1 || st[0].Path != "main.go" {
+		t.Fatalf("main.go must stay as it was: %+v", st)
+	}
+	ops, err := History(v, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) < 2 || ops[0].Kind != "save" {
+		t.Fatalf("history %+v", ops)
+	}
+	if _, err := UndoOperation(v, ops[0].ID, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(v.Path("wiki/concepts/A.md")); err == nil {
+		t.Fatal("undo must remove A")
+	}
+	if data, _ := os.ReadFile(filepath.Join(repoRoot, "main.go")); string(data) != "package main // half\n" {
+		t.Fatalf("undo touched the code: %q", data)
 	}
 }
 

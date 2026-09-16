@@ -296,6 +296,25 @@ func TestNewVaultHasNoFindings(t *testing.T) {
 			}
 		}
 	}
+	for _, mode := range vault.Modes {
+		repoRoot := filepath.Join(t.TempDir(), "code")
+		if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := (gitx.Repo{Dir: repoRoot}).Init(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := vault.InitIn(repoRoot, vault.Options{Kind: vault.Project, Mode: mode}, asOf); err != nil {
+			t.Fatal(err)
+		}
+		r, err := Run(filepath.Join(repoRoot, vault.InRepoDir), Options{AsOf: asOf})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Summary.IssuesFound != 0 || r.Summary.WantedPages != 0 || r.Summary.Stubs != 0 {
+			t.Errorf("project in %s mode inside a repository:\n%s", mode, r.Markdown())
+		}
+	}
 }
 
 func TestKindErrors(t *testing.T) {
