@@ -139,8 +139,10 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	if v.Config.Kind == vault.Project {
 		b.WriteString(mountLines(ix, entry, now))
 		b.WriteString(SearchSentence + "\n")
+		b.WriteString(countsLine(v, projectMounts(entry), now))
 	}
 	if v.Config.Kind == vault.Knowledge {
+		b.WriteString(countsLine(v, nil, now))
 		b.WriteString("Knowledge enters through a project that mounts this knowledge base. Here: lint, repair, fold, stub. Change wiki pages only through the atlas MCP tools (plan, then apply). Skills: " + KnowledgeSkills + "\n")
 	} else {
 		b.WriteString("Change wiki pages only through the atlas MCP tools (plan, then apply). Skills: " + Skills + "\n")
@@ -218,6 +220,63 @@ func mountLines(ix *registry.Index, entry *registry.Entry, now time.Time) string
 		b.WriteString(line + "\n")
 	}
 	return b.String()
+}
+
+// projectMounts maps a project's resolved mounts, name to the mounted knowledge base's
+// wiki path: the same map the MCP server passes to lint. A knowledge base, or an entry
+// the registry could not resolve, passes lint no mounts of its own.
+func projectMounts(entry *registry.Entry) map[string]string {
+	if entry == nil {
+		return nil
+	}
+	paths := map[string]string{}
+	for _, m := range entry.Mounts {
+		if m.Error == "" && m.Path != "" {
+			paths[m.Name] = m.Path
+		}
+	}
+	return paths
+}
+
+// countsLine reports how many pages still need writing: stubs to fill and pages other
+// pages link to that nobody has written yet. A lint failure prints nothing.
+func countsLine(v *vault.Vault, mounts map[string]string, now time.Time) string {
+	report, err := lint.Run(v.Root, lint.Options{AsOf: now, Mounts: mounts})
+	if err != nil {
+		return ""
+	}
+	var parts []string
+	if n := len(report.Stubs); n > 0 {
+		names := make([]string, n)
+		for i, s := range report.Stubs {
+			names[i] = vault.PageTitle(s.Path)
+		}
+		parts = append(parts, fmt.Sprintf("Stubs: %d page%s to fill (%s).", n, plural(n), namesList(names)))
+	}
+	if n := len(report.WantedPages); n > 0 {
+		names := make([]string, n)
+		for i, w := range report.WantedPages {
+			names[i] = w.Title
+		}
+		verb := "do"
+		if n == 1 {
+			verb = "does"
+		}
+		parts = append(parts, fmt.Sprintf("Wanted: %d linked page%s %s not exist yet (%s).", n, plural(n), verb, namesList(names)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	parts = append(parts, "Fill or stub them with the wiki-lint skill.")
+	return strings.Join(parts, " ") + "\n"
+}
+
+// namesList joins up to three names in order; the rest become an ellipsis.
+func namesList(names []string) string {
+	if len(names) > 3 {
+		return strings.Join(names[:3], ", ") + ", …"
+	}
+	return strings.Join(names, ", ")
 }
 
 // taskLines summarizes the open tasks: counts, then the tasks themselves, active first,

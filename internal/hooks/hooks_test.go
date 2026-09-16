@@ -296,6 +296,30 @@ func TestSessionStartListsMountsAndMountedBy(t *testing.T) {
 		}
 	}
 
+	// A project page linking a page that exists only in the mounted knowledge base is not
+	// wanted: the mounts reach lint.
+	if err := os.MkdirAll(filepath.Join(kbRoot, "wiki", "concepts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kbRoot, "wiki", "concepts", "Gradient Descent.md"), []byte(vault.Skeleton("concept", "Gradient Descent", now)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(projectRoot, "wiki", "concepts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	uses := vault.Skeleton("concept", "Uses", now)
+	uses = strings.Replace(uses, "## Related\n\n", "## Related\n\n[[Gradient Descent]]\n\n", 1)
+	if err := os.WriteFile(filepath.Join(projectRoot, "wiki", "concepts", "Uses.md"), []byte(uses), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+projectRoot+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "Wanted:") {
+		t.Errorf("a page in the mounted knowledge base counted as wanted:\n%s", out.String())
+	}
+
 	out.Reset()
 	if err := SessionStart(strings.NewReader(`{"cwd":"`+kbRoot+`"}`), &out, e, false, now); err != nil {
 		t.Fatal(err)
@@ -356,6 +380,55 @@ func TestSessionStartListsMountsAndMountedBy(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "symlink missing; run claude-atlas refresh") {
 		t.Errorf("missing symlink warning:\n%s", out.String())
+	}
+}
+
+func TestSessionStartCountsStubsAndWantedPages(t *testing.T) {
+	v := newVault(t)
+	now := time.Now()
+
+	var out bytes.Buffer
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, now); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "Stubs:") || strings.Contains(out.String(), "Wanted:") {
+		t.Fatalf("a fresh project has nothing to count:\n%s", out.String())
+	}
+
+	os.MkdirAll(v.Path("wiki/concepts"), 0o755)
+	training := vault.Skeleton("concept", "Training", now)
+	training = strings.Replace(training, "## Related\n\n", "## Related\n\n[[Optimizer]], [[Backpropagation]]\n\n", 1)
+	if err := os.WriteFile(v.Path("wiki/concepts/Training.md"), []byte(training), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(v.Path("wiki/concepts/Backpropagation.md"), []byte(vault.Skeleton("concept", "Backpropagation", now)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, now); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	want := "Stubs: 1 page to fill (Backpropagation). Wanted: 1 linked page does not exist yet (Optimizer). Fill or stub them with the wiki-lint skill."
+	if !strings.Contains(text, want) {
+		t.Errorf("missing %q in:\n%s", want, text)
+	}
+
+	// Four wanted pages: three names, then an ellipsis.
+	os.MkdirAll(v.Path("wiki/concepts"), 0o755)
+	four := vault.Skeleton("concept", "Four Wants", now)
+	four = strings.Replace(four, "## Related\n\n", "## Related\n\n[[Alpha]], [[Bravo]], [[Charlie]], [[Delta]]\n\n", 1)
+	if err := os.WriteFile(v.Path("wiki/concepts/Four Wants.md"), []byte(four), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, env(nil), false, now); err != nil {
+		t.Fatal(err)
+	}
+	text = out.String()
+	if !strings.Contains(text, "Wanted: 5 linked pages do not exist yet (Alpha, Bravo, Charlie, …). Fill or stub them with the wiki-lint skill.") {
+		t.Errorf("missing capped wanted list in:\n%s", text)
 	}
 }
 
