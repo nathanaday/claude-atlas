@@ -857,8 +857,21 @@ func (v view) footer(hints ...string) string {
 	return out
 }
 
-// tabBar is the first line: every tab with its count in parentheses, a bar between
-// tabs, the active one in its color, and the refresh stamp at the right.
+// tabColor is the color a tab's box is filled with while it is the active one.
+func tabColor(t tab) lipgloss.Color {
+	switch t {
+	case tabKnowledge:
+		return knowledgeColor
+	case tabTasks:
+		return muted
+	case tabProblems:
+		return lipgloss.Color("9")
+	}
+	return projectColor
+}
+
+// tabBar is the first line: every tab with its count in parentheses, the active one
+// filled with its color, and the refresh stamp at the right.
 func (v view) tabBar() string {
 	var parts []string
 	for _, t := range v.tabs() {
@@ -866,20 +879,9 @@ func (v view) tabBar() string {
 		if n, ok := v.count(t); ok {
 			text += fmt.Sprintf(" (%d)", n)
 		}
-		style := dim
-		if t == v.tab {
-			switch t {
-			case tabProjects:
-				style = projectSt
-			case tabKnowledge:
-				style = knowledgeSt
-			default:
-				style = title
-			}
-		}
-		parts = append(parts, style.Render(text))
+		parts = append(parts, tabStyle(tabColor(t), t == v.tab).Render(text))
 	}
-	left := title.Render("Atlas") + "   " + strings.Join(parts, dim.Render(" | "))
+	left := title.Render("Atlas") + "  " + strings.Join(parts, "")
 	stamp := "not refreshed yet"
 	if t, err := time.Parse("2006-01-02T15:04:05Z", v.refreshed); err == nil {
 		stamp = "refreshed " + t.Local().Format("2006-01-02 15:04")

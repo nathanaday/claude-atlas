@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"github.com/charmbracelet/lipgloss"
+
 	"strings"
 	"testing"
 
@@ -24,6 +26,23 @@ func TestKindColorsAndBoxes(t *testing.T) {
 	}
 	if kindStyle(vault.Knowledge).GetForeground() != knowledgeColor || kindStyle(vault.Project).GetForeground() != projectColor {
 		t.Fatal("kindStyle wears the wrong color")
+	}
+}
+
+func TestTheActiveTabIsFilled(t *testing.T) {
+	on := tabStyle(knowledgeColor, true)
+	if on.GetBackground() != knowledgeColor || on.GetForeground() != lipgloss.Color("0") {
+		t.Fatalf("the active tab is filled with its color: bg=%v fg=%v", on.GetBackground(), on.GetForeground())
+	}
+	off := tabStyle(knowledgeColor, false)
+	if off.GetBackground() == knowledgeColor || off.GetForeground() == lipgloss.Color("0") {
+		t.Fatalf("the other tabs are plain: bg=%v fg=%v", off.GetBackground(), off.GetForeground())
+	}
+	if l, r := off.GetPaddingLeft(), off.GetPaddingRight(); l != 1 || r != 1 {
+		t.Fatalf("every tab is padded into a box: %d %d", l, r)
+	}
+	if tabColor(tabProjects) != projectColor || tabColor(tabKnowledge) != knowledgeColor || tabColor(tabProjects) == tabColor(tabProblems) {
+		t.Fatal("each tab fills with its own color")
 	}
 }
 

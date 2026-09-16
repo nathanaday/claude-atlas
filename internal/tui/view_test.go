@@ -130,7 +130,7 @@ func TestTabBarAndArrows(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
 	out := v.View()
 	t.Logf("\n%s", out)
-	for _, want := range []string{"Atlas   Projects (3) | Knowledge (2) | Tasks (3) | Problems (1)", "A project holds tasks", "refreshed 2026-09-1"} {
+	for _, want := range []string{"Atlas   Projects (3)  Knowledge (2)  Tasks (3)  Problems (1)", "A project holds tasks", "refreshed 2026-09-1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}

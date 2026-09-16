@@ -58,6 +58,17 @@ func boxStyle(k vault.Kind, selected bool) lipgloss.Style {
 	return boxSt
 }
 
+// tabStyle is one tab in the bar: the active tab is filled with its color and the text
+// goes dark; the others are plain text. Both carry a space on each side, so every tab
+// reads as a box.
+func tabStyle(c lipgloss.Color, active bool) lipgloss.Style {
+	s := lipgloss.NewStyle().Padding(0, 1)
+	if active {
+		return s.Background(c).Foreground(lipgloss.Color("0")).Bold(true)
+	}
+	return s
+}
+
 // focus keeps a row's colors when it is under the cursor and strips them otherwise, so
 // the selected row is the colored one and every other row reads plain.
 func focus(lines []string, selected bool) []string {
