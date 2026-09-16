@@ -22,6 +22,19 @@ func CheckNewPath(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%s already exists; adopt it if it is a vault", home.Display(path))
 	}
+	return checkNotInsideVault(path)
+}
+
+// checkNewPathInRepo is CheckNewPath for REPO/atlas/, which may exist while it is empty,
+// as vault.InitIn allows.
+func checkNewPathInRepo(path string) error {
+	if entries, err := os.ReadDir(path); err == nil && len(entries) > 0 {
+		return fmt.Errorf("%s already exists and is not empty; adopt it if it is a vault", home.Display(path))
+	}
+	return checkNotInsideVault(path)
+}
+
+func checkNotInsideVault(path string) error {
 	if outer := vault.FindAbove(filepath.Dir(path)); outer != "" {
 		return fmt.Errorf("%s is inside the vault %s; choose another category or path", home.Display(path), home.Display(outer))
 	}
@@ -52,7 +65,7 @@ func CreateIn(repoRoot string, opts vault.Options, c *console.Console) (string, 
 		return "", err
 	}
 	path := filepath.Join(host, vault.InRepoDir)
-	if err := CheckNewPath(path); err != nil {
+	if err := checkNewPathInRepo(path); err != nil {
 		return "", err
 	}
 	// InitIn refuses a folder that is not a repository too; here the refusal comes before

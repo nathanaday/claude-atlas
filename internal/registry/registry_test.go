@@ -519,6 +519,6 @@ func TestTheHostsNameIsCleanedLikeALinkedOne(t *testing.T) {
 		t.Fatalf("HostName %q", got)
 	}
 	if got := HostName(filepath.Join(root, "...")); got != "..." {
-		t.Fatalf("a name cleaning leaves nothing of stands: %q", got)
+		t.Fatalf("a name that cleaning leaves nothing of stands: %q", got)
 	}
 }

@@ -940,4 +940,29 @@ func TestNewProjectInARepository(t *testing.T) {
 	if code := h.run("show", "Named Notes"); code != 0 {
 		t.Fatalf("show the named project: exit %d\n%s", code, h.err.String())
 	}
+
+	// A folder named atlas that is not already a project keeps its own history; the
+	// refusal names the command that makes one inside a repository.
+	plain := filepath.Join(root, "plain")
+	if err := os.MkdirAll(filepath.Join(plain, "atlas", "wiki"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (gitx.Repo{Dir: plain}).Init(); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("adopt", filepath.Join(plain, "atlas"), "--as", "project"); code != 1 || !strings.Contains(h.err.String(), "--in REPO") {
+		t.Fatalf("adopt a plain folder inside a repository: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+
+	// A clone of the repository is registered with adopt, which says where it lives.
+	clone := filepath.Join(root, "clone")
+	if err := (gitx.Repo{Dir: clone}).Clone(named); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("adopt", filepath.Join(clone, "atlas"), "--as", "project"); code != 0 {
+		t.Fatalf("adopt a clone: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if out := h.out.String(); !strings.Contains(out, "inside") || !strings.Contains(out, "the repository "+clone) {
+		t.Fatalf("adopt must name the repository:\n%s", out)
+	}
 }

@@ -526,12 +526,38 @@ func TestAdoptAcceptsAClonedProjectInsideARepository(t *testing.T) {
 	if v.Repo().Dir != clone || v.Name() != "Notes" {
 		t.Fatalf("%+v", v.Repo())
 	}
-	// Only a project lives inside a repository, whatever the caller asks for.
+	// A folder named atlas that is not already a project is not a clone of one: it is a
+	// vault someone put inside a repository, and it keeps its own history.
 	other := filepath.Join(t.TempDir(), "code")
 	os.MkdirAll(filepath.Join(other, InRepoDir, WikiDir), 0o755)
 	gitx.Repo{Dir: other}.Init()
-	if _, err := Adopt(filepath.Join(other, InRepoDir), Options{Kind: Knowledge}, now); err == nil || !strings.Contains(err.Error(), "only a project lives inside a repository") {
+	_, err = Adopt(filepath.Join(other, InRepoDir), Options{Kind: Project}, now)
+	if err == nil || !strings.Contains(err.Error(), "keeps its own history") || !strings.Contains(err.Error(), "--in REPO") {
+		t.Fatalf("a plain folder named atlas inside a repository: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(other, InRepoDir, Marker)); err == nil {
+		t.Fatal("a refusal must write nothing")
+	}
+
+	// Only a project lives inside a repository, whatever the identity file says.
+	kb := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(filepath.Join(kb, InRepoDir, WikiDir), 0o755)
+	gitx.Repo{Dir: kb}.Init()
+	marker := []byte(`{"schema":"` + Schema + `","id":"kb-1","kind":"knowledge","name":"notes","mode":"generic"}`)
+	os.WriteFile(filepath.Join(kb, InRepoDir, Marker), marker, 0o644)
+	if _, err := Adopt(filepath.Join(kb, InRepoDir), Options{}, now); err == nil || !strings.Contains(err.Error(), "only a project lives inside a repository") {
 		t.Fatalf("a knowledge base inside a repository: %v", err)
+	}
+
+	// A host that ignores the folder is refused by name: git would record nothing.
+	ignored := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(filepath.Join(ignored, InRepoDir, WikiDir), 0o755)
+	gitx.Repo{Dir: ignored}.Init()
+	os.WriteFile(filepath.Join(ignored, ".gitignore"), []byte(InRepoDir+"/\n"), 0o644)
+	project := []byte(`{"schema":"` + Schema + `","id":"p-1","kind":"project","name":"notes","mode":"generic"}`)
+	os.WriteFile(filepath.Join(ignored, InRepoDir, Marker), project, 0o644)
+	if _, err := Adopt(filepath.Join(ignored, InRepoDir), Options{}, now); err == nil || !strings.Contains(err.Error(), "remove that rule") {
+		t.Fatalf("an ignored folder: %v", err)
 	}
 }
 

@@ -98,6 +98,15 @@ func TestCreateInMakesTheProjectAtRepoAtlas(t *testing.T) {
 	if _, err := CreateIn(plain, vault.Options{Kind: vault.Project}, nil); err == nil || !strings.Contains(err.Error(), "git repository") {
 		t.Fatalf("a folder that is not a repository: %v", err)
 	}
+
+	// An empty REPO/atlas is not in the way; vault.InitIn fills it.
+	empty := initRepo(t, filepath.Join(t.TempDir(), "empty"))
+	if err := os.MkdirAll(filepath.Join(empty, vault.InRepoDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateIn(empty, vault.Options{Kind: vault.Project}, nil); err != nil {
+		t.Fatalf("an empty folder at REPO/atlas: %v", err)
+	}
 }
 
 // TestCreateInRefusesARepositoryInsideAVault holds the rule that a vault never goes

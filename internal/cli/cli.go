@@ -709,6 +709,9 @@ func (e *env) adoptPath(path string, vopts vault.Options) (int, error) {
 	default:
 		c.Step(console.OK, "adopted", fmt.Sprintf("as %s; %s", res.Kind.Noun(), setupChanges(res.Added, res.Moved)))
 	}
+	if host := vault.HostRepo(res.Root); host != "" {
+		c.Step(console.OK, "inside", fmt.Sprintf("the repository %s; its git holds the vault's history", home.Display(host)))
+	}
 	if len(res.Removed) > 0 {
 		c.Step(console.OK, "removed", strings.Join(res.Removed, ", ")+" (a knowledge base has none)")
 	}

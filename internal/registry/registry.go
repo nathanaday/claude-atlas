@@ -416,7 +416,9 @@ func takeHost(e *Entry) *Repo {
 			if r.Changes != "" {
 				host.Changes = r.Changes
 			}
-			host.Remote = r.Remote
+			if r.Remote != "" {
+				host.Remote = r.Remote
+			}
 			continue
 		}
 		rest = append(rest, r)

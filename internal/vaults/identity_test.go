@@ -644,4 +644,41 @@ func TestAHostNameIsCleanedBeforeItIsCompared(t *testing.T) {
 	if len(project.Repos) != 1 || project.Repos[0].Changes != links.ChangesPR || project.Repos[0].Path != code {
 		t.Fatalf("one row after the edit: %+v", project.Repos)
 	}
+
+	// Another folder whose name cleans to the host's name would take the host's row, so
+	// the refusal says so rather than calling that folder the host.
+	other := initRepo(t, filepath.Join(t.TempDir(), "code^1"))
+	if _, _, err := AddRepo(h, cfg, project, other, false, identityNow); err == nil || !strings.Contains(err.Error(), "use another name") {
+		t.Fatalf("a name that takes the host's row: %v", err)
+	}
+}
+
+// TestAnIdentityEntryUnderTheHostsOwnNameIsEdited covers an identity file that names the
+// host folder as the user typed it: an edit changes that entry instead of adding a second
+// one, which would leave two entries for one folder.
+func TestAnIdentityEntryUnderTheHostsOwnNameIsEdited(t *testing.T) {
+	cfg, h, code, project := fixtureInRepo(t, "code#1")
+	if err := vault.UpdateConfig(project.Path, "name the host", identityNow, func(c *vault.Config) error {
+		c.Repos = []vault.Repo{{Name: "code#1", Changes: links.ChangesCommit}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+	if len(project.Repos) != 1 || project.Repos[0].Name != "code-1" || project.Repos[0].Path != code {
+		t.Fatalf("the raw entry must fold into the host's row: %+v", project.Repos)
+	}
+	if _, err := EditRepo(h, cfg, project, "code-1", RepoEdit{Changes: strPtr(links.ChangesPR)}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Repos) != 1 || v.Config.Repos[0].Changes != links.ChangesPR {
+		t.Fatalf("identity repos: %+v", v.Config.Repos)
+	}
+	if project = refreshEntry(t, cfg, project.ID); len(project.Repos) != 1 || project.Repos[0].Changes != links.ChangesPR {
+		t.Fatalf("one row after the edit: %+v", project.Repos)
+	}
 }

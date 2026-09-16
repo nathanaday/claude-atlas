@@ -453,13 +453,21 @@ mount, in Obsidian, in the graph, in backlinks, and in lint.
 ### A project inside a repository
 
 `new-project NAME --in REPO` creates the project at `REPO/atlas/`, tracked by
-the repository's own git instead of a git repository of its own. Every wiki
-commit takes the pathspec `atlas/`, so the repository's git tracks only
-`atlas/` and lands on the current branch. Under a `changes: pr` policy, set
-with `edit-repo NAME REPO --changes pr`, the wiki rides the same pull request
-as the code. A clone of the repository is registered with `adopt REPO/atlas
---as project`. `link` and `unlink` do not apply to the host repository: it is
-already the project's first repository, and neither command changes it.
+the repository's own git instead of a history of its own. Every wiki commit
+records only files under `atlas/`. It lands on the current branch. Under a
+`changes: pr` policy, set with `edit-repo NAME REPO --changes pr`, the wiki
+rides the same pull request as the code. `link` and `unlink` do not apply to
+the host repository: it is already the project's first repository, and neither
+command changes it.
+
+`adopt REPO/atlas --as project` registers a clone: the folder must already hold
+the project's identity file. A folder named `atlas` that is not a project yet
+is refused, because its pages would join the repository's history; make one
+with `new-project NAME --in REPO`.
+
+A session that commits code in the repository should leave the vault out, for
+example `git add -- . ':!atlas'`. A page waiting for its operation then stays
+out of the code commit.
 
 ```bash
 claude-atlas new-project --in ~/code/webapp        # the project takes the repository's name

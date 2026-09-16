@@ -169,14 +169,40 @@ func isHost(e registry.Entry, name string) bool {
 	if host == "" {
 		return false
 	}
-	return strings.EqualFold(name, host) || strings.EqualFold(links.CleanName(name), host)
+	return strings.EqualFold(name, host) || strings.EqualFold(name, filepath.Base(e.Host))
+}
+
+// takesHostRow reports whether a repository under this name would land on the host's row:
+// the name the scan derives, the host folder's own name, or a name that cleans to either.
+// Two repositories cannot share one row.
+func takesHostRow(e registry.Entry, name string) bool {
+	host := hostName(e)
+	if host == "" {
+		return false
+	}
+	return isHost(e, name) || strings.EqualFold(links.CleanName(name), host)
+}
+
+// isHostFolder reports whether path is the host's own folder.
+func isHostFolder(e registry.Entry, path string) bool {
+	if e.Host == "" || path == "" {
+		return false
+	}
+	rel, ok := under(e.Host, path)
+	return ok && rel == "."
 }
 
 // hostRepoError is what a caller reads when it tries to link, create, clone, or drop the
 // repository the project lives in. The project's folder sits inside it, so it is already
-// the project's first repository and nothing may add or remove it.
+// the project's first repository, and neither linking nor unlinking changes that.
 func hostRepoError(name string) error {
-	return fmt.Errorf("%s is the repository this project lives in", name)
+	return fmt.Errorf("%s is the repository this project lives in; it is already the project's first repository, so it cannot be linked or unlinked", name)
+}
+
+// nameCollisionError is what a caller reads when a repository's name would take the host's
+// row, though the folder is another one.
+func nameCollisionError(e registry.Entry, name string) error {
+	return fmt.Errorf("%q is filed as %q, the name of the repository this project lives in; use another name", name, hostName(e))
 }
 
 // hasRepo reports whether e's identity file already names a repository name.
@@ -207,8 +233,11 @@ func alreadyHasRepo(e registry.Entry, name string) error {
 // unique on e, and a path that sits inside the vault must sit under repos/. recordRepo
 // checks the name again against the identity file, which is the one that decides.
 func checkRepoTarget(e registry.Entry, name, path string) error {
-	if isHost(e, name) {
-		return hostRepoError(name)
+	if isHostFolder(e, path) {
+		return hostRepoError(hostName(e))
+	}
+	if takesHostRow(e, name) {
+		return nameCollisionError(e, name)
 	}
 	if hasRepo(e, name) {
 		return alreadyHasRepo(e, name)
@@ -414,11 +443,15 @@ func EditRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, edit
 			r.Changes = *edit.Changes
 		}
 	}
+	// An entry under the host's own folder name stands for the host too, as it does in the
+	// scan, so an edit changes it instead of adding a second entry for one folder.
+	host := isHost(e, name)
+	mine := func(entry string) bool { return entry == name || (host && isHost(e, entry)) }
 	var updated vault.Repo
 	if err := vault.UpdateConfig(e.Path, "edit repository "+name, now, func(c *vault.Config) error {
 		found := false
 		for i := range c.Repos {
-			if c.Repos[i].Name != name {
+			if !mine(c.Repos[i].Name) {
 				continue
 			}
 			found = true
@@ -427,7 +460,7 @@ func EditRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, edit
 		}
 		// The host repository is derived, so the identity file names it only once an edit
 		// has something to record about it.
-		if !found && isHost(e, name) {
+		if !found && host {
 			repo := vault.Repo{Name: name}
 			apply(&repo)
 			updated = repo

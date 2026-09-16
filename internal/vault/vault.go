@@ -1198,9 +1198,18 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	res.Kind = cfg.Kind
 	repo := RepoAt(abs)
 	if repo.Prefix != "" {
-		// The repository that holds the vault holds its history too.
-		if cfg.Kind != Project {
+		// The repository that holds the vault holds its history too. Only a project that
+		// already has its identity file takes this path, which is what a clone of one
+		// looks like. Any other folder named atlas keeps its history to itself.
+		switch {
+		case !res.AlreadyAdopted:
+			return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history; create a project inside a repository with `claude-atlas new-project NAME --in REPO`", abs)
+		case cfg.Kind != Project:
 			return nil, fmt.Errorf("%s: only a project lives inside a repository", abs)
+		}
+		host := gitx.Repo{Dir: repo.Dir}
+		if host.Ignored(InRepoDir + "/") {
+			return nil, fmt.Errorf("%s ignores %s/; remove that rule from .gitignore first", repo.Dir, InRepoDir)
 		}
 	} else {
 		if repo.InsideOtherRepo() {

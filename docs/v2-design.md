@@ -542,7 +542,11 @@ check runs in phase 7 against a project with a mount.
 - `skills/wiki-lint/SKILL.md`'s category table is missing `task_errors`,
   `kind_errors`, and `mount_errors`. That is phase 6 work, with the rest of
   the skills, since a skill change needs a plugin version bump.
-- The add screen has no "in repository" option; the TUI's repository rows
-  carry no host mark, though the CLI's `show` and `repos` do.
+- The add screen has no "in repository" option; the CLI's `new-project --in`
+  has it.
+- The TUI's repository rows carry no host mark, though the CLI's `show` and
+  `repos` do.
+- The `repos` tool does not mark the host row either. The SessionStart hook
+  names the repository, so a session is not left guessing.
 - `adopt` on an in-repository project that moved to a different repository
   keeps working, because nothing stores the layout.
