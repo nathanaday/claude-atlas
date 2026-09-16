@@ -32,7 +32,7 @@ func TestStubPagesRefusesWhatIsNotWanted(t *testing.T) {
 		{"Gradient Clipping", "task", `type "task" is not filed`},
 	}
 	for _, c := range cases {
-		_, _, err := StubRequest(v, []StubTitle{{Title: c.title, Type: c.pageType}}, "", nil, now)
+		_, _, _, err := StubRequest(v, []StubTitle{{Title: c.title, Type: c.pageType}}, "", nil, now)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s (%s): got %v, want %q", c.title, c.pageType, err, c.want)
 		}
@@ -100,13 +100,23 @@ func TestStubPagesReplacesAnEmptyPageAtItsRoutedPath(t *testing.T) {
 	if !strings.Contains(read(t, v, "wiki/concepts/In Place.md"), "title: \"In Place\"") {
 		t.Fatal("the empty page is replaced with the skeleton")
 	}
+	ops, err := History(v, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UndoOperation(v, ops[0].ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(v.Path("wiki/concepts/In Place.md")); err != nil || len(data) != 0 {
+		t.Fatalf("undo restores the empty page: %q %v", data, err)
+	}
 }
 
 func TestStubConflictsWhenTheUserTypesIntoTheEmptyPage(t *testing.T) {
 	v := newVault(t)
 	writeFile(t, v, "wiki/concepts/Later.md", string(mkpage("Later", "# Later\n\n[[Typed Into]]\n")))
 	writeFile(t, v, "wiki/Typed Into.md", "")
-	req, _, err := StubRequest(v, nil, "", nil, now)
+	req, _, _, err := StubRequest(v, nil, "", nil, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +130,113 @@ func TestStubConflictsWhenTheUserTypesIntoTheEmptyPage(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(v.Path("wiki/Typed Into.md")); string(data) != "Started writing.\n" {
 		t.Fatalf("the user's text stays: %q", data)
+	}
+}
+
+// The request carries the hash of the empty page as the stub read it, so text typed before
+// the plan is a conflict too, not a base the plan overwrites.
+func TestStubConflictsWhenTheUserTypesBeforeThePlan(t *testing.T) {
+	v := newVault(t)
+	writeFile(t, v, "wiki/concepts/Later.md", string(mkpage("Later", "# Later\n\n[[In Place]]\n")))
+	writeFile(t, v, "wiki/concepts/In Place.md", "")
+	req, _, _, err := StubRequest(v, nil, "", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, v, "wiki/concepts/In Place.md", "Started writing.\n")
+	if _, err := Prepare(v, req, now); !errors.Is(err, ErrConflict) {
+		t.Fatalf("the replaced page: %v", err)
+	}
+	if data, _ := os.ReadFile(v.Path("wiki/concepts/In Place.md")); string(data) != "Started writing.\n" {
+		t.Fatalf("the user's text stays: %q", data)
+	}
+
+	// The empty page a stub moves is deleted, and that write carries the hash too.
+	writeFile(t, v, "wiki/concepts/Later.md", string(mkpage("Later", "# Later\n\n[[Moved]]\n")))
+	writeFile(t, v, "wiki/Moved.md", "")
+	req, _, _, err = StubRequest(v, nil, "", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, v, "wiki/Moved.md", "Started this one too.\n")
+	if _, err := Prepare(v, req, now); !errors.Is(err, ErrConflict) {
+		t.Fatalf("the moved page: %v", err)
+	}
+}
+
+// With no titles the stub takes what it can and reports the rest, so one candidate it
+// cannot file does not cost the user the others.
+func TestStubWithNoTitlesSkipsWhatItCannotStub(t *testing.T) {
+	v := newVault(t)
+	writeFile(t, v, "wiki/concepts/Linker.md", string(mkpage("Linker", "# Linker\n\n[one](Two.md), [two](notes/Two.md), and [[Ordinary]]\n")))
+	writeFile(t, v, "wiki/concepts/Two.md", "")
+	writeFile(t, v, "wiki/concepts/notes/Two.md", "")
+
+	res, err := StubPages(v, nil, "", nil, now)
+	if err != nil || len(res.Stubs) != 1 || res.Stubs[0].Title != "Ordinary" {
+		t.Fatalf("the rest still stubs: %+v %v", res, err)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Title != "Two" || !strings.Contains(res.Skipped[0].Reason, "two empty pages are named Two") {
+		t.Fatalf("skipped %+v", res.Skipped)
+	}
+	for _, rel := range []string{"wiki/concepts/Two.md", "wiki/concepts/notes/Two.md"} {
+		if data, err := os.ReadFile(v.Path(rel)); err != nil || len(data) != 0 {
+			t.Fatalf("%s stays as it was: %q %v", rel, data, err)
+		}
+	}
+	// A title the user names is still refused.
+	if _, _, _, err := StubRequest(v, []StubTitle{{Title: "Two"}}, "", nil, now); err == nil || !strings.Contains(err.Error(), "two empty pages are named Two") {
+		t.Fatalf("a named title: %v", err)
+	}
+}
+
+func TestStubSummaryNamesAtMostThreeTitles(t *testing.T) {
+	v := newVault(t)
+	writeFile(t, v, "wiki/concepts/Linker.md", string(mkpage("Linker", "# Linker\n\n[[Alpha]] [[Bravo]] [[Charlie]] [[Delta]] [[Echo]]\n")))
+	res, err := StubPages(v, nil, "", nil, now)
+	if err != nil || len(res.Stubs) != 5 {
+		t.Fatalf("five stubs: %+v %v", res, err)
+	}
+	ops, err := History(v, 1, false)
+	if err != nil || ops[0].Summary != "stub 5 pages: Alpha, Bravo, Charlie, and 2 more" {
+		t.Fatalf("summary %+v %v", ops, err)
+	}
+}
+
+func TestStubInLYTMode(t *testing.T) {
+	needGit(t)
+	root := filepath.Join(t.TempDir(), "lyt")
+	if _, err := vault.Init(root, vault.Options{Kind: vault.Project, Mode: vault.LYT}, now); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, v, "wiki/notes/Linker.md", string(mkpage("Linker", "# Linker\n\nSee [[Atomic]] and [[Everything]].\n")))
+
+	res, err := StubPages(v, []StubTitle{{Title: "Everything", Type: "moc"}}, "", nil, now)
+	if err != nil || len(res.Stubs) != 1 || res.Stubs[0] != (Stubbed{Title: "Everything", Type: "moc", Path: "wiki/mocs/Everything.md"}) {
+		t.Fatalf("the moc: %+v %v", res, err)
+	}
+	res, err = StubPages(v, nil, "", nil, now)
+	if err != nil || len(res.Stubs) != 1 || res.Stubs[0] != (Stubbed{Title: "Atomic", Type: "note", Path: "wiki/notes/Atomic.md"}) {
+		t.Fatalf("the mode's default type: %+v %v", res, err)
+	}
+	page := read(t, v, "wiki/notes/Atomic.md")
+	if !strings.Contains(page, "type: note") || !strings.Contains(page, "status: seed") || !strings.Contains(page, "# Atomic") {
+		t.Fatalf("stub page:\n%s", page)
+	}
+	report, err := lint.Run(v.Root, lint.Options{AsOf: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stubs []string
+	for _, s := range report.Stubs {
+		stubs = append(stubs, s.Path)
+	}
+	if len(report.WantedPages) != 0 || strings.Join(stubs, ",") != "wiki/mocs/Everything.md,wiki/notes/Atomic.md" {
+		t.Fatalf("both links resolve and both stubs wait to be filled: %v %+v", stubs, report.WantedPages)
 	}
 }
 
@@ -150,7 +267,8 @@ func TestStubLeavesAnUnsanitizableEmptyPageAlone(t *testing.T) {
 		}
 	}
 
-	if _, _, err := StubRequest(v, []StubTitle{{Title: "What?"}}, "", nil, now); err == nil || !strings.Contains(err.Error(), "cannot be a page's file name") {
+	if _, _, _, err := StubRequest(v, []StubTitle{{Title: "What?"}}, "", nil, now); err == nil ||
+		!strings.Contains(err.Error(), `the link text "What?" cannot be a file name`) {
 		t.Fatalf("refusal for What?: %v", err)
 	}
 }
@@ -169,6 +287,23 @@ func TestStubKind(t *testing.T) {
 	p, text := taskPage("T", "planted", "task-20260912-aaaa", vault.TasksDir, "")
 	if _, err := Prepare(v, Request{Kind: Stub, Summary: "x", Writes: []Write{{Path: p, Mode: Create, Content: text}}}, now); err == nil {
 		t.Fatal("a stub never writes a task page")
+	}
+
+	// One title, one page: a name two empty pages share says which two, and a title given
+	// twice with two types says so rather than taking the first.
+	writeFile(t, v, "wiki/concepts/Linker.md", string(mkpage("Linker", "# Linker\n\n[one](Two.md), [two](notes/Two.md), and [[Once]]\n")))
+	writeFile(t, v, "wiki/concepts/Two.md", "")
+	writeFile(t, v, "wiki/concepts/notes/Two.md", "")
+	_, _, _, err := StubRequest(v, []StubTitle{{Title: "Two"}}, "", nil, now)
+	if err == nil || err.Error() != "two empty pages are named Two: wiki/concepts/notes/Two.md, wiki/concepts/Two.md; keep one" {
+		t.Fatalf("two empty pages: %v", err)
+	}
+	_, _, _, err = StubRequest(v, []StubTitle{{Title: "Once"}, {Title: "once", Type: "entity"}}, "", nil, now)
+	if err == nil || err.Error() != "Once is given twice with different types: concept and entity" {
+		t.Fatalf("one title, two types: %v", err)
+	}
+	if _, _, _, err = StubRequest(v, []StubTitle{{Title: "Once"}, {Title: "once", Type: "concept"}}, "", nil, now); err != nil {
+		t.Fatalf("the same type twice is one stub: %v", err)
 	}
 }
 

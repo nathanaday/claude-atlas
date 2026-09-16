@@ -134,6 +134,7 @@ type Report struct {
 type page struct {
 	path     string
 	text     string
+	body     string // text below the frontmatter
 	masked   string
 	fields   map[string]any
 	hasFront bool
@@ -657,8 +658,8 @@ func pathLess(a, b string) bool {
 func parsePage(rel, text string) *page {
 	text = strings.TrimPrefix(text, "\xef\xbb\xbf")
 	pg := &page{path: rel, text: text, headings: map[string]bool{}, blocks: map[string]bool{}}
-	fields, _, err := vault.Frontmatter(text)
-	pg.frontErr = err
+	fields, body, err := vault.Frontmatter(text)
+	pg.body, pg.frontErr = body, err
 	pg.hasFront = strings.HasPrefix(text, "---")
 	if fields != nil {
 		pg.fields = fields
@@ -987,15 +988,16 @@ type nearIndex struct {
 }
 
 type nearName struct {
-	name string
-	key  []rune
+	name   string
+	key    []rune
+	digits string
 }
 
 func newNearIndex(tiers ...[]target) *nearIndex {
 	n := &nearIndex{}
 	add := func(name string) {
 		if key := nameKey(name); len(key) > 0 {
-			n.names = append(n.names, nearName{name: name, key: key})
+			n.names = append(n.names, nearName{name: name, key: key, digits: digits(key)})
 		}
 	}
 	for _, targets := range tiers {
@@ -1029,8 +1031,9 @@ func (n *nearIndex) match(title string) string {
 		limit = 1
 	}
 	best, bestDist := "", limit+1
+	want := digits(key)
 	for _, c := range n.names {
-		if diff := len(c.key) - len(key); diff > limit || -diff > limit || digits(c.key) != digits(key) {
+		if diff := len(c.key) - len(key); diff > limit || -diff > limit || c.digits != want {
 			continue
 		}
 		if d := editDistance(key, c.key); d < bestDist || (d == bestDist && pathLess(c.name, best)) {
@@ -1112,7 +1115,7 @@ func stubOf(pg *page, incoming map[string]bool) (Stub, bool) {
 	empty := strings.TrimSpace(pg.text) == ""
 	switch {
 	case empty && len(from) > 0:
-	case !empty && vault.StringField(pg.fields, "status") == "seed" && bodyEmpty(pg.text):
+	case !empty && vault.StringField(pg.fields, "status") == "seed" && bodyEmpty(pg):
 	default:
 		return Stub{}, false
 	}
@@ -1121,12 +1124,11 @@ func stubOf(pg *page, incoming map[string]bool) (Stub, bool) {
 
 // bodyEmpty reports whether a page holds nothing below its frontmatter but headings, block
 // ids, comments, and whitespace.
-func bodyEmpty(text string) bool {
-	_, body, err := vault.Frontmatter(text)
-	if err != nil {
+func bodyEmpty(pg *page) bool {
+	if pg.frontErr != nil {
 		return false
 	}
-	body = htmlComment.ReplaceAllString(body, "")
+	body := htmlComment.ReplaceAllString(pg.body, "")
 	body = atxHeading.ReplaceAllString(body, "")
 	body = blockIDLine.ReplaceAllString(body, "")
 	return strings.TrimSpace(body) == ""
@@ -1233,8 +1235,8 @@ func sortFindings(r *Report) {
 	sort.SliceStable(r.ReadErrors, func(i, j int) bool { return pathLess(r.ReadErrors[i].Path, r.ReadErrors[j].Path) })
 	sort.SliceStable(r.KindErrors, func(i, j int) bool { return pathLess(r.KindErrors[i].Path, r.KindErrors[j].Path) })
 	sort.SliceStable(r.MountErrors, func(i, j int) bool { return pathLess(r.MountErrors[i].Path, r.MountErrors[j].Path) })
-	sort.Slice(r.WantedPages, func(i, j int) bool { return pathLess(r.WantedPages[i].Title, r.WantedPages[j].Title) })
-	sort.Slice(r.Stubs, func(i, j int) bool { return pathLess(r.Stubs[i].Path, r.Stubs[j].Path) })
+	sort.SliceStable(r.WantedPages, func(i, j int) bool { return pathLess(r.WantedPages[i].Title, r.WantedPages[j].Title) })
+	sort.SliceStable(r.Stubs, func(i, j int) bool { return pathLess(r.Stubs[i].Path, r.Stubs[j].Path) })
 }
 
 func linkLess(a, b LinkFinding) bool {

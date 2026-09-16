@@ -333,6 +333,28 @@ func TestUpgradeAndAdoptMoveTheTaskIndexFromItsOldPath(t *testing.T) {
 	keeps("an ignored", "my ignored notes\n")
 }
 
+// Obsidian's settings are the user's file. A broken one is a problem the user fixes; an
+// upgrade says so and keeps the file.
+func TestUpgradeRefusesABrokenSettingsFile(t *testing.T) {
+	needGit(t)
+	root := filepath.Join(t.TempDir(), "v")
+	if _, err := Init(root, Options{Kind: Project}, now); err != nil {
+		t.Fatal(err)
+	}
+	app := filepath.Join(root, filepath.FromSlash(AppFile))
+	broken := "{ \"newFileLocation\": \n"
+	if err := os.WriteFile(app, []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Upgrade(root, now)
+	if err == nil || !strings.Contains(err.Error(), AppFile) {
+		t.Fatalf("upgrade over broken settings: %v", err)
+	}
+	if data, _ := os.ReadFile(app); string(data) != broken {
+		t.Fatalf("the file stays as the user left it: %q", data)
+	}
+}
+
 func TestAdoptAsKnowledgeRemovesTaskScaffolding(t *testing.T) {
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "old")

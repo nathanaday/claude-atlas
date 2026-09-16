@@ -1,8 +1,10 @@
 package txn
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,9 +28,17 @@ type Stubbed struct {
 	Path  string `json:"path"`
 }
 
+// Skipped is a candidate a stub with no titles passed over, and why. A title the user
+// names is refused instead.
+type Skipped struct {
+	Title  string `json:"title"`
+	Reason string `json:"reason"`
+}
+
 // StubResult reports a stub operation; OperationID is empty when nothing was wanted.
 type StubResult struct {
 	Stubs       []Stubbed `json:"stubs"`
+	Skipped     []Skipped `json:"skipped,omitempty"`
 	OperationID string    `json:"operation_id,omitempty"`
 	Commit      string    `json:"commit,omitempty"`
 }
@@ -44,11 +54,11 @@ func StubPages(v *vault.Vault, titles []StubTitle, defaultType string, mounts ma
 // stubOperation applies one stub operation: the request from stubRequest, committed in
 // dest. via names the project the session came through, and ends the summary.
 func stubOperation(source, dest *vault.Vault, titles []StubTitle, defaultType, via string, mounts map[string]string, now time.Time) (StubResult, error) {
-	req, stubbed, err := stubRequest(source, dest, titles, defaultType, mounts, now)
+	req, stubbed, skipped, err := stubRequest(source, dest, titles, defaultType, mounts, now)
 	if err != nil {
 		return StubResult{}, err
 	}
-	out := StubResult{Stubs: []Stubbed{}}
+	out := StubResult{Stubs: []Stubbed{}, Skipped: skipped}
 	if len(req.Writes) == 0 {
 		return out, nil
 	}
@@ -68,18 +78,22 @@ func stubOperation(source, dest *vault.Vault, titles []StubTitle, defaultType, v
 }
 
 // candidate is a title a vault can stub. empty is the path of the empty page a link
-// points to, and "" for a page nobody has written.
+// points to, and "" for a page nobody has written; hash is that page's content as the
+// stub read it, so a plan made later sees the user's typing as a conflict.
 type candidate struct {
 	title string
 	empty string
+	hash  string
 }
 
 // stubSet is what one lint report offers to stub: the candidates by lowercased title, in
-// the report's order, and the empty pages whose file name cannot come from a title.
+// the report's order, the empty pages whose file name cannot come from a title, and the
+// titles the set refuses, each with its reason.
 type stubSet struct {
 	report     *lint.Report
 	candidates map[string]candidate
 	unnameable map[string]string
+	conflicts  map[string]string
 	order      []string
 }
 
@@ -91,7 +105,7 @@ func stubCandidates(v *vault.Vault, withEmpty bool, mounts map[string]string, no
 	if err != nil {
 		return nil, err
 	}
-	set := &stubSet{report: report, candidates: map[string]candidate{}, unnameable: map[string]string{}}
+	set := &stubSet{report: report, candidates: map[string]candidate{}, unnameable: map[string]string{}, conflicts: map[string]string{}}
 	for _, w := range report.WantedPages {
 		key := strings.ToLower(w.Title)
 		set.candidates[key] = candidate{title: w.Title}
@@ -105,15 +119,27 @@ func stubCandidates(v *vault.Vault, withEmpty bool, mounts map[string]string, no
 			continue
 		}
 		title := vault.PageTitle(s.Path)
+		key := strings.ToLower(title)
 		if vault.SanitizeTitle(title) != title {
-			set.unnameable[strings.ToLower(title)] = s.Path
+			set.unnameable[key] = title
 			continue
 		}
-		key := strings.ToLower(title)
-		if _, dup := set.candidates[key]; !dup {
+		if _, taken := set.conflicts[key]; taken {
+			continue
+		}
+		prior, dup := set.candidates[key]
+		if dup && prior.empty != "" {
+			set.conflicts[key] = fmt.Sprintf("two empty pages are named %s: %s, %s; keep one", title, prior.empty, s.Path)
+			continue
+		}
+		data, err := os.ReadFile(v.Path(s.Path))
+		if err != nil {
+			return nil, err
+		}
+		if !dup {
 			set.order = append(set.order, key)
 		}
-		set.candidates[key] = candidate{title: title, empty: s.Path}
+		set.candidates[key] = candidate{title: title, empty: s.Path, hash: sha(data)}
 	}
 	return set, nil
 }
@@ -130,43 +156,47 @@ func (set *stubSet) all() []StubTitle {
 // find matches a title without regard to case. It says why a title cannot be stubbed.
 func (set *stubSet) find(v *vault.Vault, title string) (candidate, error) {
 	key := strings.ToLower(strings.TrimSpace(title))
+	if reason, taken := set.conflicts[key]; taken {
+		return candidate{}, errors.New(reason)
+	}
 	if c, ok := set.candidates[key]; ok {
 		return c, nil
 	}
-	if p, unnamed := set.unnameable[key]; unnamed {
-		return candidate{}, fmt.Errorf("%s cannot be a page's file name; rename the link so its text is a name a file system accepts, then stub it", p)
+	if text, unnamed := set.unnameable[key]; unnamed {
+		return candidate{}, fmt.Errorf("the link text %q cannot be a file name; rename the link, then stub it", text)
 	}
 	return candidate{}, notWanted(v, set.report, strings.TrimSpace(title))
 }
 
 // StubRequest builds the request StubPages applies. A title must name a wanted page or an
 // empty page a link points to; the type defaults to defaultType, then to the mode's.
-func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, mounts map[string]string, now time.Time) (Request, []Stubbed, error) {
+func StubRequest(v *vault.Vault, titles []StubTitle, defaultType string, mounts map[string]string, now time.Time) (Request, []Stubbed, []Skipped, error) {
 	return stubRequest(v, v, titles, defaultType, mounts, now)
 }
 
 // stubRequest builds one stub operation's request: the candidates come from source's lint
 // report and the pages are routed in dest. A stub that stays in one vault also files the
-// empty pages a link points to, and with no titles it stubs every candidate; a stub that
-// crosses vaults names its titles.
-func stubRequest(source, dest *vault.Vault, titles []StubTitle, defaultType string, mounts map[string]string, now time.Time) (Request, []Stubbed, error) {
+// empty pages a link points to, and with no titles it stubs every candidate it can and
+// reports the rest; a stub that crosses vaults names its titles.
+func stubRequest(source, dest *vault.Vault, titles []StubTitle, defaultType string, mounts map[string]string, now time.Time) (Request, []Stubbed, []Skipped, error) {
 	home := source.Root == dest.Root
 	set, err := stubCandidates(source, home, mounts, now)
 	if err != nil {
-		return Request{}, nil, err
+		return Request{}, nil, nil, err
 	}
-	if len(titles) == 0 {
+	everything := len(titles) == 0
+	if everything {
 		if !home {
-			return Request{}, nil, fmt.Errorf("name the titles to stub in %s", dest.Name())
+			return Request{}, nil, nil, fmt.Errorf("name the titles to stub in %s", dest.Name())
 		}
 		titles = set.all()
 	}
 	if defaultType == "" {
 		defaultType = defaultStubType(dest.Config.Mode)
 	}
-	writes, stubbed, err := set.writes(source, dest, titles, defaultType, now)
+	writes, stubbed, skipped, err := set.writes(source, dest, titles, defaultType, everything, now)
 	if err != nil {
-		return Request{}, nil, err
+		return Request{}, nil, nil, err
 	}
 	req := Request{Kind: Stub, Writes: writes}
 	if home {
@@ -175,55 +205,80 @@ func stubRequest(source, dest *vault.Vault, titles []StubTitle, defaultType stri
 	if len(stubbed) > 0 {
 		req.Summary = stubSummary(stubbed)
 	}
-	return req, stubbed, nil
+	return req, stubbed, skipped, nil
 }
 
 // writes turns titles into one operation's writes: a seed page for each, routed in dest.
 // dest is the source vault itself for a stub that stays home, and then an empty page a
 // link points to is replaced where it lies or moved to its routed path. A stub that lands
-// in another vault leaves such a page alone, because the set holds none.
-func (set *stubSet) writes(source, dest *vault.Vault, titles []StubTitle, defaultType string, now time.Time) ([]Write, []Stubbed, error) {
+// in another vault leaves such a page alone, because the set holds none. With everything
+// set the titles are every candidate, and one the vault cannot file is skipped rather
+// than refused, so the others still land.
+func (set *stubSet) writes(source, dest *vault.Vault, titles []StubTitle, defaultType string, everything bool, now time.Time) ([]Write, []Stubbed, []Skipped, error) {
 	var writes []Write
 	var stubbed []Stubbed
-	seen := map[string]bool{}
+	var skipped []Skipped
+	seen := map[string]string{}
 	for _, t := range titles {
-		key := strings.ToLower(strings.TrimSpace(t.Title))
-		c, err := set.find(source, t.Title)
+		title := strings.TrimSpace(t.Title)
+		key := strings.ToLower(title)
+		c, err := set.find(source, title)
 		if err != nil {
-			return nil, nil, err
-		}
-		if seen[key] {
+			if !everything {
+				return nil, nil, nil, err
+			}
+			skipped = append(skipped, Skipped{Title: title, Reason: err.Error()})
 			continue
 		}
-		seen[key] = true
 		pageType := t.Type
 		if pageType == "" {
 			pageType = defaultType
 		}
+		if prior, dup := seen[key]; dup {
+			if prior != pageType {
+				return nil, nil, nil, fmt.Errorf("%s is given twice with different types: %s and %s", c.title, prior, pageType)
+			}
+			continue
+		}
+		seen[key] = pageType
 		if pageType == "source" {
-			return nil, nil, fmt.Errorf("a source page comes from ingest, with a captured file and a ledger record; stub %q as another type", c.title)
+			return nil, nil, nil, fmt.Errorf("a source page comes from ingest, with a captured file and a ledger record; stub %q as another type", c.title)
 		}
 		route, err := dest.RouteFor(pageType, c.title, now)
-		if err != nil {
-			return nil, nil, err
+		if err == nil {
+			err = routeTaken(source, dest, route, c)
 		}
-		content := []byte(vault.Skeleton(pageType, c.title, now))
-		switch {
-		case c.empty == route.Path:
-			writes = append(writes, Write{Path: route.Path, Mode: Replace, Content: content})
-		case route.Exists && dest.Root != source.Root:
-			return nil, nil, fmt.Errorf("%s already exists in %s; link to it instead", route.Path, dest.Name())
-		case route.Exists:
-			return nil, nil, fmt.Errorf("%s already exists; link to it instead", route.Path)
-		default:
+		if err != nil {
+			if !everything {
+				return nil, nil, nil, err
+			}
+			skipped = append(skipped, Skipped{Title: c.title, Reason: err.Error()})
+			continue
+		}
+		content := []byte(route.Skeleton)
+		if c.empty == route.Path {
+			writes = append(writes, Write{Path: route.Path, Mode: Replace, Content: content, BaseSHA256: c.hash})
+		} else {
 			if c.empty != "" {
-				writes = append(writes, Write{Path: c.empty, Mode: Delete})
+				writes = append(writes, Write{Path: c.empty, Mode: Delete, BaseSHA256: c.hash})
 			}
 			writes = append(writes, Write{Path: route.Path, Mode: Create, Content: content})
 		}
 		stubbed = append(stubbed, Stubbed{Title: c.title, Type: pageType, Path: route.Path})
 	}
-	return writes, stubbed, nil
+	return writes, stubbed, skipped, nil
+}
+
+// routeTaken refuses a stub whose routed path holds a page already, unless that page is
+// the empty one the link points to, which the stub replaces.
+func routeTaken(source, dest *vault.Vault, route *vault.Route, c candidate) error {
+	if !route.Exists || c.empty == route.Path {
+		return nil
+	}
+	if dest.Root != source.Root {
+		return fmt.Errorf("%s already exists in %s; link to it instead", route.Path, dest.Name())
+	}
+	return fmt.Errorf("%s already exists; link to it instead", route.Path)
 }
 
 // StubInto creates, in the knowledge base dest, seed pages for titles source's wiki links
@@ -255,27 +310,38 @@ func notWanted(v *vault.Vault, report *lint.Report, title string) error {
 			return fmt.Errorf("%q nearly matches the page %q; fix the link if it means that page, or rename the link so it no longer resembles it", title, d.Suggestion)
 		}
 	}
-	if p := pageNamed(v, title); p != "" {
+	p, err := pageNamed(v, title)
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %w", vault.WikiDir, err)
+	}
+	if p != "" {
 		return fmt.Errorf("%q already has a page: %s", title, p)
 	}
 	return fmt.Errorf("nothing in the wiki links to %q; link to it from a page first, or write the page with save", title)
 }
 
 // pageNamed returns the wiki page whose file name is title, compared without case.
-func pageNamed(v *vault.Vault, title string) string {
+func pageNamed(v *vault.Vault, title string) (string, error) {
 	found := ""
-	filepath.WalkDir(v.Path(vault.WikiDir), func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || found != "" {
+	err := filepath.WalkDir(v.Path(vault.WikiDir), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
 			return nil
 		}
 		ext := filepath.Ext(d.Name())
 		if strings.EqualFold(ext, ".md") && strings.EqualFold(strings.TrimSuffix(d.Name(), ext), title) {
 			rel, _ := filepath.Rel(v.Root, p)
 			found = filepath.ToSlash(rel)
+			return fs.SkipAll
 		}
 		return nil
 	})
-	return found
+	if err != nil {
+		return "", err
+	}
+	return found, nil
 }
 
 func stubSummary(stubbed []Stubbed) string {

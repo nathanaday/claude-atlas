@@ -683,7 +683,7 @@ func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArg
 type StubArgs struct {
 	VaultArg
 	Titles []txn.StubTitle `json:"titles,omitempty" jsonschema:"the pages to stub; omit to stub every wanted page and every empty page a link points to"`
-	Type   string          `json:"type,omitempty" jsonschema:"the type for titles that name none; default concept, or note in lyt mode"`
+	Type   string          `json:"type,omitempty" jsonschema:"the type for titles that name none: concept, entity, question, or session; note or moc in lyt mode; default concept, or note in lyt mode"`
 }
 
 // StubOp is one operation a stub call made, in the vault it was committed in.
@@ -732,6 +732,7 @@ func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs)
 			return nil, StubOut{}, err
 		}
 		out.Stubs = append(out.Stubs, res.Stubs...)
+		out.Skipped = append(out.Skipped, res.Skipped...)
 		out.add(sess.target.Root, res)
 		out.OperationID, out.Commit = res.OperationID, res.Commit
 	}
@@ -1148,7 +1149,7 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "plant",
 		Description: "Plant a task: create a task page with status planted from a title and the idea's text, as one commit. Give from to remove the inbox/tasks/ note it came from. No plan preview is needed; undo covers it."}, s.plant)
 	mcp.AddTool(server, &mcp.Tool{Name: "stub",
-		Description: "Create seed pages for the pages the wiki links to but nobody has written (lint's wanted pages), and give frontmatter to the empty pages a link points to, as one commit. Omit titles to stub all of them with the mode's default type; pass titles with a type when a name is a person, product, project, or organization (entity). In a project, give a title a target to file its stub in that mount's knowledge base, which the mounts tool names. No plan preview is needed; undo covers it."}, s.stub)
+		Description: "Create seed pages for the pages the wiki links to but nobody has written (lint's wanted pages). The empty pages a link points to get frontmatter too. It is one commit, with no plan preview, and undo reverts it. Omit titles to stub every one of them with the mode's default type; one the vault cannot file is skipped and reported, while a title you name is refused and says why. Pass a title with a type when the name is a person, product, project, or organization (entity). In a project, give a title a target to file its stub in that mount's knowledge base; the mounts tool names them."}, s.stub)
 	mcp.AddTool(server, &mcp.Tool{Name: "tasks", Annotations: ro(),
 		Description: "List the vault's tasks from the task ledger: open ones by status, priority, and age, with each task's page, workdir, last touch, and history; counts; and the notes waiting in inbox/tasks/. Pass all to include finished tasks."}, s.tasks)
 	mcp.AddTool(server, &mcp.Tool{Name: "repos", Annotations: ro(),

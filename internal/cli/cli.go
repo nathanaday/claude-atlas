@@ -2156,8 +2156,13 @@ func (e *env) stub(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	for _, s := range res.Skipped {
+		e.console.Step(console.Skip, "skipped", fmt.Sprintf("%s: %s", s.Title, s.Reason))
+	}
 	if len(res.Stubs) == 0 {
-		e.console.Step(console.Skip, "nothing to stub", "every page the wiki links to exists")
+		if len(res.Skipped) == 0 {
+			e.console.Step(console.Skip, "nothing to stub", "every page the wiki links to exists")
+		}
 		return 0, nil
 	}
 	for _, s := range res.Stubs {

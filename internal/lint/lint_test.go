@@ -258,6 +258,59 @@ func TestStubs(t *testing.T) {
 	}
 }
 
+// A link that names a file, not a page, stays a dead link: a page named "note.md" would
+// be the file "note.md.md", which does not resolve the link.
+func TestALinkWithAFileExtensionIsNotAWantedPage(t *testing.T) {
+	root := fixture(t, map[string]string{
+		"wiki/index.md":          mkpage("Index", "# Index\n\n- [[Alpha]]\n"),
+		"wiki/concepts/Alpha.md": mkpage("Alpha", "# Alpha\n\n[[note.md]]\n\n[[board.canvas]]\n\n[[table.base]]\n\n[[plain]]\n"),
+	})
+	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wanted []string
+	for _, w := range r.WantedPages {
+		wanted = append(wanted, w.Title)
+	}
+	if strings.Join(wanted, ",") != "plain" {
+		t.Fatalf("wanted %v", wanted)
+	}
+	var dead []string
+	for _, f := range r.DeadLinks {
+		dead = append(dead, f.Target)
+	}
+	if strings.Join(dead, ",") != "note.md,board.canvas,table.base" {
+		t.Fatalf("dead links %v", dead)
+	}
+}
+
+// A seed page with nothing under its headings is a stub, and a stub the user wrote by hand
+// still owes its frontmatter; only an empty file is excused.
+func TestASeedStubKeepsItsMissingFrontmatterFinding(t *testing.T) {
+	root := fixture(t, map[string]string{
+		"wiki/index.md":          mkpage("Index", "# Index\n\n- [[Half]]\n- [[Empty]]\n"),
+		"wiki/concepts/Half.md":  "---\ntitle: Half\ntype: concept\nstatus: seed\n---\n\n# Half\n\n## Definition\n",
+		"wiki/concepts/Empty.md": "",
+	})
+	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stubs []string
+	for _, s := range r.Stubs {
+		stubs = append(stubs, s.Path)
+	}
+	if strings.Join(stubs, ",") != "wiki/concepts/Empty.md,wiki/concepts/Half.md" {
+		t.Fatalf("stubs %v", stubs)
+	}
+	if len(r.MissingFrontmatter) != 1 || r.MissingFrontmatter[0].Path != "wiki/concepts/Half.md" ||
+		!r.MissingFrontmatter[0].HasFrontmatter ||
+		strings.Join(r.MissingFrontmatter[0].MissingFields, ",") != "created,updated,tags" {
+		t.Fatalf("missing frontmatter %+v", r.MissingFrontmatter)
+	}
+}
+
 func TestLedgerErrors(t *testing.T) {
 	root := fixture(t, map[string]string{
 		"wiki/index.md": mkpage("Index", "# I\n"),

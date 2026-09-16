@@ -1010,7 +1010,10 @@ func mergeSettings(root, rel string, template []byte, merge func(map[string]any)
 		return false, err
 	}
 	var settings map[string]any
-	if err := json.Unmarshal(existing, &settings); err != nil || settings == nil {
+	if err := json.Unmarshal(existing, &settings); err != nil {
+		return false, fmt.Errorf("%s is not valid JSON: %w; Obsidian wrote it, so fix or remove the file, then try again", rel, err)
+	}
+	if settings == nil {
 		settings = map[string]any{}
 	}
 	if !merge(settings) {

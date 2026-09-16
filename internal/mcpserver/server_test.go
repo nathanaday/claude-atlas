@@ -479,6 +479,19 @@ func TestStubTool(t *testing.T) {
 	if msg := c.call("stub", nil, &out); msg != "" || len(out.Stubs) != 0 || out.OperationID != "" {
 		t.Fatalf("nothing left: %q %+v", msg, out)
 	}
+
+	// What the vault cannot file reaches the model as skipped, not as a refusal.
+	linkPage(t, v, "Linker", "[one](Two.md), [two](notes/Two.md), and [[Ordinary]]")
+	os.MkdirAll(v.Path("wiki/concepts/notes"), 0o755)
+	os.WriteFile(v.Path("wiki/concepts/Two.md"), nil, 0o644)
+	os.WriteFile(v.Path("wiki/concepts/notes/Two.md"), nil, 0o644)
+	out = txn.StubResult{}
+	if msg := c.call("stub", nil, &out); msg != "" || len(out.Stubs) != 1 {
+		t.Fatalf("the rest still stubs: %q %+v", msg, out)
+	}
+	if len(out.Skipped) != 1 || out.Skipped[0].Title != "Two" || !strings.Contains(out.Skipped[0].Reason, "two empty pages are named Two") {
+		t.Fatalf("skipped %+v", out.Skipped)
+	}
 }
 
 func TestKnowledgeBaseTools(t *testing.T) {
