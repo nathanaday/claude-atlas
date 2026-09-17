@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
@@ -115,9 +116,13 @@ func boxLines(e registry.Entry) []string {
 	name := kindStyle(e.Kind).Render(entryName(e))
 	s := e.State
 	if e.Kind == vault.Knowledge {
+		count := pagesText(s) + " pages"
+		if n := len(e.Members); n > 0 {
+			count = fmt.Sprintf("cluster · %d member%s", n, plural(n))
+		}
 		return []string{
 			heatMark(s) + " " + name + "   " + dim.Render(accessOf(e)),
-			dim.Render(pagesText(s) + " pages · " + touchedText(s)),
+			dim.Render(count + " · " + touchedText(s)),
 		}
 	}
 	facts := touchedText(s)
@@ -138,13 +143,17 @@ func accessOf(e registry.Entry) string {
 // mountLine is one connector beside a project: the knowledge base in its color, the
 // effective access, and what is wrong with the link, if anything. kbName is the
 // knowledge base's name as the scan knows it; a mount under another name says so.
-func mountLine(project registry.Entry, m registry.Mount, kbName string, width int) string {
+// cluster marks a mount the project reaches members through.
+func mountLine(project registry.Entry, m registry.Mount, kbName string, cluster bool, width int) string {
 	if m.Error != "" {
 		return arrowOut + errSt.Render(clip(m.Error, width))
 	}
 	access := m.Effective
 	if m.Effective != m.Access {
 		access += fmt.Sprintf(" (%s not granted)", m.Access)
+	}
+	if cluster {
+		access += " · cluster"
 	}
 	as := ""
 	if m.Name != kbName {
@@ -172,8 +181,8 @@ func mountLine(project registry.Entry, m registry.Mount, kbName string, width in
 }
 
 // mountedByLines is the connector column beside a knowledge base: how many projects
-// mount it, or one line per project when expanded, then the grants whose project the
-// scan did not find.
+// mount it and how many knowledge bases it gathers, or one line per project and then per
+// member when expanded, and last the grants whose project the scan did not find.
 func mountedByLines(e registry.Entry, expanded bool) []string {
 	var stale []registry.Grant
 	for _, g := range e.Grants {
@@ -187,6 +196,9 @@ func mountedByLines(e registry.Entry, expanded bool) []string {
 		if n := len(e.MountedBy); n > 0 {
 			text = projectSt.Render(fmt.Sprintf("%d project%s", n, plural(n)))
 		}
+		if n := len(e.Members); n > 0 {
+			text += dim.Render(fmt.Sprintf(" · %d member%s", n, plural(n)))
+		}
 		if len(stale) > 0 {
 			text += errSt.Render(fmt.Sprintf(" · %d grant%s stale", len(stale), plural(len(stale))))
 		}
@@ -198,6 +210,13 @@ func mountedByLines(e registry.Entry, expanded bool) []string {
 	}
 	if len(out) == 0 {
 		out = append(out, arrowIn+none)
+	}
+	for _, m := range e.Members {
+		line := noArrow + knowledgeSt.Render(memberName(m)) + dim.Render("   member")
+		if m.Error != "" {
+			line = noArrow + errSt.Render(memberName(m)+"   "+m.Error)
+		}
+		out = append(out, line)
 	}
 	for _, g := range stale {
 		name := g.Name
@@ -243,6 +262,20 @@ func detailLines(e registry.Entry) []string {
 	if e.Kind == vault.Knowledge {
 		row("Scope", e.Scope)
 		row("Access", accessOf(e))
+		if len(e.Clusters) > 0 {
+			var names []string
+			for _, c := range e.Clusters {
+				names = append(names, c.Name)
+			}
+			row("In cluster", strings.Join(names, ", "))
+		}
+		for _, m := range e.Members {
+			text := memberName(m)
+			if m.Error != "" {
+				text = errSt.Render(text + "  " + m.Error)
+			}
+			row("Members", text)
+		}
 		for _, g := range e.Grants {
 			text := g.Name + "  " + g.Access
 			if g.Error != "" {

@@ -133,6 +133,7 @@ type view struct {
 	ingest    *ingestScreen
 	links     *linksScreen
 	mounts    *mountsScreen
+	cluster   *clusterScreen
 	tasks     *tasksScreen
 	changed   bool
 	ask       *Item  // vault awaiting a register-and-open confirmation
@@ -306,6 +307,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.mounts != nil {
 			v.mounts.width = msg.Width
 		}
+		if v.cluster != nil {
+			v.cluster.width = msg.Width
+		}
 		if v.tasks != nil {
 			v.tasks.width = msg.Width
 			v.tasks.avail = v.bodyHeight()
@@ -363,6 +367,10 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.mounts.reload(v.items)
 			v.mounts.status = "refreshed"
 		}
+		if v.cluster != nil {
+			v.cluster.reload(v.items)
+			v.cluster.status = "refreshed"
+		}
 		if v.tasks != nil {
 			v.tasks.reload(v.items)
 			v.tasks.status = "refreshed"
@@ -389,6 +397,9 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if v.mounts != nil {
 			return v.updateMounts(msg)
+		}
+		if v.cluster != nil {
+			return v.updateCluster(msg)
 		}
 		if v.tasks != nil {
 			return v.updateTasks(msg)
@@ -448,7 +459,7 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.tab == tabTasks {
 			return v.updateTasksTab(msg)
 		}
-		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" || key == "l" || key == "m" || key == "t" {
+		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" || key == "l" || key == "m" || key == "M" || key == "t" {
 			item := v.current()
 			if item == nil {
 				return v, nil
@@ -466,6 +477,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v.openLinks(item)
 			case "m":
 				return v.openMounts(item)
+			case "M":
+				return v.openCluster(item)
 			case "t":
 				return v.openTasks(item)
 			case "i":
@@ -676,6 +689,50 @@ func (v view) updateMounts(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.mounts.reload(v.items)
 		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
 			v.mounts.status += " · refreshing…"
+			return v, tea.Batch(cmd, refreshCmd)
+		}
+	}
+	return v, cmd
+}
+
+// openCluster shows the knowledge bases a knowledge base gathers.
+func (v view) openCluster(item *Item) (tea.Model, tea.Cmd) {
+	if item.Entry.Error != "" {
+		v.errMsg = item.Entry.Error
+		return v, nil
+	}
+	if item.Entry.Kind != vault.Knowledge {
+		v.errMsg = "a project holds no members"
+		return v, nil
+	}
+	if v.hooks.Load == nil || v.hooks.AddMember == nil || v.hooks.RemoveMember == nil {
+		v.errMsg = "members are not available here"
+		return v, nil
+	}
+	s := newCluster(v.hooks, item.Entry, v.items, v.width)
+	v.cluster = &s
+	return v, nil
+}
+
+// updateCluster forwards keys to the members screen; after an action it refreshes every
+// vault in the background so the projects that mount the cluster catch up, and keeps the
+// screen open.
+func (v view) updateCluster(msg tea.Msg) (tea.Model, tea.Cmd) {
+	s, cmd := v.cluster.update(msg)
+	if s.closed {
+		v.cluster = nil
+		v.reload(s.entry.Path)
+		return v, nil
+	}
+	v.cluster = &s
+	if s.changed {
+		v.cluster.changed = false
+		v.changed = true
+		v.focus = s.entry.Path
+		v.reload(s.entry.Path)
+		v.cluster.reload(v.items)
+		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
+			v.cluster.status += " · refreshing…"
 			return v, tea.Batch(cmd, refreshCmd)
 		}
 	}
@@ -973,6 +1030,8 @@ func (v view) View() string {
 		return v.fit(v.links.view(), false)
 	case v.mounts != nil:
 		return v.fit(v.mounts.view(), false)
+	case v.cluster != nil:
+		return v.fit(v.cluster.view(), false)
 	case v.tasks != nil:
 		return v.fit(v.tasks.view(), false)
 	}
@@ -1060,6 +1119,8 @@ func vaultKeys(e registry.Entry) string {
 	keys := "o Obsidian · c Claude"
 	if e.Kind == vault.Project {
 		keys += " · i ingest · t tasks · l repos"
+	} else {
+		keys += " · M members"
 	}
 	return keys + " · m mounts · e edit"
 }

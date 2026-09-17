@@ -68,40 +68,49 @@ func TestBoxLinesByKind(t *testing.T) {
 	if lines := boxLines(bad); lines[0] != "old-notes" || lines[1] != "v1 vault; run claude-atlas adopt" {
 		t.Fatalf("problem box %q", lines)
 	}
+	// A cluster names its members where a knowledge base names its pages.
+	cluster := registry.Entry{Kind: vault.Knowledge, Name: "papers", Path: "/v/papers", State: &registry.State{Heat: "warm", Pages: &four},
+		Members: []registry.Ref{{ID: "a", Name: "ai-ml"}, {ID: "b", Name: "notes"}}}
+	if lines := boxLines(cluster); lines[1] != "cluster · 2 members · new" {
+		t.Fatalf("cluster box %q", lines)
+	}
 }
 
 func TestMountLineSaysWhatTheLinkIs(t *testing.T) {
 	p := registry.Entry{Kind: vault.Project, Name: "p3", Path: t.TempDir()}
 	m := registry.Mount{ID: "kb1", Name: "ai-ml", Access: "write", Effective: "write", Path: "/v/ai-ml/wiki"}
-	if got := mountLine(p, m, "ai-ml", 40); got != "╌╌╌╌▶ ai-ml   write · link missing" {
+	if got := mountLine(p, m, "ai-ml", false, 40); got != "╌╌╌╌▶ ai-ml   write · link missing" {
 		t.Fatalf("missing link: %q", got)
+	}
+	if got := mountLine(p, m, "ai-ml", true, 40); got != "╌╌╌╌▶ ai-ml   write · cluster · link missing" {
+		t.Fatalf("cluster mount: %q", got)
 	}
 	link := filepath.Join(p.Path, "kb", "ai-ml")
 	os.MkdirAll(filepath.Dir(link), 0o755)
 	os.Symlink("/v/ai-ml/wiki", link)
-	if got := mountLine(p, m, "ai-ml", 40); got != "╌╌╌╌▶ ai-ml   write" {
+	if got := mountLine(p, m, "ai-ml", false, 40); got != "╌╌╌╌▶ ai-ml   write" {
 		t.Fatalf("good link: %q", got)
 	}
 	os.Remove(link)
 	os.Symlink("/elsewhere", link)
-	if got := mountLine(p, m, "ai-ml", 40); got != "╌╌╌╌▶ ai-ml   write · link wrong" {
+	if got := mountLine(p, m, "ai-ml", false, 40); got != "╌╌╌╌▶ ai-ml   write · link wrong" {
 		t.Fatalf("wrong link: %q", got)
 	}
 	reduced := registry.Mount{ID: "kb2", Name: "papers", Access: "write", Effective: "read", Path: "/v/papers/wiki"}
-	if got := mountLine(p, reduced, "papers", 40); got != "╌╌╌╌▶ papers   read (write not granted) · link missing" {
+	if got := mountLine(p, reduced, "papers", false, 40); got != "╌╌╌╌▶ papers   read (write not granted) · link missing" {
 		t.Fatalf("reduced: %q", got)
 	}
 	renamed := registry.Mount{ID: "kb2", Name: "old", Access: "read", Effective: "read", Path: "/v/papers/wiki"}
-	if got := mountLine(p, renamed, "papers", 40); !strings.HasPrefix(got, "╌╌╌╌▶ papers as kb/old   read") {
+	if got := mountLine(p, renamed, "papers", false, 40); !strings.HasPrefix(got, "╌╌╌╌▶ papers as kb/old   read") {
 		t.Fatalf("renamed: %q", got)
 	}
 	gone := registry.Mount{ID: "x", Name: "x", Access: "write", Error: "no knowledge base with id x"}
-	if got := mountLine(p, gone, "x", 40); got != "╌╌╌╌▶ no knowledge base with id x" {
+	if got := mountLine(p, gone, "x", false, 40); got != "╌╌╌╌▶ no knowledge base with id x" {
 		t.Fatalf("gone: %q", got)
 	}
 	// A long name gives way to the access and the link text, so the whole line fits.
 	big := registry.Mount{ID: "kb3", Name: "a-very-long-knowledge-base-name", Access: "read", Effective: "read", Path: "/v/big/wiki"}
-	long := strings.TrimPrefix(stripANSI(mountLine(p, big, "a-very-long-knowledge-base-name", 40)), arrowOut)
+	long := strings.TrimPrefix(stripANSI(mountLine(p, big, "a-very-long-knowledge-base-name", false, 40)), arrowOut)
 	if !strings.Contains(long, "a-very-long") || !strings.Contains(long, "…") || len([]rune(long)) > 40 {
 		t.Fatalf("clipped: %q is %d runes", long, len([]rune(long)))
 	}
@@ -128,6 +137,16 @@ func TestMountedByLinesCountThenList(t *testing.T) {
 	}
 	if got := mountedByLines(none, true); len(got) != 1 || got[0] != "◀╌╌╌╌ not mounted by any project" {
 		t.Fatalf("none expanded: %q", got)
+	}
+	// A cluster counts its members beside its projects, and lists them after them.
+	cluster := registry.Entry{Kind: vault.Knowledge, Name: "papers", MountedBy: kb.MountedBy[:1],
+		Members: []registry.Ref{{ID: "a", Name: "ai-ml"}, {ID: "b", Name: "gone", Error: "no knowledge base with id b"}}}
+	if got := mountedByLines(cluster, false); len(got) != 1 || got[0] != "◀╌╌╌╌ 1 project · 2 members" {
+		t.Fatalf("cluster collapsed: %q", got)
+	}
+	want = []string{"◀╌╌╌╌ course   read", "      ai-ml   member", "      gone   no knowledge base with id b"}
+	if got := mountedByLines(cluster, true); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("cluster expanded: %q", got)
 	}
 }
 
@@ -165,6 +184,15 @@ func TestDetailLinesByKind(t *testing.T) {
 	}
 	if strings.Contains(out, "Tags") || strings.Contains(out, "Vault check") {
 		t.Errorf("knowledge detail:\n%s", out)
+	}
+	// The relation reads from both sides: a cluster lists its members, a member its clusters.
+	kb.Members = []registry.Ref{{ID: "a", Name: "ai-ml"}, {ID: "b", Name: "lost", Error: "no knowledge base with id b"}}
+	kb.Clusters = []registry.Ref{{ID: "c", Name: "domain"}}
+	out = strings.Join(detailLines(kb), "\n")
+	for _, want := range []string{"In cluster", "domain", "Members", "ai-ml", "lost  no knowledge base with id b"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("cluster detail missing %q:\n%s", want, out)
+		}
 	}
 	bad := registry.Entry{Path: "/v/old", Error: "v1 vault; run claude-atlas adopt /v/old --as knowledge|project", Reason: registry.ReasonV1}
 	out = strings.Join(detailLines(bad), "\n")

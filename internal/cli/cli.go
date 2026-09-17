@@ -867,6 +867,12 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 		EditMount: func(project registry.Entry, target, access string) (vault.Mount, error) {
 			return vaults.SetMountAccess(project, target, access, time.Now())
 		},
+		AddMember: func(cluster, kb registry.Entry) error {
+			return vaults.AddMember(cluster, kb, time.Now())
+		},
+		RemoveMember: func(cluster registry.Entry, target string) error {
+			return vaults.RemoveMember(cluster, target, time.Now())
+		},
 		Grant: func(kb, project registry.Entry, access string) error {
 			return vaults.Grant(kb, project, access, time.Now())
 		},

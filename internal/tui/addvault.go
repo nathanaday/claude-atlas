@@ -417,6 +417,11 @@ func (m model) content(s step) string {
 		if kb := m.mountChoice(); kb != nil {
 			name = kb.Name
 			hint = "mounted at kb/" + kb.Name + " with write access; m on the project changes it"
+			// Mounting a cluster reaches every member, so the count belongs on the choice.
+			if n := len(kb.Members); vaults.IsCluster(*kb) {
+				name += fmt.Sprintf("   %d member%s", n, plural(n))
+				hint = fmt.Sprintf("a cluster: the project reaches its %d member%s too", n, plural(n))
+			}
 		}
 		if at {
 			return "◂ " + name + " ▸" + dim.Render("  "+hint)

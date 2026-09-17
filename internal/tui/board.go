@@ -206,9 +206,26 @@ func (b board) side(e registry.Entry) []string {
 		if len(e.Mounts) == 0 {
 			return []string{noArrow + dim.Render("no knowledge base mounted")}
 		}
+		// A derived mount takes no connector of its own: its cluster names it on one line
+		// under the cluster's connector, so a cluster with five members stays two lines.
+		through := map[string][]string{}
+		for _, m := range e.Mounts {
+			if m.Through != "" {
+				through[m.Through] = append(through[m.Through], b.kbName(m))
+			}
+		}
 		var out []string
 		for _, m := range e.Mounts {
-			out = append(out, mountLine(e, m, b.kbName(m), b.labelWidth()))
+			if m.Through != "" {
+				continue
+			}
+			name := b.kbName(m)
+			members := through[name]
+			out = append(out, mountLine(e, m, name, len(members) > 0, b.labelWidth()))
+			if len(members) > 0 {
+				text := "through " + name + ": " + strings.Join(members, ", ")
+				out = append(out, noArrow+dim.Render(clip(text, b.labelWidth())))
+			}
 		}
 		return out
 	case boardKnowledge:
