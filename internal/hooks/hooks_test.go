@@ -185,7 +185,7 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 	out.Reset()
 	SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, e, false, now)
 	text = out.String()
-	if want := "Repository: code · changes: commit · " + home.Display(outside) + " (main) · " + registry.NotDescribed + "\n"; !strings.Contains(text, want) {
+	if want := "Repository: code · changes: commit · " + home.Display(outside) + " (main) · " + registry.NotDescribed + "; the repo-map skill writes the page\n"; !strings.Contains(text, want) {
 		t.Fatalf("missing %q in:\n%s", want, text)
 	}
 	head, _ := (gitx.Repo{Dir: outside}).Head()

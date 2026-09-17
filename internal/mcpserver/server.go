@@ -1188,7 +1188,7 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "settings",
 		Description: "Set an atlas setting and return them all: new_days (how long a vault counts as new) and repo_changes (the change policy a newly linked repository takes, commit or pr). With no arguments it only reads."}, s.settingsTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "stage",
-		Description: "Copy files or folders from outside a project into its inbox, skipping what the project already captured or already holds; omit paths to stage what is new in the folders it staged from before. dry_run plans and copies nothing. Then ingest with the wiki-ingest skill."}, s.stageTool)
+		Description: "Copy files or folders from outside a project into its inbox, skipping what the project already captured or already holds; omit paths to stage what is new in the folders it staged from before. dry_run plans and copies nothing. Then ingest with the wiki-ingest skill. With repo, write a snapshot of one of the project's repositories into the inbox instead, for the repo-map skill."}, s.stageTool)
 	return server
 }
 

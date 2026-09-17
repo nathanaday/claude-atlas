@@ -57,6 +57,11 @@ inventing it.
 entity_type: organization
 first_mentioned: "[[Source page]]"
 
+# entity describing a repository (repo-map)
+entity_type: repository
+repo: github.com/you/app        # the remote, or the repository's name
+commit: fc70d93a…               # the commit the page was written from, in full
+
 # question
 question: "What is being asked?"
 assessment: unsupported

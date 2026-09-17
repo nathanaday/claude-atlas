@@ -54,8 +54,19 @@ func TestReposScreenMountsCreatesEditsAndUnlinks(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(code, ".git")); err != nil {
 		t.Fatal("the folder should be a repository now")
 	}
+	v = keyV(v, "i")
+	if !strings.HasPrefix(v.links.status, "staged code-") || !strings.Contains(v.links.status, "/claude-atlas:repo-map") || v.links.err != "" {
+		t.Fatalf("i should stage a snapshot: status=%q err=%q", v.links.status, v.links.err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(vaultPath, "inbox", "code-*.md")); len(matches) != 1 {
+		t.Fatalf("snapshot in the inbox: %v", matches)
+	}
+	v = keyV(v, "i")
+	if !strings.Contains(v.links.status, "already waits") {
+		t.Fatalf("the same commit again: %q", v.links.status)
+	}
 	out := v.View()
-	for _, want := range []string{"╭", "code", "changes: commit", "not refreshed yet", "u unlink"} {
+	for _, want := range []string{"╭", "code", "changes: commit", "not refreshed yet", "u unlink", "i snapshot"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}

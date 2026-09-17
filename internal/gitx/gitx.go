@@ -580,3 +580,43 @@ func (r Repo) Behind(rev string) (int, error) {
 	}
 	return n, nil
 }
+
+// Branch is the current branch's name, or "HEAD" when detached.
+func (r Repo) Branch() (string, error) {
+	out, err := r.run("rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// LsFiles lists every tracked path under Prefix, relative to it, in git's order.
+func (r Repo) LsFiles() ([]string, error) {
+	out, err := r.run("ls-files", "-z", "--", r.pathspec())
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p == "" {
+			continue
+		}
+		if rel, ok := r.out(p); ok {
+			paths = append(paths, rel)
+		}
+	}
+	return paths, nil
+}
+
+// LogStat is git log --stat for the commits after from up to HEAD, newest first, at most
+// max of them when max is above 0.
+func (r Repo) LogStat(from string, max int) (string, error) {
+	args := []string{"log", "--stat", "--format=%h %as %s", from + "..HEAD"}
+	if max > 0 {
+		args = append(args, fmt.Sprintf("-n%d", max))
+	}
+	if r.Prefix != "" {
+		args = append(args, "--", r.Prefix)
+	}
+	return r.run(args...)
+}

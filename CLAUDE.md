@@ -15,7 +15,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side before v2 (superseded by `v2-design.md`) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
-| Working from a project: repository pages, the work skill (phase 1 built) | `docs/superpowers/specs/2026-09-17-working-from-a-project-design.md` |
+| Working from a project: repository pages, the work skill (phases 1–2 built) | `docs/superpowers/specs/2026-09-17-working-from-a-project-design.md` |
 | The atlas tools and the `atlas` skills | `docs/superpowers/specs/2026-09-16-atlas-tools-design.md` |
 | Original brainstorm (not a contract) | `docs/spec.md` |
 | The skills' contracts | `skills/<name>/SKILL.md` and `skills/wiki/references/` |
@@ -105,8 +105,8 @@ internal/gitx/          the git commands the core needs
 internal/txn/           plans, preview, apply, recovery, undo, history, planting a task
 internal/tasks/         task pages, the derived task ledger and index; never decides to write
 internal/discover/      the project a folder belongs to, through the projects' repositories
-internal/repomap/       the page that describes a repository, the commit it was written from, and how far the repository moved since; reads only
-internal/capture/       inbox listing and capture into .raw/captured/
+internal/repomap/       the page that describes a repository, the commit it was written from, how far the repository moved since, and the snapshot a page cites; reads only, capture writes the snapshot
+internal/capture/       inbox listing, staging into inbox/ (files, and a repository's snapshot), capture into .raw/captured/
 internal/ledger/        the source ledger
 internal/lint/          the health check (ported from claude-obsidian's engine)
 internal/mcpserver/     the tools, thin over the packages above
@@ -287,7 +287,8 @@ with `claude --plugin-dir .` from inside a vault. End-to-end by hand:
 `--allowedTools "mcp__plugin_claude-atlas_atlas__*,Read,Grep,Glob,Skill"`.
 
 1.0.0 is the first v2 release; 1.1.0 is the view with tabs; 1.2.0 is
-clusters; 1.3.0 is the atlas tools and skills.
+clusters; 1.3.0 is the atlas tools and skills; 1.4.0 is repositories in the
+knowledge base.
 
 ## Open questions
 

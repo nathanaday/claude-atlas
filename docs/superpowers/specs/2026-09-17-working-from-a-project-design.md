@@ -1,7 +1,7 @@
 # Working from a project: repositories in the knowledge base, and the work skill
 
-Date: 2026-09-17. Applies to claude-atlas 1.3.0; ships as 1.4.0. Phase 1
-built on 2026-09-17.
+Date: 2026-09-17. Applies to claude-atlas 1.3.0; ships as 1.4.0. Phases 1
+and 2 built on 2026-09-17.
 Builds on `docs/tasks-design.md` and `docs/v2-design.md`. Nothing here
 changes what a task, a mount, or a repository is.
 
@@ -98,6 +98,7 @@ small enough to read and cite:
 
 ```yaml
 ---
+title: "claude-atlas at fc70d93"
 type: repo-snapshot
 repo: github.com/nathanaday/claude-atlas    # the remote, or the name when there is none
 name: claude-atlas
@@ -117,10 +118,12 @@ commits. Nothing else. The snapshot is the immutable source, captured into
 commit through a source the ledger holds. A page that cited the repository
 directly would point at a history that can be rewritten or deleted.
 
-`stage` gains `repo`: the name of one of the project's repositories. It
-writes the snapshot to `inbox/<name>-<short commit>.md` and remembers
-nothing; `stage` with no paths restages folders, not repositories. `since`
-is filled from `repos`'s `commit` when the repository is described. The CLI
+`stage` gains `repo`: the name of one of the project's repositories, not
+with `paths` and without `dry_run`. It writes the snapshot to
+`inbox/<name>-<short commit>.md`, or reports it already waiting or captured,
+and remembers nothing; `stage` with no paths restages folders, not
+repositories. `since` is filled from the described page's `commit`, and the
+log section is left out when that commit is HEAD or not in the history. The CLI
 counterpart is `claude-atlas ingest NAME --repo REPO`, which stages the
 snapshot and continues as `ingest` does. `view`'s repositories screen gets
 `i` on a row for the same thing.

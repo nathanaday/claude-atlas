@@ -27,7 +27,7 @@ import (
 const MaxContextBytes = 8 * 1024
 
 // Skills is the slash-menu line shown at session start.
-const Skills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  wiki-mode  save  wiki-fold  task  task-plant  task-plan  task-run  task-finish  canvas  obsidian-markdown  obsidian-bases  think  atlas  atlas-project  atlas-knowledge  atlas-mount  atlas-repo"
+const Skills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  wiki-mode  save  wiki-fold  repo-map  task  task-plant  task-plan  task-run  task-finish  canvas  obsidian-markdown  obsidian-bases  think  atlas  atlas-project  atlas-knowledge  atlas-mount  atlas-repo"
 
 // KnowledgeSkills is the slash-menu line for a knowledge base, where knowledge enters
 // through a project and the work here is upkeep.
@@ -250,7 +250,7 @@ func repositoryLines(entry *registry.Entry, root string) string {
 		if d := repomap.Describe(*entry, r); d != nil {
 			parts = append(parts, d.Summary())
 		} else {
-			parts = append(parts, registry.NotDescribed)
+			parts = append(parts, registry.NotDescribed+"; the repo-map skill writes the page")
 		}
 		if p := repomap.ClaudeMD(r); p != "" {
 			parts = append(parts, "CLAUDE.md: "+placeOf(root, p))

@@ -988,12 +988,13 @@ func (e *env) ingest(args []string) (int, error) {
 	fs := newFlags("ingest", e.stderr)
 	dryRun := fs.Bool("dry-run", false, "show what would be staged and stop")
 	noClaude := fs.Bool("no-claude", false, "stage the files but do not start Claude Code")
+	repo := fs.String("repo", "", "stage a snapshot of one of the project's repositories instead of files")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
-	if len(positional) == 0 {
-		return 2, errors.New("usage: claude-atlas ingest NAME [PATH ...] [--dry-run] [--no-claude]")
+	if len(positional) == 0 || (*repo != "" && (len(positional) > 1 || *dryRun)) {
+		return 2, errors.New("usage: claude-atlas ingest NAME [PATH ...] [--dry-run] [--no-claude], or claude-atlas ingest NAME --repo REPO [--no-claude]")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
@@ -1010,6 +1011,23 @@ func (e *env) ingest(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	c := e.console
+	if *repo != "" {
+		snap, err := actions.Bind(e.home, cfg, e.console).StageRepo(entry, *repo)
+		if err != nil {
+			return 1, err
+		}
+		if snap.Described != nil {
+			c.Say("  %-10s %s", "page", snap.Described.Summary())
+		}
+		switch {
+		case snap.New:
+			c.Step(console.OK, "staged", fmt.Sprintf("%s: %s at %s", strings.TrimPrefix(snap.To, "inbox/"), snap.Repo.Name, snap.Commit[:7]))
+		default:
+			c.Say("  %-10s %s already waits or was captured", "unchanged", strings.TrimPrefix(snap.To, "inbox/"))
+		}
+		return e.offerIngest(cfg, entry, *noClaude, "/claude-atlas:repo-map", claudecode.RepoMapPrompt)
+	}
 	sources, err := capture.SourcesFor(v, positional[1:])
 	if err != nil {
 		return 1, err
@@ -1018,7 +1036,6 @@ func (e *env) ingest(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	c := e.console
 	for _, src := range plan.Sources {
 		c.Say("  %-10s %s", "source", home.Display(src))
 	}
@@ -1061,20 +1078,27 @@ func (e *env) ingest(args []string) (int, error) {
 	} else {
 		c.Say("  nothing new to stage; %d file%s already waiting", plan.Waiting, plural(plan.Waiting))
 	}
-	if *noClaude || !c.Interactive() {
-		c.Say("  Next: claude-atlas open-claude %s, then /claude-atlas:wiki-ingest", entry.Name)
+	return e.offerIngest(cfg, entry, *noClaude, "/claude-atlas:wiki-ingest", claudecode.IngestPrompt)
+}
+
+// offerIngest ends ingest: it names the skill to run next, and in a terminal offers to
+// start Claude Code on it.
+func (e *env) offerIngest(cfg *home.Config, entry registry.Entry, noClaude bool, skill, prompt string) (int, error) {
+	c := e.console
+	if noClaude || !c.Interactive() {
+		c.Say("  Next: claude-atlas open-claude %s, then %s", entry.Name, skill)
 		return 0, nil
 	}
 	c.Say("  %s", trustNote)
-	ok, err := c.Confirm("Start Claude Code now and run /claude-atlas:wiki-ingest?", true)
+	ok, err := c.Confirm("Start Claude Code now and run "+skill+"?", true)
 	if err != nil {
 		return 1, err
 	}
 	if !ok {
-		c.Say("  Next: claude-atlas open-claude %s, then /claude-atlas:wiki-ingest", entry.Name)
+		c.Say("  Next: claude-atlas open-claude %s, then %s", entry.Name, skill)
 		return 0, nil
 	}
-	cmd, err := claudecode.LaunchCommand(cfg.ClaudeCode, entry.Path, claudecode.IngestPrompt)
+	cmd, err := claudecode.LaunchCommand(cfg.ClaudeCode, entry.Path, prompt)
 	if err != nil {
 		return 1, err
 	}

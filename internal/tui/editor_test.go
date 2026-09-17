@@ -110,6 +110,13 @@ func atlasFixture(t *testing.T) (*home.Config, home.Home, actions.Atlas) {
 			}
 			return capture.Sources(v)
 		},
+		StageRepo: func(e registry.Entry, name string) (*capture.RepoStage, error) {
+			v, err := vault.Open(e.Path)
+			if err != nil {
+				return nil, err
+			}
+			return capture.StageRepo(v, e, name, testNow)
+		},
 		Tasks: func(e registry.Entry) (tasks.Ledger, []string, error) {
 			v, err := vault.Open(e.Path)
 			if err != nil {

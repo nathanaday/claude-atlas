@@ -677,15 +677,18 @@ func (s *Server) settingsTool(ctx context.Context, req *mcp.CallToolRequest, a S
 type StageArgs struct {
 	Project string   `json:"project" jsonschema:"the project whose inbox receives the files, by name, id, or path"`
 	Paths   []string `json:"paths,omitempty" jsonschema:"files or folders outside the vault; omit to stage what is new in the folders the project staged from before"`
+	Repo    string   `json:"repo,omitempty" jsonschema:"one of the project's repositories, by name: write a snapshot of it at HEAD into the inbox (its CLAUDE.md, README, file list, docs headings, and the log since the page describing it was written) for the repo-map skill; not with paths"`
 	DryRun  bool     `json:"dry_run,omitempty" jsonschema:"plan only: say what would be copied and copy nothing"`
 }
 
 // StageOut is the plan, and after a copy, what was copied and the folders the project
 // now stages from when paths is omitted.
 type StageOut struct {
-	Plan       *capture.StagePlan   `json:"plan"`
+	Plan       *capture.StagePlan   `json:"plan,omitempty"`
 	Result     *capture.StageResult `json:"result,omitempty"`
 	Remembered []string             `json:"remembered,omitempty"`
+	// Snapshot is what a stage with repo wrote, or found already waiting.
+	Snapshot *capture.RepoStage `json:"snapshot,omitempty"`
 }
 
 func (s *Server) stageTool(ctx context.Context, req *mcp.CallToolRequest, a StageArgs) (*mcp.CallToolResult, StageOut, error) {
@@ -703,6 +706,24 @@ func (s *Server) stageTool(ctx context.Context, req *mcp.CallToolRequest, a Stag
 	}
 	if project.Kind != vault.Project {
 		return nil, StageOut{}, fmt.Errorf("%s is a knowledge base and has no inbox; stage into a project that mounts it", project.Name)
+	}
+	if a.Repo != "" {
+		if len(a.Paths) > 0 {
+			return nil, StageOut{}, errors.New("stage takes repo or paths, not both")
+		}
+		if a.DryRun {
+			return nil, StageOut{}, errors.New("a repository snapshot has no dry run; it writes one file into the inbox or finds it already there")
+		}
+		snap, err := acts.StageRepo(project, a.Repo)
+		if err != nil {
+			return nil, StageOut{}, err
+		}
+		if snap.New {
+			if _, _, err := acts.Refresh(); err != nil {
+				return nil, StageOut{}, err
+			}
+		}
+		return nil, StageOut{Snapshot: snap}, nil
 	}
 	plan, err := acts.StagePlan(project, a.Paths)
 	if err != nil {
