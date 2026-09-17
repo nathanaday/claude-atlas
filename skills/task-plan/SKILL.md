@@ -30,16 +30,17 @@ apply; the hook's first line names the projects that mount it.
 - Otherwise plan directly: the steps in order, each small enough to finish
   in one sitting, with what each produces.
 - Say where the work happens. Deliverables, code or a paper or a deck, go in
-  a repository the project mounts: set `workdir` to it. If the project has
-  none yet, say so; `claude-atlas new-repo` creates one. Vault work has no
-  workdir.
+  the project's repositories: set `repos` to every one the task changes, by
+  name as `repos` lists them, and `workdir` to the one a session should open
+  in. If the project has none yet, say so; `claude-atlas new-repo` creates
+  one. Vault work has neither. Each step names the repository it lands in.
 
 ## Write the plan
 
 One plan of kind `task` that replaces the page:
 
-- `status: planned`, `updated` set to today, `workdir` and `due` when known,
-  `priority` when the user changed it;
+- `status: planned`, `updated` set to today, `repos`, `workdir`, and `due`
+  when known, `priority` when the user changed it;
 - a `## Plan` section: the approach in one paragraph, the steps, what done
   looks like, and the risks or unknowns that could change the plan;
 - the Idea section untouched.

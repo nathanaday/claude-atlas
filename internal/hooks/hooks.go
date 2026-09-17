@@ -27,7 +27,7 @@ import (
 const MaxContextBytes = 8 * 1024
 
 // Skills is the slash-menu line shown at session start.
-const Skills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  wiki-mode  save  wiki-fold  repo-map  task  task-plant  task-plan  task-run  task-finish  canvas  obsidian-markdown  obsidian-bases  think  atlas  atlas-project  atlas-knowledge  atlas-mount  atlas-repo"
+const Skills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  wiki-mode  save  wiki-fold  repo-map  work  task  task-plant  task-plan  task-run  task-finish  canvas  obsidian-markdown  obsidian-bases  think  atlas  atlas-project  atlas-knowledge  atlas-mount  atlas-repo"
 
 // KnowledgeSkills is the slash-menu line for a knowledge base, where knowledge enters
 // through a project and the work here is upkeep.
@@ -368,6 +368,9 @@ func taskLines(v *vault.Vault, cwd string, inRepo bool, now time.Time) string {
 		}
 		if r.Workdir != "" {
 			line += " · workdir " + r.Workdir
+		}
+		if len(r.Repos) > 0 {
+			line += " · repos " + strings.Join(r.Repos, ", ")
 		}
 		if tasks.Stale(r, now) {
 			line += " · stale"

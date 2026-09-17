@@ -121,6 +121,7 @@ In the session, the skills are on the slash menu:
 | Skill | What it does |
 |---|---|
 | `/claude-atlas:wiki` | orient in the vault and route to the right skill |
+| `/claude-atlas:work` | take a change from a sentence to commits: the facts, the repositories, the plan, then the task |
 | `/claude-atlas:task` | list open tasks, move one between statuses, route |
 | `/claude-atlas:task-plant` | plant a task from a sentence or the notes in `inbox/tasks/` |
 | `/claude-atlas:task-plan` | ask what matters, choose an approach, write the plan |

@@ -124,7 +124,7 @@ func TestGuard(t *testing.T) {
 func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 	v := newVault(t)
 	now := time.Now()
-	req, _, err := txn.PlantRequest(v, tasks.Plant{Title: "Fix the dialog", Text: "It quits on Enter."}, "", now)
+	req, _, err := txn.PlantRequest(v, tasks.Plant{Title: "Fix the dialog", Text: "It quits on Enter.", Repos: []string{"app"}}, "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"Open tasks: 1 (active 0, blocked 0, planned 0, planted 1)", "- [planted] Fix the dialog (task-", "1 task note waits in inbox/tasks/", "task-plant"} {
+	for _, want := range []string{"Open tasks: 1 (active 0, blocked 0, planned 0, planted 1)", "- [planted] Fix the dialog (task-", " · repos app\n", "1 task note waits in inbox/tasks/", "task-plant"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

@@ -20,7 +20,8 @@ tags:
   - task
 task_id: task-20260913-3f2a
 due: ""                  # optional date
-workdir: ""              # optional: the repository the work happens in
+workdir: ""              # optional: the folder a session opens in, usually a repository
+repos: []                # every repository of the project the task changes, by name
 ---
 
 # Ingest skips the trust dialog
@@ -61,7 +62,10 @@ the pages in the same commit.
 To change a status, replace the whole page with the new frontmatter and
 `updated` set to today. To finish, delete the page at its open path and
 create it under `wiki/tasks/archive/` in the same plan; links by title keep
-resolving. To plant, call the `plant` tool; no plan is needed.
+resolving. To plant, call the `plant` tool; no plan is needed. `plant` with
+`plan` writes the Plan section and the task is `planned`; with `start` as
+well it is `active` with a first Progress line, which is how `work` records
+a change in one commit. `start` without `plan` is refused.
 
 ## Reading tasks
 
@@ -72,9 +76,11 @@ workdir, last touch, and history. `tasks` with `all` includes the archive.
 
 ## Working in a repository
 
-A task's `workdir` is usually a repository the project mounts. Before changing
-files there, call `repos` (or read `status`, which names the repository when
-the session runs inside one). Each repository says how changes land:
+A task's `repos` names every repository it changes; `workdir` is the one a
+session opens in. Before changing files in a repository, call `repos` (or
+read `status`, which names the repository when the session runs inside one)
+and read the repository's CLAUDE.md by the path it gives. Each repository
+says how changes land:
 
 - `pr`: work on a branch, commit there, and open a pull request; never push
   to the default branch.

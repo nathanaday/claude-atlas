@@ -232,15 +232,16 @@ func (u Unfinished) Total() *int {
 
 // TaskLine is one open task as the atlas shows it.
 type TaskLine struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Status      string `json:"status"`
-	Priority    string `json:"priority"`
-	Due         string `json:"due,omitempty"`
-	Workdir     string `json:"workdir,omitempty"`
-	LastTouched string `json:"last_touched"`
-	Path        string `json:"path"` // absolute path of the task page
-	Stale       bool   `json:"stale,omitempty"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Status      string   `json:"status"`
+	Priority    string   `json:"priority"`
+	Due         string   `json:"due,omitempty"`
+	Workdir     string   `json:"workdir,omitempty"`
+	Repos       []string `json:"repos,omitempty"`
+	LastTouched string   `json:"last_touched"`
+	Path        string   `json:"path"` // absolute path of the task page
+	Stale       bool     `json:"stale,omitempty"`
 }
 
 // TaskSummary is what refresh read from a vault's task ledger.

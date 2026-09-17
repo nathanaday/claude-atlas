@@ -1,7 +1,7 @@
 # Working from a project: repositories in the knowledge base, and the work skill
 
 Date: 2026-09-17. Applies to claude-atlas 1.3.0; ships as 1.4.0. Phases 1
-and 2 built on 2026-09-17.
+to 3 built on 2026-09-17.
 Builds on `docs/tasks-design.md` and `docs/v2-design.md`. Nothing here
 changes what a task, a mount, or a repository is.
 
@@ -254,8 +254,9 @@ repos:                   # every repository the task changes, by name
 ```
 
 `workdir` stays a string, because `open-claude --task` opens one folder and
-existing pages carry it. `repos` is a list of names; the core validates the
-shape and the skill checks the names against `repos`. The `tasks` tool and
+existing pages carry it. `repos` is a list of names, or one name written as
+a scalar; the core validates the shape and the skill checks the names
+against `repos`. The `tasks` tool and
 the ledger carry it; the atlas task board shows it.
 
 `plant` gains `repos`, `plan` (the Plan section's text), and `start`. With
@@ -267,7 +268,7 @@ without `plan` is refused. The CLI's `plant NAME TEXT` is unchanged.
 
 - `stage` with `repo` for a name that is not one of the project's
   repositories, or for a repository whose folder is gone or has no commits.
-- A `repos` name on a task page that is not a list of strings.
+- A `repos` property on a task page that is not a list of names or one name.
 - `plant` with `start` and no `plan`.
 - A repository page whose `commit` is not a hex string.
 

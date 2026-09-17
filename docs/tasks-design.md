@@ -1,6 +1,7 @@
 # Tasks
 
-Status: implemented in 0.4.0. In v2 (`v2-design.md`) tasks exist only in a
+Status: implemented in 0.4.0; the `work` entry point and `repos` on a task
+page came with `docs/superpowers/specs/2026-09-17-working-from-a-project-design.md`. In v2 (`v2-design.md`) tasks exist only in a
 vault of kind `project`; the sections "Repos and the vault" and "The atlas
 side" are superseded there. This document sets out how tasks fit the vault,
 the plugin, and the atlas. It takes the brainstorm in the personal-projects

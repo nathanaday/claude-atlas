@@ -657,12 +657,15 @@ func mountRoute(m registry.Mount, pageType, title string, now time.Time) MountRo
 
 type PlantArgs struct {
 	VaultArg
-	Title    string `json:"title,omitempty" jsonschema:"the task's title; taken from the text when omitted"`
-	Text     string `json:"text,omitempty" jsonschema:"the idea in the user's words; kept verbatim on the page"`
-	Priority string `json:"priority,omitempty" jsonschema:"high, normal, low, or someday; default normal"`
-	Workdir  string `json:"workdir,omitempty" jsonschema:"the folder the work happens in, usually a linked repository"`
-	Due      string `json:"due,omitempty" jsonschema:"YYYY-MM-DD"`
-	From     string `json:"from,omitempty" jsonschema:"the note under inbox/tasks/ this task comes from; it is removed in the same commit"`
+	Title    string   `json:"title,omitempty" jsonschema:"the task's title; taken from the text when omitted"`
+	Text     string   `json:"text,omitempty" jsonschema:"the idea in the user's words; kept verbatim on the page"`
+	Priority string   `json:"priority,omitempty" jsonschema:"high, normal, low, or someday; default normal"`
+	Workdir  string   `json:"workdir,omitempty" jsonschema:"the folder the work happens in, usually a linked repository"`
+	Due      string   `json:"due,omitempty" jsonschema:"YYYY-MM-DD"`
+	From     string   `json:"from,omitempty" jsonschema:"the note under inbox/tasks/ this task comes from; it is removed in the same commit"`
+	Repos    []string `json:"repos,omitempty" jsonschema:"the project's repositories the task changes, by name as the repos tool lists them"`
+	Plan     string   `json:"plan,omitempty" jsonschema:"the Plan section's text: the approach, the steps with the repository each lands in, what done looks like; with it the task is planned"`
+	Start    bool     `json:"start,omitempty" jsonschema:"with plan: make the task active now, with a first Progress line; the work skill uses it"`
 }
 
 type PlantOut struct {
@@ -680,7 +683,7 @@ func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArg
 		return nil, PlantOut{}, err
 	}
 	now := s.opts.Now()
-	request, planted, err := txn.PlantRequest(v, tasks.Plant{Title: a.Title, Text: a.Text, Priority: a.Priority, Workdir: a.Workdir, Due: a.Due}, a.From, now)
+	request, planted, err := txn.PlantRequest(v, tasks.Plant{Title: a.Title, Text: a.Text, Priority: a.Priority, Workdir: a.Workdir, Due: a.Due, Repos: a.Repos, Plan: a.Plan, Start: a.Start}, a.From, now)
 	if err != nil {
 		return nil, PlantOut{}, err
 	}
@@ -1164,7 +1167,7 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "lint", Annotations: ro(),
 		Description: "Run the deterministic wiki health check: dead and ambiguous links, duplicate basenames, orphans, pages missing from every index, missing frontmatter, empty sections, stale index entries, and ledger problems. Read-only."}, s.lint)
 	mcp.AddTool(server, &mcp.Tool{Name: "plant",
-		Description: "Plant a task: create a task page with status planted from a title and the idea's text, as one commit. Give from to remove the inbox/tasks/ note it came from. No plan preview is needed; undo covers it."}, s.plant)
+		Description: "Plant a task: create a task page from a title and the idea's text, as one commit; planted, or planned when plan is given, or active when start is set too. Give from to remove the inbox/tasks/ note it came from. No plan preview is needed; undo covers it."}, s.plant)
 	mcp.AddTool(server, &mcp.Tool{Name: "stub",
 		Description: "Create seed pages for the pages the wiki links to but nobody has written (lint's wanted pages). The empty pages a link points to get frontmatter too. It is one commit, with no plan preview, and undo reverts it. Omit titles to stub every one of them with the mode's default type; one the vault cannot file is skipped and reported, while a title you name is refused and says why. Pass a title with a type when the name is a person, product, project, or organization (entity). In a project, give a title a target to file its stub in that mount's knowledge base; the mounts tool names them."}, s.stub)
 	mcp.AddTool(server, &mcp.Tool{Name: "tasks", Annotations: ro(),

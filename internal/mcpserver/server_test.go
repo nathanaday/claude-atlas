@@ -16,6 +16,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -406,6 +407,28 @@ func TestTaskTools(t *testing.T) {
 	c.call("tasks", nil, &list)
 	if list.Counts.Active != 1 || !list.Tasks[0].HasPlan || len(list.Tasks[0].History) != 2 {
 		t.Fatalf("after apply %+v", list)
+	}
+	// A plant with a plan and start is active at once, with its repositories.
+	if msg := c.call("plant", map[string]any{"text": "x", "start": true}, nil); !strings.Contains(msg, "start needs a plan") {
+		t.Fatalf("start without a plan: %q", msg)
+	}
+	var started PlantOut
+	if msg := c.call("plant", map[string]any{"title": "Ship it", "text": "Now.", "repos": []string{"app", "paper"}, "plan": "1. Build in app.\n2. Write in paper.", "start": true}, &started); msg != "" {
+		t.Fatal(msg)
+	}
+	list = TasksOut{}
+	c.call("tasks", nil, &list)
+	var ship *tasks.Record
+	for i := range list.Tasks {
+		if list.Tasks[i].ID == started.ID {
+			ship = &list.Tasks[i]
+		}
+	}
+	if list.Counts.Active != 2 || ship == nil || ship.Status != "active" || !ship.HasPlan || strings.Join(ship.Repos, ",") != "app,paper" || ship.History[0].Summary != "plant and start Ship it" {
+		t.Fatalf("a started task: %+v", ship)
+	}
+	if text, _ := os.ReadFile(v.Path(started.Path)); !strings.Contains(string(text), "## Plan\n\n1. Build in app.\n2. Write in paper.\n\n## Progress\n\n- ") {
+		t.Fatalf("the page:\n%s", text)
 	}
 }
 

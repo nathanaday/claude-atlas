@@ -26,11 +26,38 @@ apply; the hook's first line names the projects that mount it.
 ## Work
 
 Follow the plan. If the plan names a skill, run that skill; its procedure
-governs, and this page records the outcome. In a repository, files change
-with the ordinary tools, and the repository's change policy from `repos`
-decides how they land: a branch and a pull request, or commits on the
-current branch. The vault's `wiki/` changes only through `plan` and `apply`. Keep a decision the user should be able to find later with the
-`save` skill.
+governs, and this page records the outcome. The vault's `wiki/` changes only
+through `plan` and `apply`. Keep a decision the user should be able to find
+later with the `save` skill.
+
+### In the repositories
+
+The page's `repos` names every repository the task changes; the plan says
+which step lands where. Work one repository at a time, in the plan's order.
+Before the first change in a repository:
+
+1. Call `repos` and take its entry: the path, the change policy, and the
+   CLAUDE.md. Read that CLAUDE.md by path; a session in the vault does not
+   load it on its own unless the repository sits under the vault.
+2. Follow the policy. `pr`: make a branch, commit there, open a pull
+   request, never push to the default branch. `commit`: commit on the
+   current branch.
+3. Files change with the ordinary tools, by absolute path. A subagent sent
+   into a repository is told the repository's path and its CLAUDE.md path,
+   and works by absolute path; it inherits this session's directory.
+
+A step that touches two repositories is two steps, the interface first.
+Progress lines name the repository.
+
+### With superpowers
+
+When superpowers is installed and the plan calls for it, `writing-plans`
+and `executing-plans` run the steps; their procedure governs the run, this
+page records the outcome. Their files go under `docs/superpowers/` of the
+repository the change centres on, named by absolute path, because they
+write relative to the working directory and here that is the vault. A spec
+or a plan never lands in the vault; the Plan section links each file by
+path. Without superpowers, the Plan section is the spec of record.
 
 ## Write progress
 

@@ -111,7 +111,7 @@ func taskSummaryFor(v *vault.Vault, today time.Time) *registry.TaskSummary {
 	sum.Counts.Notes = len(tasks.Notes(v))
 	for _, r := range led.Open() {
 		sum.Open = append(sum.Open, registry.TaskLine{
-			ID: r.ID, Title: r.Title, Status: r.Status, Priority: r.Priority, Due: r.Due, Workdir: r.Workdir,
+			ID: r.ID, Title: r.Title, Status: r.Status, Priority: r.Priority, Due: r.Due, Workdir: r.Workdir, Repos: r.Repos,
 			LastTouched: r.LastTouched, Path: v.Path(r.Path), Stale: tasks.Stale(r, today),
 		})
 	}

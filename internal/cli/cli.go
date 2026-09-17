@@ -2297,6 +2297,9 @@ func (e *env) printTasks(led tasks.Ledger, now time.Time, all bool, status, proj
 		if r.Workdir != "" {
 			e.console.Say("  %-9s %-8s %s", "", "", "workdir "+home.Display(r.Workdir))
 		}
+		if len(r.Repos) > 0 {
+			e.console.Say("  %-9s %-8s %s", "", "", "repos "+strings.Join(r.Repos, ", "))
+		}
 	}
 }
 

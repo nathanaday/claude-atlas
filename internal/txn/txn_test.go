@@ -621,6 +621,23 @@ func taskPage(title, status, id, folder, extra string) (string, []byte) {
 	return p, []byte("---\ntype: task\ntitle: \"" + title + "\"\nstatus: " + status + "\npriority: normal\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - task\ntask_id: " + id + "\n---\n\n# " + title + "\n\n## Idea\n\nDo it.\n" + extra)
 }
 
+func TestPlantRequestNeedsAPlanToStart(t *testing.T) {
+	v := newVault(t)
+	if _, _, err := PlantRequest(v, tasks.Plant{Title: "Ship", Start: true}, "", now); err == nil || !strings.Contains(err.Error(), "start needs a plan") {
+		t.Fatalf("start without a plan: %v", err)
+	}
+	if _, _, err := PlantRequest(v, tasks.Plant{Title: "Ship", Repos: []string{" "}}, "", now); err == nil {
+		t.Fatal("blank repo names")
+	}
+	req, planted, err := PlantRequest(v, tasks.Plant{Title: "Ship", Plan: "1. Go.", Start: true, Repos: []string{"app"}}, "", now)
+	if err != nil || req.Summary != "plant and start Ship" || planted.Path != "wiki/tasks/Ship.md" {
+		t.Fatalf("%+v %+v %v", req, planted, err)
+	}
+	if req, _, _ := PlantRequest(v, tasks.Plant{Title: "Ship", Plan: "1. Go."}, "", now); req.Summary != "plant and plan Ship" {
+		t.Fatalf("summary %q", req.Summary)
+	}
+}
+
 func TestTaskOperationsPlantMoveAndRebuildTheLedger(t *testing.T) {
 	v := newVault(t)
 	os.MkdirAll(v.Path(vault.InboxTasksDir), 0o755)
