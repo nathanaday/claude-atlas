@@ -248,7 +248,7 @@ func TestRepoLinkNewEditUnlink(t *testing.T) {
 	if msg := c.call("repo", map[string]any{"action": "edit", "project": "p", "name": "code", "changes": "pr"}, &out); msg != "" || out.Repo.Changes != links.ChangesPR {
 		t.Fatalf("edit: %q %+v", msg, out.Repo)
 	}
-	if msg := c.call("repo", map[string]any{"action": "edit", "project": "p", "name": "code", "changes": "maybe"}, nil); !strings.Contains(msg, "pr or commit") {
+	if msg := c.call("repo", map[string]any{"action": "edit", "project": "p", "name": "code", "changes": "maybe"}, nil); !strings.Contains(msg, "pr, commit, or empty") {
 		t.Fatalf("bad policy: %q", msg)
 	}
 	out = RepoToolOut{}

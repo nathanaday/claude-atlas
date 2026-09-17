@@ -588,9 +588,6 @@ func (s *Server) repoTool(ctx context.Context, req *mcp.CallToolRequest, a RepoT
 		}
 		return nil, RepoToolOut{Unlinked: a.Name}, nil
 	case "edit":
-		if a.Changes != nil && *a.Changes != "" && *a.Changes != links.ChangesPR && *a.Changes != links.ChangesCommit {
-			return nil, RepoToolOut{}, fmt.Errorf("changes must be pr or commit, not %q", *a.Changes)
-		}
 		repo, err := acts.EditRepo(project, a.Name, vaults.RepoEdit{Remote: a.Remote, Changes: a.Changes, Path: home.Expand(a.Path)})
 		if err != nil {
 			return nil, RepoToolOut{}, err
