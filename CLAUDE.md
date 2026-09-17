@@ -288,7 +288,8 @@ with `claude --plugin-dir .` from inside a vault. End-to-end by hand:
 
 1.0.0 is the first v2 release; 1.1.0 is the view with tabs; 1.2.0 is
 clusters; 1.3.0 is the atlas tools and skills; 1.4.0 is repositories in the
-knowledge base.
+knowledge base; 1.4.1 is the same release, republished so the plugin cache
+took the whole of it.
 
 ## Open questions
 
