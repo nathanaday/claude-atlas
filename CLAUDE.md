@@ -129,6 +129,15 @@ never goes inside another vault (`vaults.CheckNewPath`).
   validates the whole identity file against the kind, refuses a new kind or a
   new id, and commits the file as a `setup` operation. `vaults.EditIdentity`
   and the repository functions are its only callers.
+- A vault's folder takes its name. `vaults.EditIdentity` renames the leaf and
+  keeps the parent, so a vault inside and one outside the vaults directory
+  move alike; it returns the path the vault sits at afterwards, and every
+  caller threads it through (`tui.Hooks.Edit` too, so the view keeps its
+  cursor and its expanded block). A taken folder refuses the whole edit, the
+  folder name is `links.CleanName` of the vault's name, a case-only rename is
+  allowed on a case-insensitive filesystem (`os.SameFile`), and a project at
+  `REPO/atlas/` keeps its folder. Mount folders keep their own names, because
+  pages link through `kb/<name>`.
 - A repository is where a project's deliverables go, always a git repository;
   memory stays in the vault, and ingest sources are not repositories. The
   project's identity file records the name, the remote, and the change policy

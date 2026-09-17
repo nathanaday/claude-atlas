@@ -27,7 +27,9 @@ type Hooks struct {
 	Refresh func() error
 	// Edit changes a vault's identity file. Unregister forgets a vault the config names;
 	// the folder stays, and a vault inside the vaults directory cannot be forgotten.
-	Edit       func(registry.Entry, vaults.Edit) error
+	// Edit changes a vault's identity and returns the path it sits at afterwards; a
+	// rename moves the folder, so that path may not be the one it was given.
+	Edit       func(registry.Entry, vaults.Edit) (string, error)
 	Unregister func(registry.Entry) error
 	// StagePlan says which files under a source are new to a project's vault; an empty
 	// source means the folders it ingested from before. Stage copies a plan's files into
@@ -125,6 +127,9 @@ type editor struct {
 	err      string
 	discard  bool
 	outcome  editOutcome
+	// path is where the vault sits after a saved edit: its own folder, or the one a
+	// rename moved it to.
+	path string
 }
 
 func draftOf(e registry.Entry) draft {
@@ -277,11 +282,13 @@ func (e editor) save() editor {
 		access := e.draft.Access
 		edit.Access = &access
 	}
-	if err := e.hooks.Edit(e.entry, edit); err != nil {
+	path, err := e.hooks.Edit(e.entry, edit)
+	if err != nil {
 		e.err = err.Error()
 		e.mode = editFields
 		return e
 	}
+	e.path = path
 	e.outcome = editSaved
 	return e
 }

@@ -542,7 +542,7 @@ func (e *env) createVault(arg string, opts vault.Options, edit vaults.Edit) (int
 	if _, err := vaults.Create(path, opts, e.console, true); err != nil {
 		return 1, err
 	}
-	if err := vaults.EditIdentity(registry.Entry{Path: path, Kind: opts.Kind}, edit, time.Now()); err != nil {
+	if _, err := vaults.EditIdentity(e.home, cfg, registry.Entry{Path: path, Kind: opts.Kind}, edit, time.Now()); err != nil {
 		return 1, err
 	}
 	return e.finishVault(cfg, path)
@@ -559,7 +559,7 @@ func (e *env) createVaultIn(repoRoot string, opts vault.Options, edit vaults.Edi
 	if err != nil {
 		return 1, err
 	}
-	if err := vaults.EditIdentity(registry.Entry{Path: path, Kind: opts.Kind}, edit, time.Now()); err != nil {
+	if _, err := vaults.EditIdentity(e.home, cfg, registry.Entry{Path: path, Kind: opts.Kind}, edit, time.Now()); err != nil {
 		return 1, err
 	}
 	return e.finishVault(cfg, path)
@@ -627,7 +627,7 @@ func (e *env) newVaultInteractive(opts vault.Options, edit vaults.Edit) (int, er
 	if _, err := vaults.Create(choice.Path, opts, e.console, false); err != nil {
 		return 1, err
 	}
-	if err := vaults.EditIdentity(registry.Entry{Path: choice.Path, Kind: opts.Kind}, edit, time.Now()); err != nil {
+	if _, err := vaults.EditIdentity(e.home, cfg, registry.Entry{Path: choice.Path, Kind: opts.Kind}, edit, time.Now()); err != nil {
 		return 1, err
 	}
 	return e.finishVault(cfg, choice.Path)
@@ -751,7 +751,7 @@ func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, erro
 	} else if _, err := vaults.Create(choice.Path, opts, e.console, false); err != nil {
 		return "", err
 	}
-	if err := recordFacts(choice); err != nil {
+	if err := e.recordFacts(cfg, choice); err != nil {
 		return "", err
 	}
 	if _, err := vaults.Register(e.home, cfg, choice.Path); err != nil {
@@ -787,7 +787,7 @@ func mountChoice(cfg *home.Config, choice tui.AddVault) error {
 
 // recordFacts writes the identity fields the template does not carry: a project's tags,
 // or a knowledge base's scope.
-func recordFacts(choice tui.AddVault) error {
+func (e *env) recordFacts(cfg *home.Config, choice tui.AddVault) error {
 	edit := vaults.Edit{}
 	switch {
 	case choice.Kind == vault.Knowledge && choice.Scope != "":
@@ -795,7 +795,8 @@ func recordFacts(choice tui.AddVault) error {
 	case choice.Kind == vault.Project && len(choice.Tags) > 0:
 		edit.Tags = &choice.Tags
 	}
-	return vaults.EditIdentity(registry.Entry{Path: choice.Path, Kind: choice.Kind}, edit, time.Now())
+	_, err := vaults.EditIdentity(e.home, cfg, registry.Entry{Path: choice.Path, Kind: choice.Kind}, edit, time.Now())
+	return err
 }
 
 // hooks wires the interactive screens to the same backend calls the CLI commands use.
@@ -804,8 +805,8 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 		Load:    func() ([]registry.Entry, error) { return e.registryEntries(cfg) },
 		Create:  func(choice tui.AddVault) (string, error) { return e.createOrAdopt(cfg, choice) },
 		Refresh: func() error { _, _, err := e.refreshAll(cfg); return err },
-		Edit: func(en registry.Entry, edit vaults.Edit) error {
-			return vaults.EditIdentity(en, edit, time.Now())
+		Edit: func(en registry.Entry, edit vaults.Edit) (string, error) {
+			return vaults.EditIdentity(e.home, cfg, en, edit, time.Now())
 		},
 		Unregister: func(en registry.Entry) error { return vaults.Unregister(e.home, cfg, en.Path) },
 		StagePlan: func(en registry.Entry, source string) (*capture.StagePlan, error) {
@@ -1507,7 +1508,8 @@ func (e *env) edit(args []string) (int, error) {
 	if set["access"] {
 		change.Access = access
 	}
-	if err := vaults.EditIdentity(entry, change, time.Now()); err != nil {
+	path, err := vaults.EditIdentity(e.home, cfg, entry, change, time.Now())
+	if err != nil {
 		return 1, err
 	}
 	entries, _, err := e.refreshAll(cfg)
@@ -1519,6 +1521,9 @@ func (e *env) edit(args []string) (int, error) {
 		shown = *name
 	}
 	e.console.Step(console.OK, "edited", shown)
+	if path != entry.Path {
+		e.console.Step(console.OK, "moved", home.Display(path))
+	}
 	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }

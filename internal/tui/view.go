@@ -590,6 +590,14 @@ func (v view) updateEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.edit = &ed
 		return v, cmd
 	case editSaved:
+		// A rename moves the folder, so follow the vault to its new path; the cursor
+		// and the expanded block stay on it.
+		if ed.path != "" && ed.path != path {
+			for i := range v.boards {
+				v.boards[i].rekey(path, ed.path)
+			}
+			path = ed.path
+		}
 		cmd = v.wrote(path, "saved "+ed.draft.Name)
 		v.reload(path)
 	case editRemoved:

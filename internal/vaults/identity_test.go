@@ -210,10 +210,10 @@ func TestRegisterAndUnregister(t *testing.T) {
 }
 
 func TestEditIdentityByKind(t *testing.T) {
-	_, _, project, kb := fixtureEntries(t)
+	cfg, h, project, kb := fixtureEntries(t)
 
 	tags := []string{" usc ", "", "fall"}
-	if err := EditIdentity(project, Edit{Tags: &tags}, identityNow); err != nil {
+	if _, err := EditIdentity(h, cfg, project, Edit{Tags: &tags}, identityNow); err != nil {
 		t.Fatal(err)
 	}
 	v, err := vault.Open(project.Path)
@@ -227,17 +227,17 @@ func TestEditIdentityByKind(t *testing.T) {
 		t.Fatalf("commit subject: %q", subject)
 	}
 
-	if err := EditIdentity(project, Edit{Scope: strPtr("s")}, identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
+	if _, err := EditIdentity(h, cfg, project, Edit{Scope: strPtr("s")}, identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
 		t.Fatalf("scope on a project: %v", err)
 	}
 
-	if err := EditIdentity(kb, Edit{Access: strPtr("sometimes")}, identityNow); err == nil {
+	if _, err := EditIdentity(h, cfg, kb, Edit{Access: strPtr("sometimes")}, identityNow); err == nil {
 		t.Fatal("expected an error for an invalid access value")
 	}
 
 	kbScope := "machine learning"
 	kbAccess := vault.AccessGuarded
-	if err := EditIdentity(kb, Edit{Scope: &kbScope, Access: &kbAccess}, identityNow); err != nil {
+	if _, err := EditIdentity(h, cfg, kb, Edit{Scope: &kbScope, Access: &kbAccess}, identityNow); err != nil {
 		t.Fatal(err)
 	}
 	v, err = vault.Open(kb.Path)
@@ -252,17 +252,20 @@ func TestEditIdentityByKind(t *testing.T) {
 		t.Fatalf("commit subject: %q", subject)
 	}
 
-	if err := EditIdentity(project, Edit{Name: "cs566-renamed"}, identityNow); err != nil {
+	// A rename takes the folder with it; rename_test.go holds the move itself.
+	projectPath, err := EditIdentity(h, cfg, project, Edit{Name: "cs566-renamed"}, identityNow)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := EditIdentity(kb, Edit{Name: "ai-ml-renamed"}, identityNow); err != nil {
+	kbPath, err := EditIdentity(h, cfg, kb, Edit{Name: "ai-ml-renamed"}, identityNow)
+	if err != nil {
 		t.Fatal(err)
 	}
-	v, err = vault.Open(project.Path)
+	v, err = vault.Open(projectPath)
 	if err != nil || v.Config.Name != "cs566-renamed" {
 		t.Fatalf("project name: %+v %v", v, err)
 	}
-	v, err = vault.Open(kb.Path)
+	v, err = vault.Open(kbPath)
 	if err != nil || v.Config.Name != "ai-ml-renamed" {
 		t.Fatalf("kb name: %+v %v", v, err)
 	}

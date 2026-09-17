@@ -624,9 +624,14 @@ func TestViewHooksCreateEditAndForget(t *testing.T) {
 	if ghost.Name != "ghost" || ghost.Rel() != "projects/usc/ghost" || ghost.State == nil {
 		t.Fatalf("the registry should carry the new project with its state: %+v", ghost)
 	}
-	if err := hooks.Edit(ghost, vaults.Edit{Name: "Ghost"}); err != nil {
+	moved, err := hooks.Edit(ghost, vaults.Edit{Name: "Ghost"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	if filepath.Base(moved) != "Ghost" {
+		t.Fatalf("the folder should follow the name, got %q", moved)
+	}
+	path = moved
 	v, err := vault.Open(path)
 	if err != nil || v.Config.Name != "Ghost" {
 		t.Fatalf("identity file: %+v %v", v.Config, err)

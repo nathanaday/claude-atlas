@@ -155,6 +155,15 @@ func (b *board) toggle() {
 	b.layout()
 }
 
+// rekey follows a vault that moved from one path to another, so an expanded block
+// survives a rename.
+func (b *board) rekey(from, to string) {
+	if b.expanded[from] {
+		delete(b.expanded, from)
+		b.expanded[to] = true
+	}
+}
+
 // collapseAll collapses every vault and reports whether any was expanded.
 func (b *board) collapseAll() bool {
 	had := len(b.expanded) > 0

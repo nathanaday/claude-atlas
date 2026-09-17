@@ -296,7 +296,7 @@ func TestSessionStartListsMountsAndMountedBy(t *testing.T) {
 		t.Fatal("knowledge base not scanned")
 	}
 	scope := "Machine learning: models, training, evaluation, deployment, agents"
-	if err := vaults.EditIdentity(*kb, vaults.Edit{Scope: &scope}, now); err != nil {
+	if _, err := vaults.EditIdentity(home.Home{}, &home.Config{}, *kb, vaults.Edit{Scope: &scope}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -371,7 +371,7 @@ func TestSessionStartListsMountsAndMountedBy(t *testing.T) {
 		t.Fatal(err)
 	}
 	kb = ix.ByPath(kbRoot)
-	if err := vaults.EditIdentity(*kb, vaults.Edit{Access: &guarded}, now); err != nil {
+	if _, err := vaults.EditIdentity(home.Home{}, &home.Config{}, *kb, vaults.Edit{Access: &guarded}, now); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()

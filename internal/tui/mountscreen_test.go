@@ -119,7 +119,7 @@ func guardKB(t *testing.T, cfg *home.Config) {
 		t.Fatal(err)
 	}
 	guarded := vault.AccessGuarded
-	if err := vaults.EditIdentity(*kb, vaults.Edit{Access: &guarded}, testNow); err != nil {
+	if _, err := vaults.EditIdentity(home.Home{}, &home.Config{}, *kb, vaults.Edit{Access: &guarded}, testNow); err != nil {
 		t.Fatal(err)
 	}
 }

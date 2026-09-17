@@ -367,7 +367,7 @@ func TestGrantAndRevoke(t *testing.T) {
 	}
 
 	// After a grant on a guarded kb, the project's mount Effective follows the grant.
-	if err := EditIdentity(kb, Edit{Access: strPtr(vault.AccessGuarded)}, identityNow); err != nil {
+	if _, err := EditIdentity(home.Home{}, &home.Config{}, kb, Edit{Access: strPtr(vault.AccessGuarded)}, identityNow); err != nil {
 		t.Fatal(err)
 	}
 	kb = refreshEntry(t, cfg, kb.ID)
@@ -389,7 +389,7 @@ func TestGrantAndRevoke(t *testing.T) {
 
 func TestRevokeIDDropsAGrantWhoseProjectIsGone(t *testing.T) {
 	cfg, project, kb, _ := mountFixture(t)
-	if err := EditIdentity(kb, Edit{Access: strPtr(vault.AccessGuarded)}, identityNow); err != nil {
+	if _, err := EditIdentity(home.Home{}, &home.Config{}, kb, Edit{Access: strPtr(vault.AccessGuarded)}, identityNow); err != nil {
 		t.Fatal(err)
 	}
 	if err := vault.UpdateConfig(kb.Path, "grant gone-0000", identityNow, func(c *vault.Config) error {

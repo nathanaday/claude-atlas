@@ -30,7 +30,7 @@ func makeVault(t *testing.T, cfg *home.Config, kind vault.Kind, name string, tag
 		t.Fatal(err)
 	}
 	if len(tags) > 0 {
-		if err := vaults.EditIdentity(registry.Entry{Path: path, Kind: kind}, vaults.Edit{Tags: &tags}, testNow); err != nil {
+		if _, err := vaults.EditIdentity(home.Home{}, &home.Config{}, registry.Entry{Path: path, Kind: kind}, vaults.Edit{Tags: &tags}, testNow); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -59,8 +59,8 @@ func atlasFixture(t *testing.T) (*home.Config, home.Home, Hooks) {
 			return ix.Entries, nil
 		},
 		Refresh: func() error { _, _, _, err := refresh.Registry(h, cfg, h.StateDir(), testNow, false); return err },
-		Edit: func(e registry.Entry, edit vaults.Edit) error {
-			return vaults.EditIdentity(e, edit, testNow)
+		Edit: func(e registry.Entry, edit vaults.Edit) (string, error) {
+			return vaults.EditIdentity(h, cfg, e, edit, testNow)
 		},
 		Unregister: func(e registry.Entry) error { return vaults.Unregister(h, cfg, e.Path) },
 		AddRepo: func(e registry.Entry, target string, initGit bool) (vault.Repo, string, error) {
@@ -299,8 +299,13 @@ func TestEditFromAnExpandedVaultKeepsItExpanded(t *testing.T) {
 	v = typeV(v, " 2")
 	v = pressV(v, tea.KeyEnter)
 	v = keyV(v, "s")
-	if v.edit != nil || v.current() == nil || v.current().Entry.Name != "reading 2" || !v.boards[0].expanded[path] || !strings.Contains(v.View(), "reading 2") {
-		t.Fatalf("a saved edit keeps the vault expanded under the cursor: current=%+v", v.current())
+	// The rename moved the folder, so the expanded block follows the vault's new path.
+	moved := filepath.Join(filepath.Dir(path), "reading 2")
+	if v.edit != nil || v.current() == nil || v.current().Entry.Name != "reading 2" || !v.boards[0].expanded[moved] || !strings.Contains(v.View(), "reading 2") {
+		t.Fatalf("a saved edit keeps the vault expanded under the cursor: current=%+v expanded=%v", v.current(), v.boards[0].expanded)
+	}
+	if v.current().Entry.Path != moved {
+		t.Fatalf("the cursor should sit on the moved vault, got %q", v.current().Entry.Path)
 	}
 }
 
@@ -319,7 +324,7 @@ func TestASaveRefreshesAndKeepsTheCursor(t *testing.T) {
 	var edited vaults.Edit
 	hooks := Hooks{
 		Load: func() ([]registry.Entry, error) { return entries, nil },
-		Edit: func(e registry.Entry, edit vaults.Edit) error { edited = edit; return nil },
+		Edit: func(e registry.Entry, edit vaults.Edit) (string, error) { edited = edit; return e.Path, nil },
 		Refresh: func() error {
 			for i := range entries {
 				if entries[i].Path == "/v/p3" && edited.Name != "" {

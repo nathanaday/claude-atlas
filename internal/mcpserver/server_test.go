@@ -618,7 +618,7 @@ func TestReadMountRefusesWrites(t *testing.T) {
 	h, cfg, p, kb := mounted(t)
 	guarded := vault.AccessGuarded
 	_, ke := rescan(t, cfg, p, kb)
-	if err := vaults.EditIdentity(ke, vaults.Edit{Access: &guarded}, now); err != nil {
+	if _, err := vaults.EditIdentity(home.Home{}, &home.Config{}, ke, vaults.Edit{Access: &guarded}, now); err != nil {
 		t.Fatal(err)
 	}
 	pe, ke := rescan(t, cfg, p, kb)
@@ -714,7 +714,7 @@ func TestRouteAcrossMounts(t *testing.T) {
 
 	guarded := vault.AccessGuarded
 	_, ke := rescan(t, cfg, p, kb)
-	if err := vaults.EditIdentity(ke, vaults.Edit{Access: &guarded}, now); err != nil {
+	if _, err := vaults.EditIdentity(home.Home{}, &home.Config{}, ke, vaults.Edit{Access: &guarded}, now); err != nil {
 		t.Fatal(err)
 	}
 	pe, ke := rescan(t, cfg, p, kb)

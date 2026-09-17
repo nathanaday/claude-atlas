@@ -74,6 +74,22 @@ A project takes `--name` and `--tags`; a knowledge base takes `--name`,
 vault's identity file and commits it there as a `setup` operation, so the
 change is in the vault's own history.
 
+**A new name moves the folder.** `edit cs566 --name sensor-triage` renames
+`projects/cs566` to `projects/sensor-triage`. The leaf changes and the parent
+stays, so a vault outside the vaults directory moves the same way and its
+`vaults` entry in the atlas config is rewritten. The folder takes the name
+cleaned for a path, the way a repository's name is, so `CS 566: Robotics`
+files as `CS 566- Robotics` while the vault's name keeps the colon. If a
+folder of that name already exists, the whole edit is refused and the identity
+file is untouched. A project that lives inside a repository at `REPO/atlas/`
+keeps its folder: that name belongs to the layout. Mount folders keep their
+own names too, because a project's pages link through `kb/<name>`; rename one
+with `mount PROJECT KB --as NAME`.
+
+Anything outside the atlas holding the old path loses it: a shell sitting in
+the folder, an open editor, a running Obsidian window. Obsidian prunes a
+registry entry whose folder is gone, and `open-vault` registers the new path.
+
 See everything the atlas knows about a vault, and forget one (the folder stays
 on disk):
 
@@ -615,7 +631,7 @@ and `claude-atlas config repo-changes pr` set one and refresh.
 | Setting | Effect |
 |---|---|
 | `vaults_dir` | the folder the scan walks, and where a new vault goes under `projects/` or `knowledge/` |
-| `vaults` | vault folders outside `vaults_dir`; the scan cannot find them, so they are listed. `new-project`, `adopt`, and `remove` keep this list |
+| `vaults` | vault folders outside `vaults_dir`; the scan cannot find them, so they are listed. `new-project`, `adopt`, `remove`, and a rename that moves a folder keep this list |
 | `repos` | the path of a repository outside its project's `repos/` folder, keyed by the project's id and the repository's name |
 | `claude_code.prompt` | a first message sent on every `open-claude`, for example `/claude-atlas:wiki` |
 | `claude_code.args` | flags for `claude`, such as `--model` |
