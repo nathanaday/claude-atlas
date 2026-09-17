@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -124,7 +125,7 @@ func boardTab(i int) tab {
 type view struct {
 	items     []Item
 	opener    Opener
-	hooks     Hooks
+	hooks     actions.Atlas
 	tab       tab
 	boards    [3]board     // projects, knowledge, problems
 	tasksTab  *tasksScreen // the hosted board, built on the first visit to the Tasks tab
@@ -150,7 +151,7 @@ type view struct {
 	help bool
 }
 
-func newView(items []Item, opener Opener, hooks Hooks) view {
+func newView(items []Item, opener Opener, hooks actions.Atlas) view {
 	v := view{items: items, opener: opener, hooks: hooks, width: 100, height: 40}
 	v.boards = [3]board{
 		newBoard(boardProjects, items, v.width),
@@ -525,7 +526,10 @@ func (v view) refreshCmd() tea.Cmd {
 		return nil
 	}
 	fn := v.hooks.Refresh
-	return func() tea.Msg { return refreshedMsg{err: fn()} }
+	return func() tea.Msg {
+		_, _, err := fn()
+		return refreshedMsg{err: err}
+	}
 }
 
 // openAdd starts the add-vault screen, or the adopt screen, in place.
@@ -1153,7 +1157,7 @@ func (v view) boardHints() string {
 }
 
 // RunView shows the atlas until the user quits. It reports whether any vault changed.
-func RunView(items []Item, opener Opener, hooks Hooks) (bool, error) {
+func RunView(items []Item, opener Opener, hooks actions.Atlas) (bool, error) {
 	final, err := tea.NewProgram(newView(items, opener, hooks), tea.WithAltScreen()).Run()
 	if err != nil {
 		return false, fmt.Errorf("interactive screen failed: %w", err)

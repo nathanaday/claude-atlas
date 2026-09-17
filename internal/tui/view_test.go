@@ -11,8 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
+	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -128,7 +130,7 @@ func quits(cmd tea.Cmd) bool {
 }
 
 func TestTabBarAndArrows(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
+	v := newView(sample(), Opener{}, actions.Atlas{})
 	out := v.View()
 	t.Logf("\n%s", out)
 	for _, want := range []string{"Atlas   Projects (3)  Knowledge (2)  Tasks (3)  Problems (1)", "A project holds tasks", "refreshed 2026-09-1"} {
@@ -163,7 +165,7 @@ func TestTabBarAndArrows(t *testing.T) {
 	if v.tab != tabTasks {
 		t.Fatal("T is the Tasks tab")
 	}
-	clean := newView(sample()[:5], Opener{}, Hooks{})
+	clean := newView(sample()[:5], Opener{}, actions.Atlas{})
 	if strings.Contains(clean.View(), "Problems") || len(clean.tabs()) != 3 {
 		t.Fatal("no problems, no Problems tab")
 	}
@@ -176,7 +178,7 @@ func TestTabBarAndArrows(t *testing.T) {
 // Every frame is exactly as tall as the screen and no wider, so the terminal never
 // scrolls the tab bar out of sight on one tab and leaves it in place on another.
 func TestEveryTabFillsTheScreenExactly(t *testing.T) {
-	hooks := Hooks{
+	hooks := actions.Atlas{
 		Load:  func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
 		Tasks: func(registry.Entry) (tasks.Ledger, []string, error) { return tasks.Empty(), nil, nil },
 	}
@@ -206,7 +208,7 @@ func TestEveryTabFillsTheScreenExactly(t *testing.T) {
 }
 
 func TestProjectsTabDrawsTheConnectors(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
+	v := newView(sample(), Opener{}, actions.Atlas{})
 	out := v.View()
 	t.Logf("\n%s", out)
 	for _, want := range []string{"╌╌╌╌▶ ai-ml   write · link missing", "╌╌╌╌▶ papers   read (write not granted)", "no knowledge base mounted", "touched today · 3 tasks open", "│ new ", "  itl\n", "  usc\n", "(end)"} {
@@ -224,7 +226,7 @@ func TestProjectsTabDrawsTheConnectors(t *testing.T) {
 }
 
 func TestKnowledgeTabCountsThenExpands(t *testing.T) {
-	v := pressV(newView(sample(), Opener{}, Hooks{}), tea.KeyRight)
+	v := pressV(newView(sample(), Opener{}, actions.Atlas{}), tea.KeyRight)
 	out := v.View()
 	t.Logf("\n%s", out)
 	for _, want := range []string{"ai-ml   open", "papers   open", "4 pages · new", "◀╌╌╌╌ 1 project"} {
@@ -254,7 +256,7 @@ func TestKnowledgeTabCountsThenExpands(t *testing.T) {
 }
 
 func TestEnterExpandsEscCollapsesThenQuits(t *testing.T) {
-	v := findVault(t, newView(sample(), Opener{}, Hooks{}), "p3")
+	v := findVault(t, newView(sample(), Opener{}, actions.Atlas{}), "p3")
 	v = pressV(v, tea.KeyEnter)
 	out := v.View()
 	t.Logf("\n%s", out)
@@ -289,7 +291,7 @@ func TestEnterExpandsEscCollapsesThenQuits(t *testing.T) {
 }
 
 func TestFooterNamesTheTabsKeysUntilHelp(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
+	v := newView(sample(), Opener{}, actions.Atlas{})
 	out := v.View()
 	if !strings.Contains(out, "  Enter details · n new project · h help · q quit\n") {
 		t.Fatalf("projects footer:\n%s", out)
@@ -351,7 +353,7 @@ func TestFooterNamesTheTabsKeysUntilHelp(t *testing.T) {
 }
 
 func TestDownRevealsTheEndAndNeverWraps(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
+	v := newView(sample(), Opener{}, actions.Atlas{})
 	next, _ := v.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
 	v = next.(view)
 	v = pressV(v, tea.KeyUp)
@@ -382,7 +384,7 @@ func TestDownRevealsTheEndAndNeverWraps(t *testing.T) {
 }
 
 func TestScrollKeepsCursorVisible(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
+	v := newView(sample(), Opener{}, actions.Atlas{})
 	next, _ := v.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
 	v = next.(view)
 	v = pressV(v, tea.KeyDown, tea.KeyDown)
@@ -397,7 +399,7 @@ func TestScrollKeepsCursorVisible(t *testing.T) {
 }
 
 func TestEmptyTabs(t *testing.T) {
-	v := newView(nil, Opener{}, Hooks{})
+	v := newView(nil, Opener{}, actions.Atlas{})
 	if !strings.Contains(v.View(), "no projects yet") {
 		t.Fatal("empty projects message missing")
 	}
@@ -415,9 +417,9 @@ func TestEmptyTabs(t *testing.T) {
 func TestAWriteLandsOnTheVaultsTab(t *testing.T) {
 	entries := entriesOf(sample())
 	fresh := registry.Entry{ID: "id-fresh", Kind: vault.Knowledge, Name: "fresh", Path: "/v/fresh", Mode: vault.Generic}
-	hooks := Hooks{
+	hooks := actions.Atlas{
 		Load:    func() ([]registry.Entry, error) { return append(entries, fresh), nil },
-		Refresh: func() error { return nil },
+		Refresh: func() (*registry.Index, []refresh.ProjectChange, error) { return nil, nil, nil },
 	}
 	v := newView(sample(), Opener{}, hooks)
 	cmd := v.wrote("/v/fresh", "created fresh")
@@ -454,7 +456,7 @@ func (f *fakeOpener) opener() Opener {
 
 func TestOpenRegisteredVaultDirectly(t *testing.T) {
 	f := &fakeOpener{registered: map[string]bool{"/v/p3": true}}
-	v := findVault(t, newView(sample(), f.opener(), Hooks{}), "p3")
+	v := findVault(t, newView(sample(), f.opener(), actions.Atlas{}), "p3")
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
 	v = next.(view)
 	if v.busy == "" || cmd == nil {
@@ -468,7 +470,7 @@ func TestOpenRegisteredVaultDirectly(t *testing.T) {
 
 func TestOpenUnknownVaultAsksThenRegisters(t *testing.T) {
 	f := &fakeOpener{registered: map[string]bool{}, running: true}
-	v := newView(sample(), f.opener(), Hooks{}) // the cursor starts on welcome
+	v := newView(sample(), f.opener(), actions.Atlas{}) // the cursor starts on welcome
 	next, _ := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
 	v = next.(view)
 	if v.ask == nil || !strings.Contains(v.View(), "quit and relaunch") {
@@ -494,7 +496,7 @@ func TestOpenUnknownVaultAsksThenRegisters(t *testing.T) {
 
 func TestOpenFromAnExpandedVault(t *testing.T) {
 	f := &fakeOpener{registered: map[string]bool{"/v/p3": true}}
-	v := pressV(findVault(t, newView(sample(), f.opener(), Hooks{}), "p3"), tea.KeyEnter)
+	v := pressV(findVault(t, newView(sample(), f.opener(), actions.Atlas{}), "p3"), tea.KeyEnter)
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
 	v = runCmd(next.(view), cmd)
 	if len(f.opened) != 1 || !v.boards[0].expanded["/v/p3"] {
@@ -505,7 +507,7 @@ func TestOpenFromAnExpandedVault(t *testing.T) {
 func TestClaudeKeyHandsOffTheTerminal(t *testing.T) {
 	var got string
 	op := Opener{Claude: func(vault, prompt string) (*exec.Cmd, error) { got = vault; return exec.Command("true"), nil }}
-	v := findVault(t, newView(sample(), op, Hooks{}), "p3")
+	v := findVault(t, newView(sample(), op, actions.Atlas{}), "p3")
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	v = next.(view)
 	if got != "/v/p3" || cmd == nil || v.errMsg != "" {
@@ -515,11 +517,11 @@ func TestClaudeKeyHandsOffTheTerminal(t *testing.T) {
 	if !strings.Contains(next.(view).View(), "back from Claude Code in p3") {
 		t.Fatal("status after return missing")
 	}
-	none := keyV(newView(sample(), Opener{}, Hooks{}), "c")
+	none := keyV(newView(sample(), Opener{}, actions.Atlas{}), "c")
 	if none.errMsg == "" {
 		t.Fatal("missing launcher should report an error")
 	}
-	bad := keyV(findVault(t, newView(sample(), op, Hooks{}), "old-notes"), "c")
+	bad := keyV(findVault(t, newView(sample(), op, actions.Atlas{}), "old-notes"), "c")
 	if bad.errMsg != v1Error {
 		t.Fatalf("c on a problem names the problem: %q", bad.errMsg)
 	}
@@ -527,10 +529,10 @@ func TestClaudeKeyHandsOffTheTerminal(t *testing.T) {
 
 func TestNewAndAdoptFromTheTabs(t *testing.T) {
 	dir := t.TempDir()
-	var got []AddVault
-	hooks := Hooks{
+	var got []actions.AddVault
+	hooks := actions.Atlas{
 		Load:      func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
-		Create:    func(c AddVault) (string, error) { got = append(got, c); return c.Path, nil },
+		Create:    func(c actions.AddVault) (string, error) { got = append(got, c); return c.Path, nil },
 		VaultsDir: dir,
 	}
 	v := newView(sample(), Opener{}, hooks)
@@ -598,7 +600,7 @@ func TestNewAndAdoptFromTheTabs(t *testing.T) {
 	if v.add != nil || len(got) != 2 {
 		t.Fatal("esc should cancel the add screen")
 	}
-	none := keyV(newView(sample(), Opener{}, Hooks{}), "n")
+	none := keyV(newView(sample(), Opener{}, actions.Atlas{}), "n")
 	if none.add != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("n without hooks reports why")
 	}
@@ -606,10 +608,10 @@ func TestNewAndAdoptFromTheTabs(t *testing.T) {
 
 func TestNewKnowledgeKeyOpensTheAddScreenWithKindSet(t *testing.T) {
 	dir := t.TempDir()
-	var got []AddVault
-	hooks := Hooks{
+	var got []actions.AddVault
+	hooks := actions.Atlas{
 		Load:      func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
-		Create:    func(c AddVault) (string, error) { got = append(got, c); return c.Path, nil },
+		Create:    func(c actions.AddVault) (string, error) { got = append(got, c); return c.Path, nil },
 		VaultsDir: dir,
 	}
 	v := newView(sample(), Opener{}, hooks)
@@ -633,9 +635,9 @@ func TestNewKnowledgeKeyOpensTheAddScreenWithKindSet(t *testing.T) {
 
 func TestRefreshKey(t *testing.T) {
 	calls := 0
-	hooks := Hooks{
+	hooks := actions.Atlas{
 		Load:    func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
-		Refresh: func() error { calls++; return nil },
+		Refresh: func() (*registry.Index, []refresh.ProjectChange, error) { calls++; return nil, nil, nil },
 	}
 	v := findVault(t, newView(sample(), Opener{}, hooks), "p3")
 	next, cmd := v.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
@@ -657,7 +659,7 @@ func TestRefreshKey(t *testing.T) {
 	if v = next.(view); !v.boards[0].expanded["/v/p3"] || !strings.Contains(v.View(), "Path") {
 		t.Fatal("a refresh keeps the expansion")
 	}
-	none := keyV(newView(sample(), Opener{}, Hooks{}), "R")
+	none := keyV(newView(sample(), Opener{}, actions.Atlas{}), "R")
 	if !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("R without hooks reports why")
 	}
@@ -669,14 +671,15 @@ func TestIngestFromTheTabs(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "a.pdf"), []byte("a"), 0o644)
 	var planned, staged []string
 	var launched string
-	hooks := Hooks{
+	hooks := actions.Atlas{
 		Load: func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
-		StagePlan: func(en registry.Entry, source string) (*capture.StagePlan, error) {
-			if source == "" {
+		StagePlan: func(en registry.Entry, given []string) (*capture.StagePlan, error) {
+			if len(given) == 0 {
 				return nil, errors.New("name a file or folder to ingest")
 			}
+			source := given[0]
 			planned = append(planned, source)
-			return &capture.StagePlan{Vault: en.Path, Sources: []string{source}, Dirs: []string{source},
+			return &capture.StagePlan{Vault: en.Path, Sources: given, Dirs: []string{source},
 				New: []capture.Staged{{From: filepath.Join(source, "a.pdf"), To: "inbox/Papers/a.pdf"}}, Unchanged: []string{"x"}}, nil
 		},
 		Stage: func(en registry.Entry, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
@@ -714,8 +717,8 @@ func TestIngestFromTheTabs(t *testing.T) {
 	}
 	// Nothing new but files waiting: Enter continues to the launch step instead of closing.
 	nothingNew := hooks
-	nothingNew.StagePlan = func(en registry.Entry, source string) (*capture.StagePlan, error) {
-		return &capture.StagePlan{Vault: en.Path, Sources: []string{source}, Unchanged: []string{"a"}, Waiting: 2}, nil
+	nothingNew.StagePlan = func(en registry.Entry, given []string) (*capture.StagePlan, error) {
+		return &capture.StagePlan{Vault: en.Path, Sources: given, Unchanged: []string{"a"}, Waiting: 2}, nil
 	}
 	w := findVault(t, newView(sample(), op, nothingNew), "p3")
 	w = keyV(w, "i")
@@ -730,8 +733,8 @@ func TestIngestFromTheTabs(t *testing.T) {
 	}
 	// Nothing new and nothing waiting: Enter closes with a note.
 	nothingAtAll := hooks
-	nothingAtAll.StagePlan = func(en registry.Entry, source string) (*capture.StagePlan, error) {
-		return &capture.StagePlan{Vault: en.Path, Sources: []string{source}, Unchanged: []string{"a", "b"}}, nil
+	nothingAtAll.StagePlan = func(en registry.Entry, given []string) (*capture.StagePlan, error) {
+		return &capture.StagePlan{Vault: en.Path, Sources: given, Unchanged: []string{"a", "b"}}, nil
 	}
 	w = findVault(t, newView(sample(), op, nothingAtAll), "p3")
 	w = keyV(w, "i")
@@ -751,7 +754,7 @@ func TestIngestFromTheTabs(t *testing.T) {
 	if len(planned) != 3 {
 		t.Fatalf("planned %v", planned)
 	}
-	none := keyV(findVault(t, newView(sample(), Opener{}, Hooks{}), "p3"), "i")
+	none := keyV(findVault(t, newView(sample(), Opener{}, actions.Atlas{}), "p3"), "i")
 	if none.ingest != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("i without hooks reports why")
 	}
@@ -764,7 +767,7 @@ func TestIngestFromTheTabs(t *testing.T) {
 
 func TestTasksTabHostsTheBoard(t *testing.T) {
 	var asked []string
-	hooks := Hooks{
+	hooks := actions.Atlas{
 		Load: func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
 		Tasks: func(e registry.Entry) (tasks.Ledger, []string, error) {
 			asked = append(asked, e.Name)
@@ -864,9 +867,9 @@ func TestContinueATaskFromTheTasksTab(t *testing.T) {
 
 func TestTheProblemsTabGoesWithItsLastVault(t *testing.T) {
 	entries := entriesOf(sample())
-	hooks := Hooks{
+	hooks := actions.Atlas{
 		Load:    func() ([]registry.Entry, error) { return entries, nil },
-		Refresh: func() error { return nil },
+		Refresh: func() (*registry.Index, []refresh.ProjectChange, error) { return nil, nil, nil },
 	}
 	v := findVault(t, newView(sample(), Opener{}, hooks), "old-notes")
 	if v.tab != tabProblems || !strings.Contains(v.View(), "Problems") {
@@ -882,10 +885,10 @@ func TestTheProblemsTabGoesWithItsLastVault(t *testing.T) {
 }
 
 func TestProblemsTabAdoptsAndExplains(t *testing.T) {
-	var got []AddVault
-	hooks := Hooks{
+	var got []actions.AddVault
+	hooks := actions.Atlas{
 		Load:      func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
-		Create:    func(c AddVault) (string, error) { got = append(got, c); return c.Path, nil },
+		Create:    func(c actions.AddVault) (string, error) { got = append(got, c); return c.Path, nil },
 		VaultsDir: t.TempDir(),
 	}
 	v := findVault(t, newView(sample(), Opener{}, hooks), "old-notes")

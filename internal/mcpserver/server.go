@@ -1161,6 +1161,20 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "List the knowledge bases the project mounts: id, name, the knowledge base's real wiki path, the mount folder, the requested and effective access, what the knowledge base is for, and its page count. Grep the real path; plan a page under a write mount like the project's own. A mount that names through came from a cluster: the project mounted that cluster, and every member is reached the same way. Read-only."}, s.mounts)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",
 		Description: "Read the vault's filing mode (generic or lyt) and the page types it files. Pass set to prepare a plan that changes it; apply that plan to make the change."}, s.mode)
+	mcp.AddTool(server, &mcp.Tool{Name: "atlas",
+		Description: "Read the whole atlas: every vault with its kind, path, tags or scope, access, mounts with effective access, repositories and their change policy, members, clusters, who mounts it, and state; the folders the atlas cannot read; and the settings. Pass refresh to also rewrite the registry and adopt repositories waiting under repos/."}, s.atlasTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "vault",
+		Description: "Create or adopt a vault, edit its name, tags, scope, or access, or forget one the atlas lists (the folder stays); action is create, adopt, edit, or forget. A create may mount a knowledge base or gather members. State the change and get a yes before calling."}, s.vaultTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "mount",
+		Description: "Change how a project reaches a knowledge base: mount or unmount it, set what the mount asks for (read or write), grant or revoke a project on a guarded knowledge base; action is mount, unmount, access, grant, or revoke. Returns the mount with its effective access, or the grants. State the change and get a yes before calling."}, s.mountTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "cluster",
+		Description: "Add a knowledge base to a cluster or drop a member; action is add or remove. A cluster is a knowledge base with members, and a project that mounts it reaches every member. State the change and get a yes before calling."}, s.clusterTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "repo",
+		Description: "Change a project's repositories: link a folder (init makes a plain folder one), create one, clone a URL, unlink one (the folder stays), or edit its remote, folder, or change policy (pr or commit); action is link, new, clone, unlink, or edit. State the change and get a yes before calling."}, s.repoTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "settings",
+		Description: "Set an atlas setting and return them all: new_days (how long a vault counts as new) and repo_changes (the change policy a newly linked repository takes, commit or pr). With no arguments it only reads."}, s.settingsTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "stage",
+		Description: "Copy files or folders from outside a project into its inbox, skipping what the project already captured or already holds; omit paths to stage what is new in the folders it staged from before. dry_run plans and copies nothing. Then ingest with the wiki-ingest skill."}, s.stageTool)
 	return server
 }
 
@@ -1171,7 +1185,7 @@ func Run(ctx context.Context, opts Options) error {
 
 // ToolNames lists every tool MCP registers, sorted, for docs and tests.
 func ToolNames() []string {
-	names := []string{"apply", "capture", "history", "inbox", "lint", "mode", "mounts", "plan", "plant", "repos", "route", "status", "stub", "tasks", "undo"}
+	names := []string{"apply", "atlas", "capture", "cluster", "history", "inbox", "lint", "mode", "mount", "mounts", "plan", "plant", "repo", "repos", "route", "settings", "stage", "status", "stub", "tasks", "undo", "vault"}
 	sort.Strings(names)
 	return names
 }

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/console"
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tui"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
@@ -751,13 +751,13 @@ func TestViewHooksCreateEditAndForget(t *testing.T) {
 		stdout:  &h.out,
 		stderr:  &h.err,
 	}
-	hooks := e.hooks(cfg)
+	hooks := actions.Bind(home.Home{Root: h.home}, cfg, e.console)
 	path := project(dir, "ghost")
-	got, err := hooks.Create(tui.AddVault{Kind: vault.Project, Name: "ghost", Path: path, Mode: "generic", Tags: []string{"usc"}})
+	got, err := hooks.Create(actions.AddVault{Kind: vault.Project, Name: "ghost", Path: path, Mode: "generic", Tags: []string{"usc"}})
 	if err != nil || got != path {
 		t.Fatalf("create: %q %v", got, err)
 	}
-	if err := hooks.Refresh(); err != nil {
+	if _, _, err := hooks.Refresh(); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := hooks.Load()
@@ -790,7 +790,7 @@ func TestViewHooksCreateEditAndForget(t *testing.T) {
 		t.Fatalf("forget inside: %v", err)
 	}
 	outside := filepath.Join(t.TempDir(), "outside")
-	if _, err := hooks.Create(tui.AddVault{Kind: vault.Knowledge, Name: "outside", Path: outside, Mode: "generic", Scope: "Papers."}); err != nil {
+	if _, err := hooks.Create(actions.AddVault{Kind: vault.Knowledge, Name: "outside", Path: outside, Mode: "generic", Scope: "Papers."}); err != nil {
 		t.Fatal(err)
 	}
 	if cfg := h.config(t); len(cfg.Vaults) != 1 || cfg.Vaults[0] != outside {

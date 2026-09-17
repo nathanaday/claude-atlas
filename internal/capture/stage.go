@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
@@ -305,4 +306,25 @@ func StagedFrom(v *vault.Vault) map[string]string {
 		out[from] = e.StagedAt
 	}
 	return out
+}
+
+// SourcesFor is what a staging reads: the given paths, expanded, or the folders the vault
+// staged from before. With neither it says so.
+func SourcesFor(v *vault.Vault, given []string) ([]string, error) {
+	if len(given) > 0 {
+		out := make([]string, 0, len(given))
+		for _, g := range given {
+			if g = strings.TrimSpace(g); g != "" {
+				out = append(out, home.Expand(g))
+			}
+		}
+		if len(out) > 0 {
+			return out, nil
+		}
+	}
+	sources := Sources(v)
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("name a file or folder to ingest; %s has not ingested from a folder yet", v.Name())
+	}
+	return sources, nil
 }

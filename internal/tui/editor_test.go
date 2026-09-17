@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
@@ -39,7 +40,7 @@ func makeVault(t *testing.T, cfg *home.Config, kind vault.Kind, name string, tag
 
 // atlasFixture makes two projects and a knowledge base, and the hooks the screens use
 // over them: every hook is the call the CLI makes.
-func atlasFixture(t *testing.T) (*home.Config, home.Home, Hooks) {
+func atlasFixture(t *testing.T) (*home.Config, home.Home, actions.Atlas) {
 	t.Helper()
 	if !gitx.Available() {
 		t.Skip("git is not installed")
@@ -50,7 +51,7 @@ func atlasFixture(t *testing.T) (*home.Config, home.Home, Hooks) {
 	makeVault(t, cfg, vault.Project, "reading", []string{"personal"})
 	makeVault(t, cfg, vault.Project, "welcome", nil)
 	makeVault(t, cfg, vault.Knowledge, "ai-ml", nil)
-	hooks := Hooks{
+	hooks := actions.Atlas{
 		Load: func() ([]registry.Entry, error) {
 			ix, err := registry.Scan(cfg)
 			if err != nil {
@@ -58,7 +59,10 @@ func atlasFixture(t *testing.T) (*home.Config, home.Home, Hooks) {
 			}
 			return ix.Entries, nil
 		},
-		Refresh: func() error { _, _, _, err := refresh.Registry(h, cfg, h.StateDir(), testNow, false); return err },
+		Refresh: func() (*registry.Index, []refresh.ProjectChange, error) {
+			_, ix, changes, err := refresh.Registry(h, cfg, h.StateDir(), testNow, false)
+			return ix, changes, err
+		},
 		Edit: func(e registry.Entry, edit vaults.Edit) (string, error) {
 			return vaults.EditIdentity(h, cfg, e, edit, testNow)
 		},
@@ -121,7 +125,7 @@ func atlasFixture(t *testing.T) (*home.Config, home.Home, Hooks) {
 }
 
 // openView loads the entries and shows the boards, cursor on the first vault.
-func openView(t *testing.T, hooks Hooks) view {
+func openView(t *testing.T, hooks actions.Atlas) view {
 	t.Helper()
 	entries, err := hooks.Load()
 	if err != nil {
@@ -316,7 +320,7 @@ func TestEditFromAnExpandedVaultKeepsItExpanded(t *testing.T) {
 }
 
 func TestEditNeedsHooks(t *testing.T) {
-	v := newView(sample(), Opener{}, Hooks{})
+	v := newView(sample(), Opener{}, actions.Atlas{})
 	v = keyV(v, "e")
 	if v.edit != nil || !strings.Contains(v.errMsg, "not available") {
 		t.Fatalf("edit without hooks: %+v %q", v.edit, v.errMsg)
@@ -328,16 +332,16 @@ func TestEditNeedsHooks(t *testing.T) {
 func TestASaveRefreshesAndKeepsTheCursor(t *testing.T) {
 	entries := entriesOf(sample())
 	var edited vaults.Edit
-	hooks := Hooks{
+	hooks := actions.Atlas{
 		Load: func() ([]registry.Entry, error) { return entries, nil },
 		Edit: func(e registry.Entry, edit vaults.Edit) (string, error) { edited = edit; return e.Path, nil },
-		Refresh: func() error {
+		Refresh: func() (*registry.Index, []refresh.ProjectChange, error) {
 			for i := range entries {
 				if entries[i].Path == "/v/p3" && edited.Name != "" {
 					entries[i].Name = edited.Name
 				}
 			}
-			return nil
+			return nil, nil, nil
 		},
 	}
 	v := findVault(t, newView(Items(entries), Opener{}, hooks), "p3")

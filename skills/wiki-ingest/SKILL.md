@@ -48,7 +48,10 @@ project that mounts a knowledge base.
    evidence.
 
 No network is needed. If the user gives a URL, ask them to save the page into
-`inbox/` (or paste the text). Do not fetch it yourself.
+`inbox/` (or paste the text). Do not fetch it yourself. A file or folder
+outside the vault enters through the `stage` tool: it copies what is new into
+`inbox/` and skips what the project already captured. Never copy a file into
+`inbox/` with Write.
 
 ## Choose the vault each source belongs to
 
@@ -71,8 +74,7 @@ base. Ask two questions of every source, in this order.
 Two scopes cover the source, or none does, or the project mounts no knowledge
 base: ask the user once, and offer the choices, each mounted knowledge base
 with its scope and the project's wiki. When there is no mount, say so, and
-name `claude-atlas mount <project> <kb>` as the way to add one before the
-ingest. Then file the rest of the batch by the user's answer without asking
+hand off to `atlas-mount`, which adds one before the ingest. Then file the rest of the batch by the user's answer without asking
 again. The project's wiki is never the silent fallback for knowledge: a page
 filed there for lack of a better place is one no other project can reach.
 
@@ -90,13 +92,10 @@ One source's pages may still land in both vaults. The source's vault decides
 where the capture and the source page go, not where every page goes.
 
 A mount the project may not write refuses both `capture` and `plan`:
-"`<project> mounts <kb> read-only`". Stop before capturing and tell the user
-which command to run in a terminal:
-
-- the mount's own `access` is `read`: `claude-atlas mount <project> <kb>`
-  without `--read`;
-- `access` is `write` but `effective` is `read`: the knowledge base is guarded,
-  so `claude-atlas grant <kb> <project> --write`.
+"`<project> mounts <kb> read-only`". Stop before capturing and hand off to
+the `atlas-mount` skill, which reads `effective` and changes the right thing:
+the mount's own `access` when it is `read`, or a grant when the knowledge
+base is guarded.
 
 Do not file that knowledge base's source in the project instead without the
 user's word.

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -60,7 +61,7 @@ func TestFocusKeepsColorOnlyUnderTheCursor(t *testing.T) {
 }
 
 func TestAHostedBoardHasNoHeaderAndNamesTheTabs(t *testing.T) {
-	hooks := Hooks{Tasks: func(registry.Entry) (tasks.Ledger, []string, error) { return tasks.Empty(), nil, nil }}
+	hooks := actions.Atlas{Tasks: func(registry.Entry) (tasks.Ledger, []string, error) { return tasks.Empty(), nil, nil }}
 	items := []Item{{Entry: registry.Entry{Kind: vault.Project, Name: "p3", Path: "/v/p3"}}}
 	s := newTasks(hooks, Opener{}, nil, items, 80)
 	if out := s.view(); !strings.Contains(out, "Atlas") || !strings.Contains(out, "Esc back") {

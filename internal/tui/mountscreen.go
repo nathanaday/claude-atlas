@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -40,7 +41,7 @@ type mountRow struct {
 }
 
 type mountsScreen struct {
-	hooks   Hooks
+	hooks   actions.Atlas
 	entry   registry.Entry
 	items   []Item
 	rows    []mountRow
@@ -57,7 +58,7 @@ type mountsScreen struct {
 	width   int
 }
 
-func newMounts(hooks Hooks, e registry.Entry, items []Item, width int) mountsScreen {
+func newMounts(hooks actions.Atlas, e registry.Entry, items []Item, width int) mountsScreen {
 	s := mountsScreen{hooks: hooks, entry: e, items: items, width: width}
 	s.build()
 	return s

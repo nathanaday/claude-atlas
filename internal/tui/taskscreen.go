@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
@@ -32,7 +33,7 @@ type taskRow struct {
 }
 
 type tasksScreen struct {
-	hooks   Hooks
+	hooks   actions.Atlas
 	opener  Opener
 	item    *Item  // nil for the board
 	items   []Item // every vault, for the board and for names
@@ -63,7 +64,7 @@ type taskLaunch struct {
 	name, vault, dir, prompt string
 }
 
-func newTasks(hooks Hooks, opener Opener, item *Item, items []Item, width int) tasksScreen {
+func newTasks(hooks actions.Atlas, opener Opener, item *Item, items []Item, width int) tasksScreen {
 	idea := textinput.New()
 	idea.Prompt = ""
 	idea.Placeholder = "the idea, in your words"

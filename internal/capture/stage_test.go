@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStagePlansOnlyNewFiles(t *testing.T) {
@@ -80,5 +81,30 @@ func TestStageRefusesVaultPathsAndMissingSources(t *testing.T) {
 	other := newVault(t)
 	if _, err := ApplyStage(other, plan, now); err == nil {
 		t.Fatal("a plan applies only to its own vault")
+	}
+}
+
+func TestSourcesForExpandsGivenPathsAndFallsBackToRememberedFolders(t *testing.T) {
+	v := newVault(t)
+	got, err := SourcesFor(v, []string{"~/Desktop/notes"})
+	if err != nil || len(got) != 1 || strings.HasPrefix(got[0], "~") {
+		t.Fatalf("given paths are expanded: %v %v", got, err)
+	}
+	if _, err := SourcesFor(v, nil); err == nil || !strings.Contains(err.Error(), v.Name()) || !strings.Contains(err.Error(), "has not ingested from a folder yet") {
+		t.Fatalf("with nothing remembered the error names the vault, in the CLI's words: %v", err)
+	}
+	src := filepath.Join(t.TempDir(), "src")
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "a.md"), []byte("a"), 0o644)
+	plan, err := PlanStage(v, []string{src}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyStage(v, plan, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err = SourcesFor(v, nil)
+	if err != nil || len(got) != 1 || got[0] != src {
+		t.Fatalf("remembered folders are the fallback: %v %v", got, err)
 	}
 }

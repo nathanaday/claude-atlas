@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
@@ -15,8 +16,8 @@ import (
 func TestCNewClusterPicksItsMembers(t *testing.T) {
 	cfg, _, hooks := atlasFixture(t)
 	makeVault(t, cfg, vault.Knowledge, "notes", nil)
-	var got []AddVault
-	hooks.Create = func(c AddVault) (string, error) {
+	var got []actions.AddVault
+	hooks.Create = func(c actions.AddVault) (string, error) {
 		got = append(got, c)
 		if _, err := vault.Init(c.Path, vault.Options{Kind: c.Kind, Name: c.Name}, testNow); err != nil {
 			return "", err
@@ -200,7 +201,7 @@ func TestClusterScreenAddsAndRemovesMembers(t *testing.T) {
 	if p.cluster != nil || p.errMsg != "a project holds no members" {
 		t.Fatalf("M on a project: err=%q", p.errMsg)
 	}
-	none := keyV(findVault(t, newView(sample(), Opener{}, Hooks{}), "papers"), "M")
+	none := keyV(findVault(t, newView(sample(), Opener{}, actions.Atlas{}), "papers"), "M")
 	if none.cluster != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatalf("M without hooks reports why: err=%q", none.errMsg)
 	}
@@ -223,7 +224,7 @@ func TestTheKnowledgeTabShowsAClusterAndItsMembers(t *testing.T) {
 	items := sample()
 	items[3].Entry.Members = []registry.Ref{{ID: "id-ai-ml", Name: "ai-ml"}}
 	items[4].Entry.Clusters = []registry.Ref{{ID: "id-papers", Name: "papers"}}
-	v := findVault(t, newView(items, Opener{}, Hooks{}), "papers")
+	v := findVault(t, newView(items, Opener{}, actions.Atlas{}), "papers")
 	out := v.View()
 	for _, want := range []string{"◀╌╌╌╌ 1 project · 1 member", clusterMark + "papers", "1 member · 4 pages"} {
 		if !strings.Contains(out, want) {
@@ -249,7 +250,7 @@ func TestTheKnowledgeTabShowsAClusterAndItsMembers(t *testing.T) {
 		}
 	}
 	// The relation reads from the member's side too.
-	m := pressV(findVault(t, newView(items, Opener{}, Hooks{}), "ai-ml"), tea.KeyEnter)
+	m := pressV(findVault(t, newView(items, Opener{}, actions.Atlas{}), "ai-ml"), tea.KeyEnter)
 	out = m.View()
 	if !strings.Contains(out, "In cluster") || !strings.Contains(out, "papers") {
 		t.Errorf("a member names its cluster:\n%s", out)
@@ -264,7 +265,7 @@ func TestTheProjectsTabSummarisesAClusterMount(t *testing.T) {
 		{ID: "id-ai-ml", Name: "ai-ml", Access: vault.AccessWrite, Effective: vault.AccessWrite, Path: "/v/ai-ml/wiki", Through: "papers"},
 		{ID: "id-notes", Name: "notes", Access: vault.AccessWrite, Effective: vault.AccessRead, Path: "/v/notes/wiki", Through: "papers"},
 	}
-	v := findVault(t, newView(items, Opener{}, Hooks{}), "p3")
+	v := findVault(t, newView(items, Opener{}, actions.Atlas{}), "p3")
 	out := v.View()
 	for _, want := range []string{"╌╌╌╌▶ papers   write · cluster", "through papers: ai-ml, notes"} {
 		if !strings.Contains(out, want) {

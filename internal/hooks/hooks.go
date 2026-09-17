@@ -26,11 +26,11 @@ import (
 const MaxContextBytes = 8 * 1024
 
 // Skills is the slash-menu line shown at session start.
-const Skills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  wiki-mode  save  wiki-fold  task  task-plant  task-plan  task-run  task-finish  canvas  obsidian-markdown  obsidian-bases  think"
+const Skills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  wiki-mode  save  wiki-fold  task  task-plant  task-plan  task-run  task-finish  canvas  obsidian-markdown  obsidian-bases  think  atlas  atlas-project  atlas-knowledge  atlas-mount  atlas-repo"
 
 // KnowledgeSkills is the slash-menu line for a knowledge base, where knowledge enters
 // through a project and the work here is upkeep.
-const KnowledgeSkills = "/claude-atlas:wiki  wiki-query  wiki-lint  wiki-fold  wiki-mode  canvas  obsidian-markdown  obsidian-bases  think"
+const KnowledgeSkills = "/claude-atlas:wiki  wiki-query  wiki-lint  wiki-fold  wiki-mode  canvas  obsidian-markdown  obsidian-bases  think  atlas  atlas-knowledge  atlas-mount"
 
 // MaxTaskLines bounds how many open tasks the session start lists.
 const MaxTaskLines = 8

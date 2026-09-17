@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
@@ -35,7 +36,7 @@ const trustNote = "The first time in a vault, Claude Code asks whether you trust
 // ingestScreen stages sources from outside the vault into its inbox, then offers to start
 // Claude Code on them. It is embedded in the view.
 type ingestScreen struct {
-	hooks   Hooks
+	hooks   actions.Atlas
 	entry   registry.Entry
 	step    ingestStep
 	source  pathField
@@ -46,7 +47,7 @@ type ingestScreen struct {
 	outcome ingestOutcome
 }
 
-func newIngest(hooks Hooks, e registry.Entry) ingestScreen {
+func newIngest(hooks actions.Atlas, e registry.Entry) ingestScreen {
 	source := newPathField("~/Papers or ~/Papers/paper.pdf; blank: the folders ingested before", 64)
 	if hooks.Sources != nil {
 		for _, m := range hooks.Sources(e) {
@@ -66,7 +67,11 @@ func (s ingestScreen) update(msg tea.Msg) (ingestScreen, tea.Cmd) {
 				s.outcome = ingestCancelled
 				return s, nil
 			case tea.KeyEnter:
-				plan, err := s.hooks.StagePlan(s.entry, s.source.value())
+				var given []string
+				if src := strings.TrimSpace(s.source.value()); src != "" {
+					given = []string{src}
+				}
+				plan, err := s.hooks.StagePlan(s.entry, given)
 				if err != nil {
 					s.err = err.Error()
 					return s, nil

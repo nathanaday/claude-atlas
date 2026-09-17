@@ -2,30 +2,32 @@
 
 Every command, with examples. `claude-atlas help` prints the short form.
 
-## Two layers
+## Three layers
 
 `claude-atlas` on its own opens the whole atlas as one interactive screen
 (`claude-atlas view` says the same explicitly). Everything it does is also
-one command, so scripts and muscle memory both work:
+one command, and one tool from a Claude Code session, so scripts, muscle
+memory, and the `atlas` skills all work:
 
-| In `view` | Command |
-|---|---|
-| `n` new project, `N` new knowledge base | `new-project NAME [--in REPO]`, `new-knowledge NAME` |
-| `a` adopt a vault | `adopt PATH` |
-| Enter on a vault | `show NAME` |
-| `o` open in Obsidian | `open-vault NAME` |
-| `c` start Claude Code | `open-claude NAME` |
-| `i` ingest sources, on a project | `ingest NAME [PATH...]` |
-| `t` tasks on a project, `p` plant, `c` continue | `tasks NAME`, `plant NAME TEXT`, `open-claude NAME --task ID` |
-| `T` every project's tasks | `tasks` |
-| `l` repositories on a project: `n` new, `a` link, `e` edit, `u` unlink | `new-repo NAME REPO`, `link NAME PATH`, `edit-repo NAME REPO`, `unlink NAME REPO`, `repos [NAME]` |
-| `e` edit a vault, `s` save | `edit NAME --…` |
-| `e` then `r` forget | `remove NAME` |
-| `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
-| `C` new cluster; `e` then Enter on `Members`, or `M`: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` |
-| `R` refresh | `refresh` |
-| `←` `→` switch tabs; `h` shows every key | — |
-| — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
+| In `view` | Command | Tool, from a Claude Code session |
+|---|---|---|
+| `n` new project, `N` new knowledge base | `new-project NAME [--in REPO]`, `new-knowledge NAME` | `vault` create |
+| `a` adopt a vault | `adopt PATH` | `vault` adopt |
+| Enter on a vault | `show NAME` | `atlas` |
+| `o` open in Obsidian | `open-vault NAME` | — |
+| `c` start Claude Code | `open-claude NAME` | — |
+| `i` ingest sources, on a project | `ingest NAME [PATH...]` | `stage`, then the `wiki-ingest` skill |
+| `t` tasks on a project, `p` plant, `c` continue | `tasks NAME`, `plant NAME TEXT`, `open-claude NAME --task ID` | `tasks`, `plant` |
+| `T` every project's tasks | `tasks` | — |
+| `l` repositories on a project: `n` new, `a` link, `e` edit, `u` unlink | `new-repo NAME REPO`, `link NAME PATH`, `edit-repo NAME REPO`, `unlink NAME REPO`, `repos [NAME]` | `repo` |
+| `e` edit a vault, `s` save | `edit NAME --…` | `vault` edit |
+| `e` then `r` forget | `remove NAME` | `vault` forget |
+| `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` | `mount` |
+| `C` new cluster; `M` or `e` then Enter on `Members`, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` | `vault` create with `members`; `cluster` |
+| `R` refresh | `refresh` | `atlas` with `refresh` |
+| — | `config KEY VALUE` | `settings` |
+| `←` `→` switch tabs; `h` shows every key | — | — |
+| — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` | `stub` |
 
 ## Create a vault
 
