@@ -18,6 +18,10 @@ import (
 // EntityType is the entity_type a page describing a repository carries.
 const EntityType = "repository"
 
+// BehindThreshold is how many commits a repository may move past its page before status
+// says the page fell behind.
+const BehindThreshold = 20
+
 // ClaudeMD returns the path of the repository's CLAUDE.md, or "" when it has none.
 func ClaudeMD(r registry.Repo) string {
 	if r.Path == "" {

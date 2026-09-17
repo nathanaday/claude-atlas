@@ -15,7 +15,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side before v2 (superseded by `v2-design.md`) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
-| Working from a project: repository pages, the work skill (phases 1–3 built) | `docs/superpowers/specs/2026-09-17-working-from-a-project-design.md` |
+| Working from a project: repository pages, the work skill (built) | `docs/superpowers/specs/2026-09-17-working-from-a-project-design.md` |
 | The atlas tools and the `atlas` skills | `docs/superpowers/specs/2026-09-16-atlas-tools-design.md` |
 | Original brainstorm (not a contract) | `docs/spec.md` |
 | The skills' contracts | `skills/<name>/SKILL.md` and `skills/wiki/references/` |

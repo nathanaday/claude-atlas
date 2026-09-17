@@ -418,6 +418,37 @@ func repoInfo(project *registry.Entry, r registry.Repo) RepoInfo {
 	return info
 }
 
+// repoPageWarnings names the project's repositories no page describes, and those whose
+// page fell more than repomap.BehindThreshold commits behind, so a session sees the
+// knowledge base going stale next to the stale tasks.
+func repoPageWarnings(h home.Home, root string) []string {
+	project, err := discover.Project(h, root)
+	if err != nil || project == nil {
+		return nil
+	}
+	var missing, behind []string
+	for _, r := range project.Repos {
+		if r.Error != "" || r.Path == "" {
+			continue
+		}
+		d := repomap.Describe(*project, r)
+		switch {
+		case d == nil:
+			missing = append(missing, r.Name)
+		case d.Behind > repomap.BehindThreshold:
+			behind = append(behind, fmt.Sprintf("%s (%s, %d commits)", r.Name, d.In, d.Behind))
+		}
+	}
+	var out []string
+	if len(missing) > 0 {
+		out = append(out, fmt.Sprintf("%d repositor%s no page describes: %s; the repo-map skill writes one", len(missing), map[bool]string{true: "y", false: "ies"}[len(missing) == 1], strings.Join(missing, ", ")))
+	}
+	if len(behind) > 0 {
+		out = append(out, fmt.Sprintf("%d repository page%s fell behind the code: %s; the repo-map skill updates them", len(behind), plural(len(behind)), strings.Join(behind, ", ")))
+	}
+	return out
+}
+
 type Versions struct {
 	Binary string `json:"binary"`
 	Plugin string `json:"plugin,omitempty"`
@@ -491,6 +522,9 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 	if match, _, err := discover.Vault(s.home(), s.opts.ProjectDir); err == nil && match != nil && match.Project.Path == v.Root {
 		info := repoInfo(&match.Project, match.Repo)
 		out.Repository = &info
+	}
+	if v.Config.Kind == vault.Project {
+		out.Warnings = append(out.Warnings, repoPageWarnings(s.home(), v.Root)...)
 	}
 	if out.Versions.Plugin != "" && out.Versions.Binary != "dev" && out.Versions.Plugin != out.Versions.Binary {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("plugin %s and binary %s differ; update one of them", out.Versions.Plugin, out.Versions.Binary))

@@ -508,7 +508,9 @@ The snapshot holds the repository's CLAUDE.md and README, its tracked files
 commit. It is captured like any source, so the repository page cites a commit
 through the ledger. `i` on the repositories screen and the `stage` tool with
 `repo` do the same. When the count behind grows, the same skill updates the
-page from the log.
+page from the log; `task-finish` offers that for every repository a task
+changed, and the `status` tool names the repositories no page describes and
+those whose page fell more than 20 commits behind, next to the stale tasks.
 
 A repository created in the project's folder gets its own git history, and the
 vault's `.gitignore` names it, so the vault's commits never include it;

@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"os"
 	"path/filepath"
 	"strings"
@@ -486,6 +488,29 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	d := repos.Repos[0].Described
 	if repos.Repos[0].ClaudeMD != v.Path("repos/code/CLAUDE.md") || d == nil || d.Page != "wiki/entities/code.md" || d.In != v.Name() || d.Commit != head || d.Behind != 0 {
 		t.Fatalf("described: %+v %+v", repos.Repos[0], d)
+	}
+	// status warned while no page described the repository, says nothing while the page
+	// is current, and warns again once the code moved far past it.
+	if !strings.Contains(strings.Join(status.Warnings, "\n"), "1 repository no page describes: code; the repo-map skill writes one") {
+		t.Fatalf("status before the page: %+v", status.Warnings)
+	}
+	status = Status{}
+	c.call("status", nil, &status)
+	if strings.Contains(strings.Join(status.Warnings, "\n"), "repo-map") {
+		t.Fatalf("status with a current page: %+v", status.Warnings)
+	}
+	repo := gitx.Repo{Dir: v.Path("repos/code")}
+	for i := 0; i <= repomap.BehindThreshold; i++ {
+		os.WriteFile(v.Path("repos/code/n.txt"), []byte{byte(i)}, 0o644)
+		repo.AddAll()
+		if _, err := repo.Commit("n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status = Status{}
+	c.call("status", nil, &status)
+	if !strings.Contains(strings.Join(status.Warnings, "\n"), fmt.Sprintf("1 repository page fell behind the code: code (%s, %d commits); the repo-map skill updates them", v.Name(), repomap.BehindThreshold+1)) {
+		t.Fatalf("status behind: %+v", status.Warnings)
 	}
 }
 

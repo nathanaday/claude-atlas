@@ -1,7 +1,7 @@
 # Working from a project: repositories in the knowledge base, and the work skill
 
-Date: 2026-09-17. Applies to claude-atlas 1.3.0; ships as 1.4.0. Phases 1
-to 3 built on 2026-09-17.
+Date: 2026-09-17. Applies to claude-atlas 1.3.0; ships as 1.4.0. All four
+phases built on 2026-09-17.
 Builds on `docs/tasks-design.md` and `docs/v2-design.md`. Nothing here
 changes what a task, a mount, or a repository is.
 
@@ -170,9 +170,9 @@ The `repo-map` skill runs the procedure, in a project session:
 
 ## The knowledge base stays current
 
-`behind` is the signal. `status` names every repository whose page is more
-than 20 commits behind, next to stale tasks, and the hook's repository line
-carries the count always. Lint does not: it is read-only and vault-local,
+`behind` is the signal. `status` names every repository no page describes,
+and every one whose page is more than 20 commits behind, next to stale
+tasks; the hook's repository line carries the count always. Lint does not: it is read-only and vault-local,
 and this fact needs the repository's git.
 
 `task-finish` gains a step, after the Outcome and before the leftovers: for
