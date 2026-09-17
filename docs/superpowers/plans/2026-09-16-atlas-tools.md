@@ -21,7 +21,13 @@
 - Prose in skills and docs follows the user's writing guide: short sentences, active voice, no "flag", "genuine", "honest", "shape", "load bearing", "judgement call".
 - An action lives once, in `internal/vaults`, `internal/refresh`, `internal/vault`, `internal/txn`, or `internal/capture`. `actions.Bind` is the one place the struct is built. `tui` and `mcpserver` import `actions`; neither imports the other; `actions` imports neither.
 - `make test` and `go vet ./...` pass at the end of every task. Run `gofmt -l internal/` and expect no output.
-- Work on a branch `atlas-tools` from `main`, as `clusters` was. Task 12 ends before any merge; merging is the user's call.
+- The work happens in the git worktree at
+  `/Users/nathanaday/SoftwareProjects/claude-atlas/.claude/worktrees/atlas-tools`,
+  on branch `worktree-atlas-tools`. Run every command from there and never
+  `cd` to the main checkout, which another session is using. A command below
+  that begins `` is
+  written for the main checkout: drop that prefix and run the rest from the
+  worktree. Task 12 ends before any merge; merging is the user's call.
 
 ---
 
@@ -47,18 +53,17 @@
 
 ---
 
-### Task 1: Amend the spec and commit the pending CLAUDE.md section
+### Task 1: Amend the spec
 
-The spec was written before three facts settled: the server binds per call, `Refresh` and `StagePlan` change signature, and `AddVault` now carries `MemberIDs` (commit `722149b`). `CLAUDE.md` has an uncommitted "Tool, skill, or hook" section the user approved.
+The spec was written before three facts settled: the server binds per call, `Refresh` and `StagePlan` change signature, and `AddVault` now carries `MemberIDs` (commit `722149b`). The "Tool, skill, or hook" section of `CLAUDE.md` this task once had to commit is already in, landed on `main` by `505c41b`; do not re-add it.
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-16-atlas-tools-design.md`
-- Commit as-is: `CLAUDE.md`
 
 - [ ] **Step 1: Apply the four spec amendments**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && python3 - <<'EOF'
+python3 - <<'EOF'
 import io
 p='docs/superpowers/specs/2026-09-16-atlas-tools-design.md'
 s=io.open(p,encoding='utf-8').read()
@@ -109,10 +114,10 @@ io.open(p,'w',encoding='utf-8').write(s)
 EOF
 ```
 
-- [ ] **Step 2: Commit both**
+- [ ] **Step 2: Commit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add CLAUDE.md docs/superpowers/specs/2026-09-16-atlas-tools-design.md && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "docs: tool, skill, or hook; the atlas tools spec binds per call" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add docs/superpowers/specs/2026-09-16-atlas-tools-design.md && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "docs: the atlas tools spec binds per call" && git log --oneline -1
 ```
 
 ---
@@ -226,8 +231,8 @@ func TestSourcesForExpandsGivenPathsAndFallsBackToRememberedFolders(t *testing.T
 	if err != nil || len(got) != 1 || strings.HasPrefix(got[0], "~") {
 		t.Fatalf("given paths are expanded: %v %v", got, err)
 	}
-	if _, err := SourcesFor(v, nil); err == nil || !strings.Contains(err.Error(), v.Name()) {
-		t.Fatalf("with nothing remembered the error names the vault: %v", err)
+	if _, err := SourcesFor(v, nil); err == nil || !strings.Contains(err.Error(), v.Name()) || !strings.Contains(err.Error(), "has not ingested from a folder yet") {
+		t.Fatalf("with nothing remembered the error names the vault, in the CLI's words: %v", err)
 	}
 	src := filepath.Join(t.TempDir(), "src")
 	os.MkdirAll(src, 0o755)
@@ -310,11 +315,15 @@ func SourcesFor(v *vault.Vault, given []string) ([]string, error) {
 	}
 	sources := Sources(v)
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("name a file or folder to stage; %s has not staged from a folder yet", v.Name())
+		return nil, fmt.Errorf("name a file or folder to ingest; %s has not ingested from a folder yet", v.Name())
 	}
 	return sources, nil
 }
 ```
+
+The wording is the one `cli.ingestSources` uses today, verbatim, because
+`internal/cli/cli_test.go:839` asserts `has not ingested from a folder yet` and
+Task 3 routes the `ingest` command through this function. Do not reword it.
 
 Add `"github.com/nathanaday/claude-atlas/internal/home"` to `stage.go`'s imports.
 
@@ -326,7 +335,7 @@ Expected: `ok` for both.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/refresh internal/capture && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "refresh, capture: the helpers the CLI kept to itself, for the view and the tools" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/refresh internal/capture && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "refresh, capture: the helpers the CLI kept to itself, for the view and the tools" && git log --oneline -1
 ```
 
 ---
@@ -899,7 +908,7 @@ Expected: `ok`. The `tui` and `cli` packages do not build yet; that is the next 
 Remove `type Hooks struct { ... }` from `internal/tui/editor.go` (the whole block, comment included, from `// Hooks is` or the line before `type Hooks struct` through its closing `}`) and `type AddVault struct { ... }` from `internal/tui/addvault.go` (the block and its `// AddVault is what the user chose` comment). Then rename every use and add the import:
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && for f in internal/tui/*.go; do
+for f in internal/tui/*.go; do
   perl -pi -e 's/\btui\.Hooks\b/actions.Atlas/g; s/\bHooks\b/actions.Atlas/g; s/\bAddVault\b/actions.AddVault/g' "$f"
   if grep -q 'actions\.' "$f" && ! grep -q 'internal/actions"' "$f"; then
     perl -0pi -e 's/(\t"github.com\/nathanaday\/claude-atlas\/internal\/)/\t"github.com\/nathanaday\/claude-atlas\/internal\/actions"\n$1/' "$f"
@@ -964,7 +973,7 @@ func (e *env) registryEntries(cfg *home.Config) ([]registry.Entry, error) {
 6. Replace every `tui.AddVault` with `actions.AddVault` and every `tui.Hooks` with `actions.Atlas`:
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && perl -pi -e 's/\btui\.AddVault\b/actions.AddVault/g; s/\btui\.Hooks\b/actions.Atlas/g' internal/cli/cli.go internal/cli/cli_test.go
+perl -pi -e 's/\btui\.AddVault\b/actions.AddVault/g; s/\btui\.Hooks\b/actions.Atlas/g' internal/cli/cli.go internal/cli/cli_test.go
 ```
 
 7. Add `"github.com/nathanaday/claude-atlas/internal/actions"` and `"github.com/nathanaday/claude-atlas/internal/refresh"` to `cli.go`'s imports if absent (`refresh` is already imported; check). Remove imports the deletions orphaned; `go vet` names them.
@@ -980,7 +989,7 @@ Run: `make test && gofmt -l internal/`
 Expected: every package `ok`; gofmt prints nothing.
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/ && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "actions: the view's hooks become one struct the CLI, the view, and the tools bind once" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/ && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "actions: the view's hooks become one struct the CLI, the view, and the tools bind once" && git log --oneline -1
 ```
 
 ---
@@ -1193,7 +1202,7 @@ Expected: `ok`.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the atlas tool reads every vault and the settings" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the atlas tool reads every vault and the settings" && git log --oneline -1
 ```
 
 ---
@@ -1496,7 +1505,7 @@ Expected: `ok`.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the vault tool creates, adopts, edits, and forgets" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the vault tool creates, adopts, edits, and forgets" && git log --oneline -1
 ```
 
 ---
@@ -1751,7 +1760,7 @@ Expected: `ok`.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the mount tool mounts, grants, and revokes" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the mount tool mounts, grants, and revokes" && git log --oneline -1
 ```
 
 ---
@@ -1895,7 +1904,7 @@ Expected: `ok`.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the cluster tool adds and drops members" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the cluster tool adds and drops members" && git log --oneline -1
 ```
 
 ---
@@ -2102,7 +2111,7 @@ Expected: `ok`.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the repo tool links, creates, clones, unlinks, and edits" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the repo tool links, creates, clones, unlinks, and edits" && git log --oneline -1
 ```
 
 ---
@@ -2268,7 +2277,7 @@ Expected: `ok` everywhere; no vet output; gofmt prints nothing.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the settings and stage tools" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add internal/mcpserver && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "mcpserver: the settings and stage tools" && git log --oneline -1
 ```
 
 ---
@@ -2581,7 +2590,7 @@ Never run git in a repository to link it; the tool does what is needed.
 - [ ] **Step 6: The hand-offs in `wiki` and `wiki-ingest`**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && python3 - <<'EOF'
+python3 - <<'EOF'
 import io
 def edit(p, pairs):
     s=io.open(p,encoding='utf-8').read()
@@ -2662,13 +2671,13 @@ skill sends the user to a terminal for something a tool now does.
 Check each new `SKILL.md` for the words the guide bans (`flag`, `genuine`, `honest`, `shape`, `load bearing`, `judgement call`):
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && grep -niE "\bflag|genuine|honest|\bshape|load bearing|judgement" skills/atlas*/SKILL.md; echo "exit $?"
+grep -niE "\bflag|genuine|honest|\bshape|load bearing|judgement" skills/atlas*/SKILL.md; echo "exit $?"
 ```
 
 Expected: no matches, `exit 1`.
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add skills/ && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "skills: atlas, atlas-project, atlas-knowledge, atlas-mount, atlas-repo; wiki and wiki-ingest hand off" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add skills/ && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "skills: atlas, atlas-project, atlas-knowledge, atlas-mount, atlas-repo; wiki and wiki-ingest hand off" && git log --oneline -1
 ```
 
 ---
@@ -2681,7 +2690,7 @@ cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanada
 - [ ] **Step 1: Apply every edit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && python3 - <<'EOF'
+python3 - <<'EOF'
 import io
 def edit(p, pairs):
     s=io.open(p,encoding='utf-8').read()
@@ -2802,13 +2811,13 @@ Expected: `edited`, then three lines each showing `1.3.0`.
 - [ ] **Step 2: Check the banned words in the changed docs, then commit**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git diff -U0 CLAUDE.md docs/usage.md docs/core-design.md README.md | grep '^+' | grep -niE "\bflag|genuine|honest|\bshape|load bearing|judgement"; echo "exit $?"
+git diff -U0 CLAUDE.md docs/usage.md docs/core-design.md README.md | grep '^+' | grep -niE "\bflag|genuine|honest|\bshape|load bearing|judgement"; echo "exit $?"
 ```
 
 Expected: no matches, `exit 1`.
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add CLAUDE.md docs/usage.md docs/core-design.md README.md .claude-plugin/ && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "docs: three layers, one backend; 1.3.0" && git log --oneline -1
+git -c user.name=nathanaday -c user.email=nraday1221@gmail.com add CLAUDE.md docs/usage.md docs/core-design.md README.md .claude-plugin/ && git -c user.name=nathanaday -c user.email=nraday1221@gmail.com commit -q -m "docs: three layers, one backend; 1.3.0" && git log --oneline -1
 ```
 
 ---
@@ -2822,7 +2831,7 @@ The tests prove the tools; this proves the plugin: the tools appear in a session
 - [ ] **Step 1: The whole suite, vet, format, build**
 
 ```bash
-cd /Users/nathanaday/SoftwareProjects/claude-atlas && make test && go vet ./... && gofmt -l internal/ cmd/ && make install && claude-atlas version
+make test && go vet ./... && gofmt -l internal/ cmd/ && make install && claude-atlas version
 ```
 
 Expected: every package `ok`; nothing from vet or gofmt; the version the build stamps.
@@ -2838,7 +2847,7 @@ Expected: `welcome` (project) and `ai-ml` (knowledge base) listed.
 - [ ] **Step 3: The tools are served and the `atlas` skill reads them**
 
 ```bash
-S=/private/tmp/claude-501/-Users-nathanaday-SoftwareProjects-claude-atlas/1f02bef0-7321-4284-a48a-6d700030bf78/scratchpad/atlas-tools && cd "$S" && CLAUDE_ATLAS_HOME="$S/home" claude --plugin-dir /Users/nathanaday/SoftwareProjects/claude-atlas -p "Use the atlas skill. What vaults exist, and what does each mount?" --allowedTools "mcp__plugin_claude-atlas_atlas__*,Skill,Read,Grep,Glob"
+S=/private/tmp/claude-501/-Users-nathanaday-SoftwareProjects-claude-atlas/1f02bef0-7321-4284-a48a-6d700030bf78/scratchpad/atlas-tools && cd "$S" && CLAUDE_ATLAS_HOME="$S/home" claude --plugin-dir /Users/nathanaday/SoftwareProjects/claude-atlas/.claude/worktrees/atlas-tools -p "Use the atlas skill. What vaults exist, and what does each mount?" --allowedTools "mcp__plugin_claude-atlas_atlas__*,Skill,Read,Grep,Glob"
 ```
 
 Expected: an answer that names `welcome` and `ai-ml`, with the knowledge base's scope, and no mention of running a terminal command. The session started in a folder that is not a vault, and the tool still answered.
@@ -2846,7 +2855,7 @@ Expected: an answer that names `welcome` and `ai-ml`, with the knowledge base's 
 - [ ] **Step 4: A guided create lands on disk**
 
 ```bash
-S=/private/tmp/claude-501/-Users-nathanaday-SoftwareProjects-claude-atlas/1f02bef0-7321-4284-a48a-6d700030bf78/scratchpad/atlas-tools && cd "$S" && CLAUDE_ATLAS_HOME="$S/home" claude --plugin-dir /Users/nathanaday/SoftwareProjects/claude-atlas -p "Use the atlas-project skill to create a project named triage, tags usc, mounting ai-ml, no repository. Take the defaults for everything else. I have read your one-line summary and my answer is yes; do not wait for another answer." --allowedTools "mcp__plugin_claude-atlas_atlas__*,Skill,Read,Grep,Glob" && claude-atlas --home "$S/home" show triage
+S=/private/tmp/claude-501/-Users-nathanaday-SoftwareProjects-claude-atlas/1f02bef0-7321-4284-a48a-6d700030bf78/scratchpad/atlas-tools && cd "$S" && CLAUDE_ATLAS_HOME="$S/home" claude --plugin-dir /Users/nathanaday/SoftwareProjects/claude-atlas/.claude/worktrees/atlas-tools -p "Use the atlas-project skill to create a project named triage, tags usc, mounting ai-ml, no repository. Take the defaults for everything else. I have read your one-line summary and my answer is yes; do not wait for another answer." --allowedTools "mcp__plugin_claude-atlas_atlas__*,Skill,Read,Grep,Glob" && claude-atlas --home "$S/home" show triage
 ```
 
 Expected: `show triage` prints the project at `$S/Vaults/projects/triage` with tag `usc` and the mount `ai-ml` (effective write).
@@ -2854,7 +2863,7 @@ Expected: `show triage` prints the project at `$S/Vaults/projects/triage` with t
 - [ ] **Step 5: The in-vault skills still hand off, not to the terminal**
 
 ```bash
-S=/private/tmp/claude-501/-Users-nathanaday-SoftwareProjects-claude-atlas/1f02bef0-7321-4284-a48a-6d700030bf78/scratchpad/atlas-tools && cd "$S/Vaults/projects/triage" && CLAUDE_ATLAS_HOME="$S/home" claude --plugin-dir /Users/nathanaday/SoftwareProjects/claude-atlas -p "Use the wiki skill. I want to make ai-ml read-only for this project. Which skill handles that, and what would it call? Do not change anything." --allowedTools "mcp__plugin_claude-atlas_atlas__*,Skill,Read,Grep,Glob"
+S=/private/tmp/claude-501/-Users-nathanaday-SoftwareProjects-claude-atlas/1f02bef0-7321-4284-a48a-6d700030bf78/scratchpad/atlas-tools && cd "$S/Vaults/projects/triage" && CLAUDE_ATLAS_HOME="$S/home" claude --plugin-dir /Users/nathanaday/SoftwareProjects/claude-atlas/.claude/worktrees/atlas-tools -p "Use the wiki skill. I want to make ai-ml read-only for this project. Which skill handles that, and what would it call? Do not change anything." --allowedTools "mcp__plugin_claude-atlas_atlas__*,Skill,Read,Grep,Glob"
 ```
 
 Expected: the answer names `atlas-mount` and the `mount` tool with `action: access`, `access: read`; it does not name `claude-atlas mount`.
