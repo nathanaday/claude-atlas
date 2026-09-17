@@ -233,3 +233,18 @@ func TestUnlinkSurvivesAReloadThatDroppedTheRepository(t *testing.T) {
 		t.Fatalf("y after the row is gone: mode=%d removed=%d status=%q", v.links.mode, removed, v.links.status)
 	}
 }
+
+func TestReposScreenShowsThePageThatDescribesARepository(t *testing.T) {
+	ok := 0
+	entry := registry.Entry{Kind: vault.Project, Name: "reading", Path: "/tmp/reading", Repos: []registry.Repo{{Name: "code", Path: "/tmp/code"}, {Name: "paper", Path: "/tmp/paper"}}}
+	entry.State = &registry.State{
+		RepoFacts:        map[string]links.Link{"code": {OK: true, Branch: "main", Dirty: &ok}, "paper": {OK: true, Branch: "main", Dirty: &ok}},
+		RepoDescriptions: map[string]registry.RepoDescription{"code": {Page: "wiki/entities/code.md", In: "tools", Commit: "fc70d93abcdef", Behind: 12}},
+	}
+	out := newLinks(actions.Atlas{}, entry, 80).view()
+	for _, want := range []string{"tools: wiki/entities/code.md · fc70d93 · 12 commits behind", registry.NotDescribed} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}

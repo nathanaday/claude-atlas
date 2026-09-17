@@ -635,7 +635,7 @@ func (s *Server) repoTool(ctx context.Context, req *mcp.CallToolRequest, a RepoT
 	if p := after.ByID(project.ID); p != nil {
 		for _, r := range p.Repos {
 			if r.Name == name {
-				info := repoInfo(r)
+				info := repoInfo(p, r)
 				return nil, RepoToolOut{Repo: &info}, nil
 			}
 		}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -558,4 +559,24 @@ func (r Repo) ChangedPaths(sha string) ([]string, error) {
 		paths = append(paths, stripped)
 	}
 	return paths, nil
+}
+
+// HasCommit reports whether rev names a commit in the repository.
+func (r Repo) HasCommit(rev string) bool {
+	_, err := r.run("rev-parse", "--verify", "--quiet", rev+"^{commit}")
+	return err == nil
+}
+
+// Behind counts the commits HEAD has that rev does not. It is 0 when rev is HEAD or a
+// descendant of it, and an error when rev is not a commit here.
+func (r Repo) Behind(rev string) (int, error) {
+	out, err := r.run("rev-list", "--count", rev+"..HEAD")
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list: %q is not a count", strings.TrimSpace(out))
+	}
+	return n, nil
 }

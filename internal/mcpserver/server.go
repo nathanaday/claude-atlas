@@ -23,6 +23,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -390,10 +391,18 @@ type RepoInfo struct {
 	Policy  string `json:"policy"`
 	Branch  string `json:"branch,omitempty"`
 	Dirty   int    `json:"dirty"`
+	// ClaudeMD is the repository's CLAUDE.md, to read before changing files there; a
+	// session in the vault does not load it on its own unless the repository sits under
+	// the vault.
+	ClaudeMD string `json:"claude_md,omitempty"`
+	// Described is the page that describes the repository, in the project's wiki or a
+	// mounted knowledge base, with the commit it was written from and how far the
+	// repository has moved since. Absent when no page does.
+	Described *registry.RepoDescription `json:"described,omitempty"`
 }
 
-func repoInfo(r registry.Repo) RepoInfo {
-	info := RepoInfo{Name: r.Name, Path: r.Path, Remote: r.Remote, Changes: links.Policy(r.Changes, r.Remote)}
+func repoInfo(project *registry.Entry, r registry.Repo) RepoInfo {
+	info := RepoInfo{Name: r.Name, Path: r.Path, Remote: r.Remote, Changes: links.Policy(r.Changes, r.Remote), ClaudeMD: repomap.ClaudeMD(r)}
 	info.Policy = links.PolicyText(info.Changes)
 	if r.Path != "" {
 		if fact := links.Inspect(links.Repo, r.Path); fact.OK {
@@ -402,6 +411,9 @@ func repoInfo(r registry.Repo) RepoInfo {
 				info.Dirty = *fact.Dirty
 			}
 		}
+	}
+	if project != nil {
+		info.Described = repomap.Describe(*project, r)
 	}
 	return info
 }
@@ -477,7 +489,7 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 		}
 	}
 	if match, _, err := discover.Vault(s.home(), s.opts.ProjectDir); err == nil && match != nil && match.Project.Path == v.Root {
-		info := repoInfo(match.Repo)
+		info := repoInfo(&match.Project, match.Repo)
 		out.Repository = &info
 	}
 	if out.Versions.Plugin != "" && out.Versions.Binary != "dev" && out.Versions.Plugin != out.Versions.Binary {
@@ -878,13 +890,15 @@ func (s *Server) repos(ctx context.Context, req *mcp.CallToolRequest, a VaultArg
 	if err := requireProject(v, "repositories"); err != nil {
 		return nil, ReposOut{}, err
 	}
-	repos, err := discover.Repos(home.Resolve(s.opts.Env(home.EnvHome)), v.Root)
+	project, err := discover.Project(home.Resolve(s.opts.Env(home.EnvHome)), v.Root)
 	if err != nil {
 		return nil, ReposOut{}, err
 	}
 	out := ReposOut{Repos: []RepoInfo{}}
-	for _, r := range repos {
-		out.Repos = append(out.Repos, repoInfo(r))
+	if project != nil {
+		for _, r := range project.Repos {
+			out.Repos = append(out.Repos, repoInfo(project, r))
+		}
 	}
 	return nil, out, nil
 }
@@ -1156,7 +1170,7 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "tasks", Annotations: ro(),
 		Description: "List the vault's tasks from the task ledger: open ones by status, priority, and age, with each task's page, workdir, last touch, and history; counts; and the notes waiting in inbox/tasks/. Pass all to include finished tasks."}, s.tasks)
 	mcp.AddTool(server, &mcp.Tool{Name: "repos", Annotations: ro(),
-		Description: "List the repositories mounted on the vault's project: path, remote, branch, uncommitted changes, and how changes land there (pr: branch and pull request; commit: on the current branch). Read it before changing files in a repository."}, s.repos)
+		Description: "List the repositories mounted on the vault's project: path, remote, branch, uncommitted changes, how changes land there (pr: branch and pull request; commit: on the current branch), the page that describes it with the commit it was written from and how far the branch has moved since, and its CLAUDE.md. Read it before changing files in a repository, and read that CLAUDE.md first."}, s.repos)
 	mcp.AddTool(server, &mcp.Tool{Name: "mounts", Annotations: ro(),
 		Description: "List the knowledge bases the project mounts: id, name, the knowledge base's real wiki path, the mount folder, the requested and effective access, what the knowledge base is for, and its page count. Grep the real path; plan a page under a write mount like the project's own. A mount that names through came from a cluster: the project mounted that cluster, and every member is reached the same way. Read-only."}, s.mounts)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",

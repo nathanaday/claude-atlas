@@ -227,7 +227,7 @@ func TestRepoCommands(t *testing.T) {
 	if got := h.config(t).RepoPath(id, "docs"); got != docs {
 		t.Fatalf("the config should record a repository outside the project: %q", got)
 	}
-	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "docs") || !strings.Contains(h.out.String(), "changes: commit") {
+	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "docs") || !strings.Contains(h.out.String(), "changes: commit") || !strings.Contains(h.out.String(), registry.NotDescribed) {
 		t.Fatalf("repos exit %d:\n%s", code, h.out.String())
 	}
 	if code := h.run("link", "welcome", docs); code != 1 || !strings.Contains(h.err.String(), "already") {

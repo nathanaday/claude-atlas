@@ -15,6 +15,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side before v2 (superseded by `v2-design.md`) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
+| Working from a project: repository pages, the work skill (phase 1 built) | `docs/superpowers/specs/2026-09-17-working-from-a-project-design.md` |
 | The atlas tools and the `atlas` skills | `docs/superpowers/specs/2026-09-16-atlas-tools-design.md` |
 | Original brainstorm (not a contract) | `docs/spec.md` |
 | The skills' contracts | `skills/<name>/SKILL.md` and `skills/wiki/references/` |
@@ -104,11 +105,12 @@ internal/gitx/          the git commands the core needs
 internal/txn/           plans, preview, apply, recovery, undo, history, planting a task
 internal/tasks/         task pages, the derived task ledger and index; never decides to write
 internal/discover/      the project a folder belongs to, through the projects' repositories
+internal/repomap/       the page that describes a repository, the commit it was written from, and how far the repository moved since; reads only
 internal/capture/       inbox listing and capture into .raw/captured/
 internal/ledger/        the source ledger
 internal/lint/          the health check (ported from claude-obsidian's engine)
 internal/mcpserver/     the tools, thin over the packages above
-internal/hooks/         session-start (the kind line for a vault or a project's repository, the Knowledge: mount lines, the search sentence, the stubs and wanted counts, open tasks, hot cache), guard, stop
+internal/hooks/         session-start (the kind line for a vault or a project's repository, the Knowledge: mount lines, the Repository: lines, the search sentence, the stubs and wanted counts, open tasks, hot cache), guard, stop
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
 internal/registry/      the scan for identity files, the resolved entries, the registry state file
 internal/refresh/       derive one vault's state, rewrite the registry, list a vault's signals

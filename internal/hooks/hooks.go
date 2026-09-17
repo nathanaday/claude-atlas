@@ -16,6 +16,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -138,6 +139,7 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 	}
 	if v.Config.Kind == vault.Project {
 		b.WriteString(mountLines(ix, entry, now))
+		b.WriteString(repositoryLines(entry, v.Root))
 		b.WriteString(SearchSentence + "\n")
 		b.WriteString(countsLine(v, projectMounts(entry), now))
 	}
@@ -224,6 +226,46 @@ func mountLines(ix *registry.Index, entry *registry.Entry, now time.Time) string
 		b.WriteString(line + "\n")
 	}
 	return b.String()
+}
+
+// repositoryLines names each of the project's repositories: how changes land, where it
+// is, its branch, the page that describes it and how current that page is, and its
+// CLAUDE.md, which a session in the vault does not load on its own when the repository
+// sits elsewhere on disk.
+func repositoryLines(entry *registry.Entry, root string) string {
+	if entry == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range entry.Repos {
+		if r.Error != "" || r.Path == "" {
+			fmt.Fprintf(&b, "Repository: %s · %s\n", r.Name, r.Error)
+			continue
+		}
+		where := placeOf(root, r.Path)
+		if fact := links.Inspect(links.Repo, r.Path); fact.OK && fact.Branch != "" {
+			where += " (" + fact.Branch + ")"
+		}
+		parts := []string{fmt.Sprintf("Repository: %s · changes: %s · %s", r.Name, links.Policy(r.Changes, r.Remote), where)}
+		if d := repomap.Describe(*entry, r); d != nil {
+			parts = append(parts, d.Summary())
+		} else {
+			parts = append(parts, registry.NotDescribed)
+		}
+		if p := repomap.ClaudeMD(r); p != "" {
+			parts = append(parts, "CLAUDE.md: "+placeOf(root, p))
+		}
+		b.WriteString(strings.Join(parts, " · ") + "\n")
+	}
+	return b.String()
+}
+
+// placeOf shows p relative to the vault when it sits inside it, else under ~.
+func placeOf(root, p string) string {
+	if rel, err := filepath.Rel(root, p); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+		return rel
+	}
+	return home.Display(p)
 }
 
 // projectMounts maps a project's resolved mounts, name to the mounted knowledge base's

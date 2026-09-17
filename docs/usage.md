@@ -471,6 +471,26 @@ claude-atlas edit-repo sensor-triage sensor-app --remote https://github.com/you/
 claude-atlas edit-repo sensor-triage sensor-app --path ~/code/sensor-app
 ```
 
+**What a session is told.** A session that starts in the project's vault gets
+one line per repository from the session-start hook, and the `repos` tool and
+`claude-atlas repos` say the same:
+
+```text
+Repository: sensor-app · changes: pr · repos/sensor-app (main) · described in sensors (wiki/entities/sensor-app.md) at fc70d93, 12 commits behind · CLAUDE.md: repos/sensor-app/CLAUDE.md
+Repository: paper · changes: commit · ~/code/paper (main) · not described in the wiki or a knowledge base
+```
+
+The page that describes a repository is an entity page with
+`entity_type: repository` whose `repo` property is the repository's remote or
+its name, in the project's wiki or in a knowledge base the project mounts;
+its `commit` property is the commit it was written from, and the count is how
+far the current branch has moved since. A page in a knowledge base wins over
+one in the project, and the nearest to HEAD wins among several. The CLAUDE.md
+is named because Claude Code loads it on its own only for a repository under
+the vault; a session working in a repository elsewhere reads it first. The
+repositories screen in `view` shows the same page and count as the last
+refresh found them.
+
 A repository created in the project's folder gets its own git history, and the
 vault's `.gitignore` names it, so the vault's commits never include it;
 Obsidian still shows it. A plain folder is refused until you agree to

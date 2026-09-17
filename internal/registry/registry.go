@@ -124,7 +124,68 @@ type State struct {
 	Tasks           *TaskSummary `json:"tasks,omitempty"`
 	// RepoFacts pairs each repository name with what git says about it.
 	RepoFacts map[string]links.Link `json:"repo_facts,omitempty"`
+	// RepoDescriptions pairs each repository name with the page that describes it, when
+	// the project's wiki or a mounted knowledge base holds one.
+	RepoDescriptions map[string]RepoDescription `json:"repo_descriptions,omitempty"`
 }
+
+// RepoDescription is the page that describes a repository: an entity page with
+// `entity_type: repository` whose `repo` property names the repository's remote or its
+// name, and the commit it was written from. The atlas derives it and never writes it.
+type RepoDescription struct {
+	Page   string `json:"page"` // vault-relative path of the page
+	In     string `json:"in"`   // the vault that holds it: the project's name, or the mount's name
+	Commit string `json:"commit,omitempty"`
+	// Behind counts the commits on the repository's current branch since Commit; -1 when
+	// Commit is empty or not in the repository's history.
+	Behind int `json:"behind"`
+}
+
+// Summary says where the page is and how current it is, for the hook, the CLI, and
+// the view: "described in tools at fc70d93, 12 commits behind".
+func (d RepoDescription) Summary() string {
+	commit := d.Commit
+	if len(commit) > 7 {
+		commit = commit[:7]
+	}
+	where := fmt.Sprintf("described in %s (%s)", d.In, d.Page)
+	switch {
+	case commit == "":
+		return where + ", no commit recorded"
+	case d.Behind < 0:
+		return fmt.Sprintf("%s at %s, not in the repository's history", where, commit)
+	case d.Behind == 0:
+		return fmt.Sprintf("%s at %s, current", where, commit)
+	case d.Behind == 1:
+		return fmt.Sprintf("%s at %s, 1 commit behind", where, commit)
+	}
+	return fmt.Sprintf("%s at %s, %d commits behind", where, commit, d.Behind)
+}
+
+// Short is Summary for a narrow box: "tools: wiki/entities/code.md · fc70d93 · 12 commits behind".
+func (d RepoDescription) Short() string {
+	commit := d.Commit
+	if len(commit) > 7 {
+		commit = commit[:7]
+	}
+	parts := []string{d.In + ": " + d.Page}
+	switch {
+	case commit == "":
+		parts = append(parts, "no commit recorded")
+	case d.Behind < 0:
+		parts = append(parts, commit, "not in the history")
+	case d.Behind == 0:
+		parts = append(parts, commit, "current")
+	case d.Behind == 1:
+		parts = append(parts, commit, "1 commit behind")
+	default:
+		parts = append(parts, commit, fmt.Sprintf("%d commits behind", d.Behind))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// NotDescribed is what every surface says for a repository no page describes.
+const NotDescribed = "not described in the wiki or a knowledge base"
 
 // Unfinished counts work the vault still owes. nil means unknown.
 type Unfinished struct {

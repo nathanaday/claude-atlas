@@ -28,6 +28,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/obsidian"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/tui"
 	"github.com/nathanaday/claude-atlas/internal/txn"
@@ -1295,6 +1296,13 @@ func repoLine(e registry.Entry, r registry.Repo) string {
 	}
 	if e.Host != "" && r.Path == e.Host {
 		line += "  (this project lives in it)"
+	}
+	if r.Path != "" {
+		if d := repomap.Describe(e, r); d != nil {
+			line += " · " + d.Summary()
+		} else {
+			line += " · " + registry.NotDescribed
+		}
 	}
 	return line
 }

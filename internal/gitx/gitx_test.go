@@ -405,3 +405,31 @@ func TestNestedRepoIsNotARepo(t *testing.T) {
 		t.Fatal("a directory inside another repo is not its own repo")
 	}
 }
+
+func TestHasCommitAndBehind(t *testing.T) {
+	r := repo(t)
+	write(t, r, "a.md", "one")
+	r.AddAll()
+	first, err := r.Commit("one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, r, "a.md", "two")
+	r.AddAll()
+	r.Commit("two")
+	write(t, r, "a.md", "three")
+	r.AddAll()
+	head, _ := r.Commit("three")
+	if !r.HasCommit(first) || !r.HasCommit(first[:7]) || r.HasCommit("0000000") {
+		t.Fatal("HasCommit")
+	}
+	if n, err := r.Behind(first); err != nil || n != 2 {
+		t.Fatalf("behind first: %d %v", n, err)
+	}
+	if n, err := r.Behind(head); err != nil || n != 0 {
+		t.Fatalf("behind head: %d %v", n, err)
+	}
+	if _, err := r.Behind("0000000"); err == nil {
+		t.Fatal("an unknown commit is an error")
+	}
+}

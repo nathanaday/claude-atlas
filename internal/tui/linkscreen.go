@@ -43,9 +43,10 @@ const listChanged = "the list changed; try again"
 // linkRow is one box: the repository as the identity file holds it, and what the last
 // refresh found in its folder.
 type linkRow struct {
-	repo   registry.Repo
-	facts  string
-	broken bool
+	repo      registry.Repo
+	facts     string
+	broken    bool
+	described string // the page that describes it, as the last refresh found it
 }
 
 type linksScreen struct {
@@ -101,6 +102,10 @@ func (s *linksScreen) build() {
 		if s.entry.State != nil {
 			if fact, ok := s.entry.State.RepoFacts[r.Name]; ok {
 				row.facts, row.broken = refresh.LinkSummary(fact), !fact.OK
+				row.described = registry.NotDescribed
+			}
+			if d, ok := s.entry.State.RepoDescriptions[r.Name]; ok {
+				row.described = d.Short()
 			}
 		}
 		s.rows = append(s.rows, row)
@@ -476,6 +481,9 @@ func (s linksScreen) view() string {
 			facts = errSt.Render(row.facts)
 		}
 		lines = append(lines, facts)
+		if row.described != "" {
+			lines = append(lines, dim.Render(row.described))
+		}
 		rendered := strings.Split(indent(style.Width(width).Render(strings.Join(lines, "\n")), "  "), "\n")
 		b.WriteString(strings.Join(focus(rendered, selected), "\n") + "\n")
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -49,6 +50,14 @@ func Derive(e registry.Entry, today time.Time, generatedAt string, newDays int) 
 		}
 	}
 	state.RepoFacts = repoFacts
+	for _, r := range e.Repos {
+		if d := repomap.Describe(e, r); d != nil {
+			if state.RepoDescriptions == nil {
+				state.RepoDescriptions = map[string]registry.RepoDescription{}
+			}
+			state.RepoDescriptions[r.Name] = *d
+		}
+	}
 
 	var daysOld *int
 	if created, ok := parseDate(e.Created); ok {

@@ -451,6 +451,19 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	if len(repos.Repos) != 1 || repos.Repos[0].Path != v.Path("repos/code") || repos.Repos[0].Changes != "pr" || !strings.Contains(repos.Repos[0].Policy, "pull request") {
 		t.Fatalf("repos %+v", repos)
 	}
+	if repos.Repos[0].ClaudeMD != "" || repos.Repos[0].Described != nil {
+		t.Fatalf("nothing describes the repository yet: %+v", repos.Repos[0])
+	}
+	// A page describing the repository, and a CLAUDE.md, are reported with the rest.
+	head, _ := (gitx.Repo{Dir: v.Path("repos/code")}).Head()
+	os.WriteFile(v.Path("repos/code/CLAUDE.md"), []byte("# code\n"), 0o644)
+	os.MkdirAll(v.Path("wiki/entities"), 0o755)
+	os.WriteFile(v.Path("wiki/entities/code.md"), []byte("---\ntitle: code\ntype: entity\nentity_type: repository\nrepo: git@example.com:a/code.git\ncommit: "+head+"\nstatus: developing\ncreated: 2026-09-17\nupdated: 2026-09-17\ntags:\n  - entity\n---\n\n# code\n"), 0o644)
+	c.call("repos", nil, &repos)
+	d := repos.Repos[0].Described
+	if repos.Repos[0].ClaudeMD != v.Path("repos/code/CLAUDE.md") || d == nil || d.Page != "wiki/entities/code.md" || d.In != v.Name() || d.Commit != head || d.Behind != 0 {
+		t.Fatalf("described: %+v %+v", repos.Repos[0], d)
+	}
 }
 
 func TestStubTool(t *testing.T) {

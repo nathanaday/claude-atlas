@@ -89,6 +89,39 @@ func TestPlainTextStripsWikilinks(t *testing.T) {
 	}
 }
 
+func TestDeriveFindsThePageThatDescribesARepository(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := fakeVault(t, "## 2026-08-01 — old\n", "", nil)
+	code := filepath.Join(t.TempDir(), "code")
+	os.MkdirAll(code, 0o755)
+	r := gitx.Repo{Dir: code}
+	if err := r.Init(); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(code, "a.txt"), []byte("a"), 0o644)
+	r.AddAll()
+	head, err := r.Commit("one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := registry.Entry{Kind: vault.Project, Name: "p", Path: root, Repos: []registry.Repo{{Name: "code", Path: code}}}
+	if state := Derive(e, time.Now(), "t", 7); state.RepoDescriptions != nil {
+		t.Fatalf("no page yet: %+v", state.RepoDescriptions)
+	}
+	os.MkdirAll(filepath.Join(root, "wiki/entities"), 0o755)
+	os.WriteFile(filepath.Join(root, "wiki/entities/code.md"), []byte("---\ntitle: code\ntype: entity\nentity_type: repository\nrepo: code\ncommit: "+head+"\n---\n"), 0o644)
+	os.WriteFile(filepath.Join(code, "a.txt"), []byte("b"), 0o644)
+	r.AddAll()
+	r.Commit("two")
+	state := Derive(e, time.Now(), "t", 7)
+	d, ok := state.RepoDescriptions["code"]
+	if !ok || d.Page != "wiki/entities/code.md" || d.In != "p" || d.Behind != 1 || d.Summary() != "described in p (wiki/entities/code.md) at "+head[:7]+", 1 commit behind" {
+		t.Fatalf("got %+v", d)
+	}
+}
+
 func TestDeriveTakesLaterOfLogAndMtime(t *testing.T) {
 	root := fakeVault(t, "## 2026-08-01 — old\n", "", nil)
 	e := registry.Entry{Kind: vault.Project, Path: root}

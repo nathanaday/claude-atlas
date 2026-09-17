@@ -180,6 +180,26 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 			t.Errorf("missing %q in repo session:\n%s", want, text)
 		}
 	}
+	// A session in the vault is told about the repository: policy, place, branch, whether
+	// a page describes it, and its CLAUDE.md, which Claude Code does not load from there.
+	out.Reset()
+	SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, e, false, now)
+	text = out.String()
+	if want := "Repository: code · changes: commit · " + home.Display(outside) + " (main) · " + registry.NotDescribed + "\n"; !strings.Contains(text, want) {
+		t.Fatalf("missing %q in:\n%s", want, text)
+	}
+	head, _ := (gitx.Repo{Dir: outside}).Head()
+	os.WriteFile(filepath.Join(outside, "CLAUDE.md"), []byte("# code\n"), 0o644)
+	os.MkdirAll(v.Path("wiki/entities"), 0o755)
+	os.WriteFile(v.Path("wiki/entities/code.md"), []byte("---\ntitle: code\ntype: entity\nentity_type: repository\nrepo: code\ncommit: "+head+"\nstatus: developing\ncreated: 2026-09-17\nupdated: 2026-09-17\ntags:\n  - entity\n---\n\n# code\n"), 0o644)
+	out.Reset()
+	SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, e, false, now)
+	text = out.String()
+	for _, want := range []string{"described in " + v.Name() + " (wiki/entities/code.md) at " + head[:7] + ", current", "CLAUDE.md: " + home.Display(filepath.Join(outside, "CLAUDE.md"))} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
 	// With a remote and no policy recorded, the session is told to open pull requests.
 	if err := vault.UpdateConfig(v.Root, "remote", now, func(c *vault.Config) error {
 		c.Repos[0].Remote = "git@example.com:a/code.git"
