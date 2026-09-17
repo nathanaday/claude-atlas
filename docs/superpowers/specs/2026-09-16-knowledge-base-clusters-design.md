@@ -58,14 +58,21 @@ members is what exists today. Nothing else distinguishes the two.
 
 ### What the engine refuses
 
-`vault.UpdateConfig` validates the whole identity file, so these are refused
-before anything is written:
+`vault.UpdateConfig` sees one identity file, so it refuses what that file can
+answer on its own, before anything is written:
+
+- `members` on a project;
+- a member listed twice;
+- a cluster as its own member;
+- a member with no id.
+
+Whether a member is a knowledge base, and whether it is itself a cluster, are
+facts about another vault. `vaults.AddMember` holds the scan, so it refuses
+those:
 
 - a member that is not a knowledge base;
 - a member that is itself a cluster, so a cluster never nests;
-- a cluster as its own member;
-- a member listed twice;
-- `members` on a project.
+- a member the scan does not hold at all.
 
 A member the scan cannot find is not refused. It is recorded and reported, in
 the same way a mount whose knowledge base is gone is reported. A member that
