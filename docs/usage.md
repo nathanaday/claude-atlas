@@ -22,7 +22,7 @@ one command, so scripts and muscle memory both work:
 | `e` edit a vault, `s` save | `edit NAME --…` |
 | `e` then `r` forget | `remove NAME` |
 | `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
-| `M` members, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB` |
+| `M` members, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` |
 | `R` refresh | `refresh` |
 | `←` `→` switch tabs; `h` shows every key | — |
 | — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
@@ -508,6 +508,10 @@ prefix. A member is not unmounted on its own; unmount the cluster.
 
 A cluster does not hold another cluster yet. The cluster's own wiki is an
 ordinary one: it is where a note about which member covers what belongs.
+
+`doctor` reports a member the scan cannot find and a member that is not a
+knowledge base. When a member's name no longer resolves, `cluster remove
+NAME KB` cannot find it; `cluster remove NAME ID` drops it by its id instead.
 
 A knowledge base sets `access`, `open` or `guarded`, at `new-knowledge` or
 with `edit --access`. `open` lets every project that mounts it write; a

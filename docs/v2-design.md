@@ -197,7 +197,8 @@ as if the project had mounted it directly. Joining a cluster changes nothing
 about what a knowledge base grants.
 
 A member is not unmounted on its own; `unmount PROJECT MEMBER` is refused and
-names the cluster. A cluster does not hold another cluster.
+names the cluster. A cluster does not hold another cluster. `doctor` reports
+a member the scan cannot find and a member that is not a knowledge base.
 
 Full design in
 [docs/superpowers/specs/2026-09-16-knowledge-base-clusters-design.md](superpowers/specs/2026-09-16-knowledge-base-clusters-design.md).
