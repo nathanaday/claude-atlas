@@ -510,8 +510,9 @@ A cluster does not hold another cluster yet. The cluster's own wiki is an
 ordinary one: it is where a note about which member covers what belongs.
 
 `doctor` reports a member the scan cannot find and a member that is not a
-knowledge base. When a member's name no longer resolves, `cluster remove
-NAME KB` cannot find it; `cluster remove NAME ID` drops it by its id instead.
+knowledge base. `cluster remove NAME KB|ID` drops such a member by the name
+the cluster recorded or by its id, without the knowledge base itself needing
+to be reachable.
 
 A knowledge base sets `access`, `open` or `guarded`, at `new-knowledge` or
 with `edit --access`. `open` lets every project that mounts it write; a
