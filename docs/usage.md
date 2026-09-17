@@ -26,6 +26,7 @@ memory, and the `atlas` skills all work:
 | `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` | `mount` |
 | `C` new cluster; `M` or `e` then Enter on `Members`, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` | `vault` create with `members`; `cluster` |
 | `R` refresh | `refresh` | `atlas` with `refresh` |
+| — | `relocate PATH` | — |
 | — | `config KEY VALUE` | `settings` |
 | `←` `→` switch tabs; `h` shows every key | — | — |
 | — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` | `stub` |
@@ -401,6 +402,36 @@ refresh.
 claude-atlas refresh
 ```
 
+### Move the vaults somewhere else
+
+`relocate` moves the whole vaults directory and makes everything that points
+at it follow.
+
+```bash
+claude-atlas relocate ~/Vaults
+```
+
+It shows what moves, what `config.json` will say afterwards, and what holds
+the old path that the atlas will not change; then it asks. On the same volume
+the move is a rename. On another volume it copies, checks every file and
+symlink arrived, saves the config, and only then removes the old folder, so
+the vaults are never in one place only. Afterwards it refreshes, which
+rewrites the registry and recreates each project's `kb/` symlinks at the new
+root.
+
+Nothing inside a vault changes: an identity file holds no path, and no page
+cites one. What changes is `vaults_dir`, plus any `vaults` or `repos` entry
+that sat under the old root.
+
+It refuses a target inside the vaults directory or holding it, a target inside
+another vault, a folder that already holds files, and a move while a vault has
+an interrupted operation to recover. Three kinds of state it reports rather
+than repairs: Obsidian's vault list, which drops a missing entry at its next
+launch and which `open-vault` fills again; Claude Code's per-project session
+history, permissions, and memory, which it keys by absolute path; and build
+state inside your repositories that holds the old path, such as a Python
+virtual environment, a CMake cache, or installed packages.
+
 `list` prints every vault: kind, heat, name, and path. `show` prints
 everything the atlas holds about one, with the signals that need attention.
 
@@ -730,7 +761,7 @@ and `claude-atlas config repo-changes pr` set one and refresh.
 
 | Setting | Effect |
 |---|---|
-| `vaults_dir` | the folder the scan walks, and where a new vault goes under `projects/` or `knowledge/` |
+| `vaults_dir` | the folder the scan walks, and where a new vault goes under `projects/` or `knowledge/`. `claude-atlas relocate PATH` moves the vaults and changes it; `config` only prints it |
 | `vaults` | vault folders outside `vaults_dir`; the scan cannot find them, so they are listed. `new-project`, `adopt`, `remove`, and a rename that moves a folder keep this list |
 | `repos` | the path of a repository outside its project's `repos/` folder, keyed by the project's id and the repository's name |
 | `claude_code.prompt` | a first message sent on every `open-claude`, for example `/claude-atlas:wiki` |

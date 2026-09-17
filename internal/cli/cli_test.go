@@ -1174,3 +1174,82 @@ func TestConfigRepoChanges(t *testing.T) {
 		t.Fatalf("only commit and pr are policies, exit %d", code)
 	}
 }
+
+func TestRelocateMovesTheTreeAndEveryDerivedPathFollows(t *testing.T) {
+	h, oldDir := setup(t)
+	if code := h.run("new-knowledge", "ai-ml"); code != 0 {
+		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
+	}
+	if code := h.run("mount", "welcome", "ai-ml"); code != 0 {
+		t.Fatalf("mount exit %d %s", code, h.err.String())
+	}
+	newDir := filepath.Join(t.TempDir(), "Vaults")
+
+	if code := h.run("relocate", newDir); code != 0 {
+		t.Fatalf("relocate exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	out := h.out.String()
+	if !strings.Contains(out, "2 vaults") || !strings.Contains(out, "vaults dir") {
+		t.Fatalf("the preview names what moves:\n%s", out)
+	}
+
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Fatalf("the old tree should be gone: %v", err)
+	}
+	if h.config(t).VaultsDir != newDir {
+		t.Fatalf("the config should point at %q, got %q", newDir, h.config(t).VaultsDir)
+	}
+	// The mount symlink is local state the refresh recreates at the new root.
+	link := filepath.Join(project(newDir, "welcome"), "kb", "ai-ml")
+	wiki := filepath.Join(newDir, "knowledge", "ai-ml", "wiki")
+	if got, err := os.Readlink(link); err != nil || got != wiki {
+		t.Fatalf("symlink %q %v, want %q", got, err, wiki)
+	}
+	// The registry the refresh wrote holds no path under the old root.
+	reg, err := os.ReadFile(registry.File(filepath.Join(h.home, "state")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(reg), oldDir) {
+		t.Fatalf("the registry still names the old root:\n%s", reg)
+	}
+	// Both vaults open at the new root with their git history whole.
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), newDir) {
+		t.Fatalf("list exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("lint", "welcome"); code != 0 {
+		t.Fatalf("the moved project should lint clean: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("history", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "setup") {
+		t.Fatalf("the moved vault keeps its history: exit %d\n%s", code, h.out.String())
+	}
+}
+
+func TestRelocateRefusesABadTargetAndChangesNothing(t *testing.T) {
+	h, oldDir := setup(t)
+	full := filepath.Join(t.TempDir(), "full")
+	if err := os.MkdirAll(full, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(full, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, target, want string }{
+		{"inside", filepath.Join(oldDir, "inner"), "inside the vaults directory"},
+		{"above", filepath.Dir(oldDir), "holds the vaults directory"},
+		{"not empty", full, "not empty"},
+	} {
+		if code := h.run("relocate", tc.target); code != 1 || !strings.Contains(h.err.String(), tc.want) {
+			t.Fatalf("%s: exit %d, want the error to say %q, got %q", tc.name, code, tc.want, h.err.String())
+		}
+	}
+	if h.config(t).VaultsDir != oldDir {
+		t.Fatalf("a refused move leaves the config alone, got %q", h.config(t).VaultsDir)
+	}
+	if _, err := os.Stat(project(oldDir, "welcome")); err != nil {
+		t.Fatalf("a refused move leaves the vaults alone: %v", err)
+	}
+	if code := h.run("relocate"); code != 2 {
+		t.Fatalf("relocate with no path is a usage error, got exit %d", code)
+	}
+}

@@ -93,3 +93,17 @@ func (c *Console) Ask(prompt, def string) string {
 	}
 	return def
 }
+
+// Size renders a byte count for a person: 1.4 GB, 812.0 MB, 96 B.
+func Size(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit && exp < 3; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGT"[exp])
+}

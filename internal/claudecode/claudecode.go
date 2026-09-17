@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -135,4 +136,45 @@ func InstallPlugin(marketplace, pluginID string) ([]string, error) {
 		}
 	}
 	return ran, nil
+}
+
+// ConfigFile is Claude Code's main config, where it keys per-project state (session
+// history, allowed tools, MCP servers) by the project's absolute path.
+func ConfigFile() string {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return filepath.Join(dir, ".claude.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".claude.json"
+	}
+	return filepath.Join(home, ".claude.json")
+}
+
+// ProjectsUnder lists the project paths Claude Code records at or below root, sorted.
+// Moving such a folder orphans what Claude Code keeps for it; nothing here rewrites
+// another program's state, so callers report the paths.
+func ProjectsUnder(root string) []string {
+	data, err := os.ReadFile(ConfigFile())
+	if err != nil {
+		return nil
+	}
+	var file struct {
+		Projects map[string]json.RawMessage `json:"projects"`
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil
+	}
+	root = filepath.Clean(root)
+	var out []string
+	for path := range file.Projects {
+		clean := filepath.Clean(path)
+		rel, err := filepath.Rel(root, clean)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		out = append(out, clean)
+	}
+	sort.Strings(out)
+	return out
 }
