@@ -484,6 +484,155 @@ func TestDoctorAndRevokeSeeAStaleGrant(t *testing.T) {
 	}
 }
 
+func TestClusterCommands(t *testing.T) {
+	h, vaults := setup(t)
+	welcome := project(vaults, "welcome")
+	if code := h.run("new-cluster", "p3"); code != 0 {
+		t.Fatalf("new-cluster exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	p3, err := vault.Open(filepath.Join(vaults, "knowledge", "p3"))
+	if err != nil || p3.Config.Kind != vault.Knowledge || len(p3.Config.Members) != 0 {
+		t.Fatalf("new-cluster makes a knowledge base: %+v %v", p3, err)
+	}
+	if code := h.run("new-knowledge", "software"); code != 0 {
+		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
+	}
+
+	// With no members it is an ordinary knowledge base, and says how to change that.
+	if code := h.run("cluster", "p3"); code != 0 || !strings.Contains(h.out.String(), "p3 holds no members") {
+		t.Fatalf("cluster with no members: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("cluster", "welcome"); code != 1 || !strings.Contains(h.err.String(), "is a project") {
+		t.Fatalf("cluster on a project: exit %d %s", code, h.err.String())
+	}
+	if code := h.run("cluster", "add", "p3", "welcome"); code != 1 || !strings.Contains(h.err.String(), "not a knowledge base") {
+		t.Fatalf("a project as a member: exit %d %s", code, h.err.String())
+	}
+
+	if code := h.run("cluster", "add", "p3", "software"); code != 0 || !strings.Contains(h.out.String(), "added") {
+		t.Fatalf("cluster add exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("cluster", "p3"); code != 0 || !strings.Contains(h.out.String(), "software") {
+		t.Fatalf("cluster lists its members: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "cluster") {
+		t.Fatalf("list should call it a cluster: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("show", "p3"); code != 0 || !strings.Contains(h.out.String(), "Member") || !strings.Contains(h.out.String(), "software") {
+		t.Fatalf("show a cluster: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("show", "software"); code != 0 || !strings.Contains(h.out.String(), "Cluster") || !strings.Contains(h.out.String(), "p3") {
+		t.Fatalf("show a member: exit %d\n%s", code, h.out.String())
+	}
+
+	// Mounting the cluster reaches every member: one symlink each.
+	if code := h.run("mount", "welcome", "p3"); code != 0 {
+		t.Fatalf("mount exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	for _, name := range []string{"p3", "software"} {
+		want := filepath.Join(vaults, "knowledge", name, "wiki")
+		if got, err := os.Readlink(filepath.Join(welcome, "kb", name)); err != nil || got != want {
+			t.Fatalf("kb/%s: %q %v, want %q", name, got, err, want)
+		}
+	}
+	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "software"), "through p3") {
+		t.Fatalf("show should say where the mount comes from: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("unmount", "welcome", "software"); code != 1 || !strings.Contains(h.err.String(), "through cluster p3") {
+		t.Fatalf("unmount a member: exit %d %s", code, h.err.String())
+	}
+
+	// A hand-edited identity file that names a project as a member: doctor says what it
+	// is, and `cluster remove` drops it.
+	welcomeID := ""
+	if v, err := vault.Open(welcome); err == nil {
+		welcomeID = v.Config.ID
+	}
+	err = vault.UpdateConfig(filepath.Join(vaults, "knowledge", "p3"), "member welcome", time.Now(), func(c *vault.Config) error {
+		c.Members = append(c.Members, vault.Member{ID: welcomeID, Name: "welcome"})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "welcome is a project, not a knowledge base") || !strings.Contains(h.out.String(), "cluster remove p3 "+welcomeID) {
+		t.Fatalf("doctor should name the member that is no knowledge base: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("cluster", "remove", "p3", welcomeID); code != 0 {
+		t.Fatalf("cluster remove a project: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+
+	// A member the scan lost: doctor names it and names the command that drops it.
+	err = vault.UpdateConfig(filepath.Join(vaults, "knowledge", "p3"), "member gone", time.Now(), func(c *vault.Config) error {
+		c.Members = append(c.Members, vault.Member{ID: "gone-0000", Name: "gone"})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "no knowledge base with id gone-0000") || !strings.Contains(h.out.String(), "cluster remove p3 gone-0000") {
+		t.Fatalf("doctor should name the lost member: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("cluster", "remove", "p3", "gone-0000"); code != 0 || !strings.Contains(h.out.String(), "dropped") {
+		t.Fatalf("cluster remove by id: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	h.run("doctor")
+	if strings.Contains(h.out.String(), "gone-0000") {
+		t.Fatalf("doctor should not still see the dropped member:\n%s", h.out.String())
+	}
+
+	// Dropping the last member makes it an ordinary knowledge base, and the project loses
+	// the symlink the cluster gave it.
+	if code := h.run("cluster", "remove", "p3", "software"); code != 0 || !strings.Contains(h.out.String(), "dropped") {
+		t.Fatalf("cluster remove exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Lstat(filepath.Join(welcome, "kb", "software")); err == nil {
+		t.Fatal("the member's symlink should be gone")
+	}
+	if _, err := os.Stat(filepath.Join(vaults, "knowledge", "software", "wiki")); err != nil {
+		t.Fatalf("the knowledge base itself is untouched: %v", err)
+	}
+	if code := h.run("cluster", "remove", "p3", "software"); code != 1 || !strings.Contains(h.err.String(), "no member") {
+		t.Fatalf("remove again: exit %d %s", code, h.err.String())
+	}
+	if code := h.run("cluster", "p3"); code != 0 || !strings.Contains(h.out.String(), "p3 holds no members") {
+		t.Fatalf("the last member gone: exit %d\n%s", code, h.out.String())
+	}
+}
+
+// A project may mount a member of a cluster it already mounts: the explicit mount wins.
+func TestMountAMemberOfACluster(t *testing.T) {
+	h, vaults := setup(t)
+	welcome := project(vaults, "welcome")
+	for _, name := range []string{"p3", "software"} {
+		if code := h.run("new-knowledge", name); code != 0 {
+			t.Fatalf("new-knowledge %s exit %d %s", name, code, h.err.String())
+		}
+	}
+	if code := h.run("cluster", "add", "p3", "software"); code != 0 {
+		t.Fatalf("cluster add exit %d %s", code, h.err.String())
+	}
+	if code := h.run("mount", "welcome", "p3"); code != 0 {
+		t.Fatalf("mount the cluster exit %d %s", code, h.err.String())
+	}
+	if code := h.run("mount", "welcome", "software", "--read"); code != 0 {
+		t.Fatalf("mount a member exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	v, err := vault.Open(welcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Mounts) != 2 {
+		t.Fatalf("the identity file should hold both mounts: %+v", v.Config.Mounts)
+	}
+	if code := h.run("show", "welcome"); code != 0 || strings.Contains(mountLineFor(h.out.String(), "software"), "through") {
+		t.Fatalf("the project's own mount wins: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("unmount", "welcome", "software"); code != 0 {
+		t.Fatalf("unmount the project's own mount: exit %d %s", code, h.err.String())
+	}
+}
+
 // mountLineFor is the line `show` printed for one mount.
 func mountLineFor(out, name string) string {
 	for _, line := range strings.Split(out, "\n") {

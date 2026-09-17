@@ -65,9 +65,13 @@ func symlinkTo(path, target string) error {
 }
 
 // checkMountTarget refuses a knowledge base already mounted, or a name project already
-// uses for a mount.
+// uses for a mount. A mount a cluster derives stands aside: the project asked for this
+// knowledge base by name, so its own mount wins and the derived one drops.
 func checkMountTarget(project, kb registry.Entry, name string) error {
 	for _, m := range project.Mounts {
+		if m.Through != "" {
+			continue
+		}
 		if m.ID == kb.ID {
 			return fmt.Errorf("%s already mounts %s", project.Name, kb.Name)
 		}
@@ -149,6 +153,9 @@ func Unmount(project registry.Entry, target string, now time.Time) error {
 	found := FindMount(project, target)
 	if found == nil {
 		return fmt.Errorf("%s has no mount named %q", project.Name, target)
+	}
+	if found.Through != "" {
+		return fmt.Errorf("%s comes through cluster %s; unmount %s instead", found.Name, found.Through, found.Through)
 	}
 	path := project.KbDir(found.Name)
 	info, lerr := os.Lstat(path)

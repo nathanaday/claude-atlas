@@ -62,7 +62,8 @@ and apply [provenance.md](../wiki/references/provenance.md):
 - Cite each material claim with the most specific wikilink and name the vault
   it came from. A page in the project's own `wiki/`: `[[Page#Heading]]`. A
   page in a mount: `[[kb/<name>/<folder>/Page#Heading]]`, naming the mount.
-  Add the source page or locator when present.
+  A mount reached `through` a cluster still cites the member's own name, not
+  the cluster's. Add the source page or locator when present.
 - Distinguish vault evidence from your inference in words.
 - If the vault cannot answer, name the missing evidence and stop. Suggest
   `wiki-ingest` for new material.

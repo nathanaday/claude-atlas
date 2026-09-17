@@ -418,6 +418,75 @@ func TestSessionStartListsMountsAndMountedBy(t *testing.T) {
 	}
 }
 
+// A project that mounts a cluster gets a Knowledge: line per member, each naming the
+// cluster it came through.
+func TestSessionStartListsAClustersMembers(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	now := time.Now()
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := h.Default(filepath.Join(root, "Vaults"))
+	if err := os.MkdirAll(h.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	projectRoot := vaults.PathFor(cfg.VaultsDir, vault.Project, "cs566")
+	if _, err := vault.Init(projectRoot, vault.Options{Kind: vault.Project, Name: "cs566"}, now); err != nil {
+		t.Fatal(err)
+	}
+	clusterRoot := vaults.PathFor(cfg.VaultsDir, vault.Knowledge, "papers")
+	if _, err := vault.Init(clusterRoot, vault.Options{Kind: vault.Knowledge, Name: "papers"}, now); err != nil {
+		t.Fatal(err)
+	}
+	memberRoot := vaults.PathFor(cfg.VaultsDir, vault.Knowledge, "ai-ml")
+	if _, err := vault.Init(memberRoot, vault.Options{Kind: vault.Knowledge, Name: "ai-ml"}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := ix.ByPath(clusterRoot)
+	member := ix.ByPath(memberRoot)
+	if cluster == nil || member == nil {
+		t.Fatal("fixture not scanned")
+	}
+	if err := vaults.AddMember(*cluster, *member, now); err != nil {
+		t.Fatal(err)
+	}
+
+	ix, err = registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := ix.ByPath(projectRoot)
+	cluster = ix.ByPath(clusterRoot)
+	if project == nil || cluster == nil {
+		t.Fatal("fixture not scanned")
+	}
+	if _, err := vaults.Mount(*project, *cluster, vault.AccessWrite, "", now); err != nil {
+		t.Fatal(err)
+	}
+
+	e := env(t, map[string]string{home.EnvHome: h.Root})
+	var out bytes.Buffer
+	if err := SessionStart(strings.NewReader(`{"cwd":"`+projectRoot+`"}`), &out, e, false, now); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "Knowledge: ai-ml (write, through papers)") {
+		t.Errorf("missing a member's line:\n%s", text)
+	}
+	if !strings.Contains(text, "Knowledge: papers (write)") {
+		t.Errorf("missing the cluster's own line:\n%s", text)
+	}
+}
+
 func TestSessionStartCountsStubsAndWantedPages(t *testing.T) {
 	v := newVault(t)
 	now := time.Now()

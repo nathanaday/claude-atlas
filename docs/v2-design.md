@@ -178,6 +178,34 @@ Obsidian. Confirm the link opens the page, the graph shows it, and a bare
 fails, the fallback is `obsidian://open` links that the atlas tools resolve.
 Not yet run.
 
+## Clusters
+
+A cluster is a knowledge base with a `members` list: other knowledge bases,
+by id. A project mounts the cluster and reaches every member; a member added
+later reaches every project that mounts the cluster, at the next refresh.
+Nothing else distinguishes a cluster from an ordinary knowledge base: any
+knowledge base becomes one by gaining a member, and stops being one by losing
+its last.
+
+The scan derives the reach. When a project's mount names a cluster,
+`registry.Scan` appends one mount per member after the cluster's own, marked
+`Through` the cluster's name. Every part of the atlas that walks a project's
+mounts sees the members without knowing clusters exist. An explicit mount for
+a knowledge base a cluster also reaches wins over the derived one; a derived
+mount whose name collides with an existing one takes the cluster's name as a
+prefix, and a second collision takes the member's id.
+
+Access follows the member: each one decides for itself, from its own grants,
+as if the project had mounted it directly. Joining a cluster changes nothing
+about what a knowledge base grants.
+
+A member is not unmounted on its own; `unmount PROJECT MEMBER` is refused and
+names the cluster. A cluster does not hold another cluster. `doctor` reports
+a member the scan cannot find and a member that is not a knowledge base.
+
+Full design in
+[docs/superpowers/specs/2026-09-16-knowledge-base-clusters-design.md](superpowers/specs/2026-09-16-knowledge-base-clusters-design.md).
+
 ## Access
 
 There is no authentication: one machine, one user. Access states intent, so a
@@ -570,6 +598,7 @@ check ran at the end of phase 6 against a project with a mount.
 | Migration | by hand; `adopt --as` writes the identity file and drops task scaffolding from a knowledge base |
 | A project inside a repository | opt-in, at `REPO/atlas/`, commits with a pathspec |
 | The view | tabs per kind with connectors; expansion in place; spec in docs/superpowers/specs/2026-09-16-tui-overhaul-design.md |
+| Many knowledge bases on one project | a cluster: a knowledge base with members; the project mounts the cluster |
 
 ## Left for later
 

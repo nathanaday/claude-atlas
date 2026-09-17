@@ -597,6 +597,12 @@ func (s mountsScreen) view() string {
 			if i == s.pick {
 				line = "  ▸ " + kindStyle(e.Kind).Render(e.Name)
 			}
+			// A cluster carries its member count, so mounting one is visibly more than
+			// mounting a single knowledge base.
+			if vaults.IsCluster(e) {
+				n := len(e.Members)
+				line += dim.Render(fmt.Sprintf("   %d member%s", n, plural(n)))
+			}
 			b.WriteString(line + "\n")
 		}
 		b.WriteString("  " + dim.Render("↑↓ move · Enter next · Esc cancel") + "\n")

@@ -49,6 +49,7 @@ Vaults:
   new-project NAME|PATH     create a project: tasks, questions, notes, repositories
                             --in REPO puts it inside a code repository, at REPO/atlas
   new-knowledge NAME|PATH   create a knowledge base: sources, entities, concepts
+  new-cluster NAME|PATH     create a knowledge base meant to gather others; add members with cluster add
   adopt [PATH]              make an existing Obsidian or claude-obsidian vault one of these
   open-vault [NAME|PATH]    open a vault in Obsidian; with no name, the one you are in
   open-claude NAME          start Claude Code inside a vault; --task ID continues a task in its workdir
@@ -67,6 +68,11 @@ Knowledge bases a project reaches (a mount is a folder kb/NAME inside the projec
   unmount PROJECT KB|NAME   drop that mount; the knowledge base stays
   grant KB PROJECT          let one project into a guarded knowledge base: --read or --write
   revoke KB PROJECT|ID      take that grant back, by project or by a stale grant's id
+
+Clusters (a knowledge base that gathers others; mounting it reaches every member):
+  cluster NAME              the cluster's members, one per line
+  cluster add NAME KB       add a knowledge base to the cluster
+  cluster remove NAME KB|ID drop that member; the knowledge base stays
 
 Repositories (a project's deliverables; memory stays in the vault):
   link NAME PATH|URL        link a repository to a project, or clone one from a URL; --init makes a plain folder one first
@@ -163,6 +169,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.newProject(rest[1:])
 	case "new-knowledge":
 		code, err = e.newKnowledge(rest[1:])
+	case "new-cluster":
+		code, err = e.newCluster(rest[1:])
+	case "cluster":
+		code, err = e.cluster(rest[1:])
 	case "adopt":
 		code, err = e.adopt(rest[1:])
 	case "view":
@@ -488,7 +498,19 @@ func (e *env) newProject(args []string) (int, error) {
 }
 
 func (e *env) newKnowledge(args []string) (int, error) {
-	fs := newFlags("new-knowledge", e.stderr)
+	return e.createKnowledge("new-knowledge", args)
+}
+
+// newCluster creates an ordinary knowledge base. It becomes a cluster when
+// `claude-atlas cluster add` gives it its first member.
+func (e *env) newCluster(args []string) (int, error) {
+	return e.createKnowledge("new-cluster", args)
+}
+
+// createKnowledge is the body new-knowledge and new-cluster share: the same flags, the
+// same vault, and the command's own name in the usage line.
+func (e *env) createKnowledge(command string, args []string) (int, error) {
+	fs := newFlags(command, e.stderr)
 	name := fs.String("name", "", "display name (default: the folder's name)")
 	scope := fs.String("scope", "", "one or two sentences: what this knowledge base covers")
 	access := fs.String("access", "", "open (every project may write) or guarded (only the projects it grants); default open")
@@ -498,7 +520,7 @@ func (e *env) newKnowledge(args []string) (int, error) {
 		return 2, nil
 	}
 	if len(positional) > 1 {
-		return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH [--name N] [--scope TEXT] [--access open|guarded] [--mode generic|lyt]")
+		return 2, fmt.Errorf("usage: claude-atlas %s NAME|PATH [--name N] [--scope TEXT] [--access open|guarded] [--mode generic|lyt]", command)
 	}
 	opts := vault.Options{Kind: vault.Knowledge, Name: *name}
 	if *mode != "" {
@@ -521,7 +543,7 @@ func (e *env) newKnowledge(args []string) (int, error) {
 	}
 	if len(positional) == 0 {
 		if !e.console.Interactive() {
-			return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH (the interactive screen needs a terminal)")
+			return 2, fmt.Errorf("usage: claude-atlas %s NAME|PATH (the interactive screen needs a terminal)", command)
 		}
 		return e.newVaultInteractive(opts, edit)
 	}
@@ -845,6 +867,12 @@ func (e *env) hooks(cfg *home.Config) tui.Hooks {
 		},
 		EditMount: func(project registry.Entry, target, access string) (vault.Mount, error) {
 			return vaults.SetMountAccess(project, target, access, time.Now())
+		},
+		AddMember: func(cluster, kb registry.Entry) error {
+			return vaults.AddMember(cluster, kb, time.Now())
+		},
+		RemoveMember: func(cluster registry.Entry, target string) error {
+			return vaults.RemoveMember(cluster, target, time.Now())
 		},
 		Grant: func(kb, project registry.Entry, access string) error {
 			return vaults.Grant(kb, project, access, time.Now())
@@ -1296,10 +1324,14 @@ func (e *env) list(args []string) (int, error) {
 	return 0, nil
 }
 
-// listKind is the kind column: a vault the scan could not read has no kind.
+// listKind is the kind column: a vault the scan could not read has no kind, and a
+// knowledge base that gathers others reads as a cluster.
 func listKind(en registry.Entry) string {
 	if en.Error != "" {
 		return "?"
+	}
+	if vaults.IsCluster(en) {
+		return "cluster"
 	}
 	return string(en.Kind)
 }
@@ -1338,7 +1370,11 @@ func (e *env) show(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	entry, err := e.entry(cfg, args[0])
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		return 1, err
+	}
+	entry, err := findEntry(ix, args[0])
 	if err != nil {
 		return 1, err
 	}
@@ -1371,6 +1407,12 @@ func (e *env) show(args []string) (int, error) {
 				val += "  " + g.Error
 			}
 			row("Grant", val)
+		}
+		for _, m := range entry.Members {
+			row("Member", memberLine(ix, m))
+		}
+		for _, cl := range entry.Clusters {
+			row("Cluster", cl.Name)
 		}
 		for _, m := range entry.MountedBy {
 			row("Mounted by", m.Name+"  "+m.Access)
@@ -1440,7 +1482,11 @@ func mountLine(project registry.Entry, m registry.Mount) string {
 	if m.Error != "" {
 		return fmt.Sprintf("%-20s %s", m.Name, m.Error)
 	}
-	return fmt.Sprintf("%-20s %-20s %-6s %s", m.Name, kbPath(m.Name), m.Effective, vaults.MountState(project, m))
+	line := fmt.Sprintf("%-20s %-20s %-6s %s", m.Name, kbPath(m.Name), m.Effective, vaults.MountState(project, m))
+	if m.Through != "" {
+		line += "  through " + m.Through
+	}
+	return line
 }
 
 // kbPath is the folder a project reaches a mount through, as the user sees it.
@@ -1727,6 +1773,131 @@ func (e *env) revoke(args []string) (int, error) {
 	e.console.Step(console.OK, "revoked", fmt.Sprintf("%s on %s", label, kb.Name))
 	e.console.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
+}
+
+const clusterUsage = `usage: claude-atlas cluster NAME
+       claude-atlas cluster add NAME KB
+       claude-atlas cluster remove NAME KB|ID`
+
+// cluster lists a knowledge base's members, adds one, or drops one.
+func (e *env) cluster(args []string) (int, error) {
+	if len(args) == 0 {
+		return 2, errors.New(clusterUsage)
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	switch args[0] {
+	case "add":
+		return e.clusterAdd(cfg, args[1:])
+	case "remove":
+		return e.clusterRemove(cfg, args[1:])
+	}
+	if len(args) != 1 {
+		return 2, errors.New(clusterUsage)
+	}
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		return 1, err
+	}
+	entry, err := findEntry(ix, args[0])
+	if err != nil {
+		return 1, err
+	}
+	if entry.Kind != vault.Knowledge {
+		return 1, fmt.Errorf("%s is a project; a cluster is a knowledge base that gathers others", entry.Name)
+	}
+	if len(entry.Members) == 0 {
+		e.console.Say("%s holds no members; `claude-atlas cluster add %s KB` makes it a cluster", entry.Name, entry.Name)
+		return 0, nil
+	}
+	for _, m := range entry.Members {
+		e.console.Say("  %s", memberLine(ix, m))
+	}
+	return 0, nil
+}
+
+func (e *env) clusterAdd(cfg *home.Config, args []string) (int, error) {
+	if len(args) != 2 {
+		return 2, errors.New(clusterUsage)
+	}
+	cluster, err := e.entry(cfg, args[0])
+	if err != nil {
+		return 1, err
+	}
+	kb, err := e.entry(cfg, args[1])
+	if err != nil {
+		return 1, err
+	}
+	if err := vaults.AddMember(cluster, kb, time.Now()); err != nil {
+		return 1, err
+	}
+	entries, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	e.console.Step(console.OK, "added", fmt.Sprintf("%s to %s; every project that mounts %s reaches it", kb.Name, cluster.Name, cluster.Name))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
+	return 0, nil
+}
+
+func (e *env) clusterRemove(cfg *home.Config, args []string) (int, error) {
+	if len(args) != 2 {
+		return 2, errors.New(clusterUsage)
+	}
+	cluster, err := e.entry(cfg, args[0])
+	if err != nil {
+		return 1, err
+	}
+	// The member comes first, by name or id, so one the scan lost still drops. Only when
+	// the cluster holds no such member does the argument name a vault.
+	var target, label string
+	if member := findMember(cluster, args[1]); member != nil {
+		target, label = member.ID, member.Name
+	} else {
+		kb, err := e.entry(cfg, args[1])
+		if err != nil {
+			return 1, err
+		}
+		if findMember(cluster, kb.ID) == nil {
+			return 1, fmt.Errorf("%s holds no member named %q", cluster.Name, kb.Name)
+		}
+		target, label = kb.ID, kb.Name
+	}
+	if err := vaults.RemoveMember(cluster, target, time.Now()); err != nil {
+		return 1, err
+	}
+	entries, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	e.console.Step(console.OK, "dropped", fmt.Sprintf("%s from %s; the knowledge base is untouched", label, cluster.Name))
+	e.console.Step(console.OK, "refreshed", refreshed(entries))
+	return 0, nil
+}
+
+// findMember finds a cluster's member by id or by name; nil when there is none.
+func findMember(cluster registry.Entry, target string) *registry.Ref {
+	for i := range cluster.Members {
+		m := cluster.Members[i]
+		if m.ID == target || strings.EqualFold(m.Name, target) {
+			return &m
+		}
+	}
+	return nil
+}
+
+// memberLine renders one member: its name and what it covers, or why the scan lost it.
+func memberLine(ix *registry.Index, m registry.Ref) string {
+	if m.Error != "" {
+		return fmt.Sprintf("%-20s %s", m.Name, m.Error)
+	}
+	scope := ""
+	if kb := ix.ByID(m.ID); kb != nil {
+		scope = kb.Scope
+	}
+	return strings.TrimRight(fmt.Sprintf("%-20s %s", m.Name, scope), " ")
 }
 
 // checkPolicy validates a --changes value.
@@ -2757,6 +2928,24 @@ func (e *env) doctor(args []string) (int, error) {
 		}
 		if en.Kind != vault.Knowledge {
 			continue
+		}
+		// `cluster add` refuses a member that is not a knowledge base, a member that is a
+		// cluster, and a cluster that is already a member. Only a hand-edited identity file
+		// produces those states, so doctor reports them.
+		drop := "; run `claude-atlas cluster remove " + en.Name + " "
+		for _, m := range en.Members {
+			member := ix.ByID(m.ID)
+			switch {
+			case member != nil && member.Kind != vault.Knowledge:
+				ok = false
+				c.Step(console.Fail, en.Name+" · member "+m.Name, fmt.Sprintf("%s is a %s, not a knowledge base%s%s`", member.Name, member.Kind, drop, m.ID))
+			case m.Error != "":
+				ok = false
+				c.Step(console.Fail, en.Name+" · member "+m.Name, m.Error+drop+m.ID+"`")
+			case member != nil && len(member.Members) > 0:
+				ok = false
+				c.Step(console.Fail, en.Name+" · member "+m.Name, m.Name+" is a cluster too, and a cluster holds no cluster; edit "+home.Display(filepath.Join(en.Path, vault.Marker)))
+			}
 		}
 		for _, g := range en.Grants {
 			if g.Error != "" {

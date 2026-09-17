@@ -43,7 +43,8 @@ safety net, and adds the cross-vault view.
 ## Three rules for the atlas
 
 1. A knowledge base never learns who mounts it. The atlas computes that list
-   from the projects' identity files.
+   from the projects' identity files. A member never learns which clusters
+   hold it.
 2. A project never links another project. Projects share knowledge bases.
 3. Ids travel; paths stay. The identity file holds no path; the atlas config
    holds the paths the atlas cannot compute, and nothing else.
@@ -85,7 +86,7 @@ internal/hooks/         session-start (the kind line for a vault or a project's 
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
 internal/registry/      the scan for identity files, the resolved entries, the registry state file
 internal/refresh/       derive one vault's state, rewrite the registry, list a vault's signals
-internal/vaults/        create, adopt, register, edit identity files, link and create repositories, adopt those waiting under repos/
+internal/vaults/        create, adopt, register, edit identity files, link and create repositories, adopt those waiting under repos/, add and remove a cluster's members
 internal/links/         git init, create and clone, change policies, the facts git reports
 internal/tui/           Bubble Tea screens: the view (a tab per kind, boards of boxes with connectors), the vault editor, the repositories screen, tasks, ingest, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
@@ -253,7 +254,8 @@ with `claude --plugin-dir .` from inside a vault. End-to-end by hand:
 `claude -p "..."` inside a vault with
 `--allowedTools "mcp__plugin_claude-atlas_atlas__*,Read,Grep,Glob,Skill"`.
 
-1.0.0 is the first v2 release; 1.1.0 is the view with tabs.
+1.0.0 is the first v2 release; 1.1.0 is the view with tabs; 1.2.0 is
+clusters.
 
 ## Open questions
 

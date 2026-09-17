@@ -228,7 +228,7 @@ The add screen's `Mounts` step lists clusters alongside knowledge bases.
   captured into a member through a cluster records the project, not the
   cluster. The cluster is how the project reached it, not where it came from.
 - The session hook's `Knowledge:` lines name a member with its cluster:
-  `p3-software (through p3, write)`.
+  `p3-software (write, through p3)`.
 - Lint resolves links through every symlink under `kb/`, members included.
   `doctor` reports a member the scan cannot find, and a member that is itself
   a cluster, which only a hand-edited file can produce.
@@ -256,6 +256,10 @@ The add screen's `Mounts` step lists clusters alongside knowledge bases.
   than a skill reading scopes.
 - **`promote`.** Moving a page from one member to another, or from a member up
   into the cluster.
+- **A mount names its cluster by name.** `Mount.Through` holds the cluster's
+  display name. Two clusters with one display name, both mounted on one
+  project, would have their member lists merged in the view's connector
+  column. A `ThroughID` would settle it.
 
 ## Decisions
 

@@ -54,6 +54,10 @@ type Hooks struct {
 	EditMount func(project registry.Entry, target, access string) (vault.Mount, error)
 	Grant     func(kb, project registry.Entry, access string) error
 	Revoke    func(kb registry.Entry, projectID string) error
+	// The cluster calls: add a knowledge base to a cluster's member list, and drop one by
+	// id or name.
+	AddMember    func(cluster, kb registry.Entry) error
+	RemoveMember func(cluster registry.Entry, target string) error
 	// Tasks reads a project's task ledger and the notes waiting in inbox/tasks/; Plant
 	// plants a task in its vault.
 	Tasks func(registry.Entry) (tasks.Ledger, []string, error)

@@ -269,6 +269,75 @@ func TestUnmountAKnowledgeBaseTheScanLost(t *testing.T) {
 	}
 }
 
+// A member reached through a cluster is not unmounted on its own.
+func TestUnmountRefusesAMemberOfACluster(t *testing.T) {
+	cfg, project, cluster, member := mountFixture(t)
+
+	if err := AddMember(cluster, member, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	cluster = refreshEntry(t, cfg, cluster.ID)
+	if _, err := Mount(project, cluster, "", "", identityNow); err != nil {
+		t.Fatal(err)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+	if len(project.Mounts) != 2 {
+		t.Fatalf("the cluster's member should be a derived mount: %+v", project.Mounts)
+	}
+
+	err := Unmount(project, member.ID, identityNow)
+	if err == nil || !strings.Contains(err.Error(), cluster.Name) {
+		t.Fatalf("unmount a member: %v", err)
+	}
+	v, err := vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Mounts) != 1 || v.Config.Mounts[0].ID != cluster.ID {
+		t.Fatalf("the identity file holds the cluster's mount only: %+v", v.Config.Mounts)
+	}
+
+	// The cluster itself unmounts, and the member goes with it.
+	if err := Unmount(project, cluster.ID, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+	if len(project.Mounts) != 0 {
+		t.Fatalf("mounts after unmounting the cluster: %+v", project.Mounts)
+	}
+}
+
+// An explicit mount wins over the one a cluster derives: a project that mounts a cluster
+// may still mount one of its members by name.
+func TestMountAMemberOfAMountedCluster(t *testing.T) {
+	cfg, project, cluster, member := mountFixture(t)
+
+	if err := AddMember(cluster, member, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	cluster = refreshEntry(t, cfg, cluster.ID)
+	if _, err := Mount(project, cluster, "", "", identityNow); err != nil {
+		t.Fatal(err)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+
+	if _, err := Mount(project, member, vault.AccessRead, "", identityNow); err != nil {
+		t.Fatalf("mount a member the cluster derives: %v", err)
+	}
+	v, err := vault.Open(project.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Mounts) != 2 {
+		t.Fatalf("the identity file should hold both mounts: %+v", v.Config.Mounts)
+	}
+	project = refreshEntry(t, cfg, project.ID)
+	found := FindMount(project, member.ID)
+	if found == nil || found.Through != "" || found.Access != vault.AccessRead {
+		t.Fatalf("the explicit mount stands: %+v", project.Mounts)
+	}
+}
+
 func TestSetMountAccess(t *testing.T) {
 	cfg, project, kb, _ := mountFixture(t)
 

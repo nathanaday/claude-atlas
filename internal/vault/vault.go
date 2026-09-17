@@ -121,6 +121,13 @@ type Grant struct {
 	Access string `json:"access"`
 }
 
+// Member is a knowledge base another knowledge base gathers. A knowledge base with
+// members is a cluster: a project that mounts it reaches every member.
+type Member struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // Mount is a project's use of one knowledge base.
 type Mount struct {
 	ID     string `json:"id"`
@@ -145,9 +152,10 @@ type Config struct {
 	Mode    Mode   `json:"mode"`
 	Created string `json:"created"`
 	// A knowledge base's fields.
-	Scope  string  `json:"scope,omitempty"`
-	Access string  `json:"access,omitempty"`
-	Grants []Grant `json:"grants,omitempty"`
+	Scope   string   `json:"scope,omitempty"`
+	Access  string   `json:"access,omitempty"`
+	Grants  []Grant  `json:"grants,omitempty"`
+	Members []Member `json:"members,omitempty"`
 	// A project's fields.
 	Tags   []string `json:"tags,omitempty"`
 	Mounts []Mount  `json:"mounts,omitempty"`
@@ -868,6 +876,13 @@ func checkUnique(cfg Config) error {
 		}
 		grants[g.ID] = true
 	}
+	members := map[string]bool{}
+	for _, m := range cfg.Members {
+		if members[m.ID] {
+			return fmt.Errorf("%s is listed twice as a member", m.Name)
+		}
+		members[m.ID] = true
+	}
 	return nil
 }
 
@@ -924,13 +939,21 @@ func UpdateConfig(root, summary string, now time.Time, change func(*Config) erro
 			return fmt.Errorf("repo %s: changes must be pr or commit, not %q", r.Name, r.Changes)
 		}
 	}
+	for _, m := range cfg.Members {
+		if strings.TrimSpace(m.ID) == "" {
+			return fmt.Errorf("member %q: a member needs an id", m.Name)
+		}
+		if m.ID == cfg.ID {
+			return fmt.Errorf("%s cannot be its own member", cfg.Name)
+		}
+	}
 	if err := checkUnique(cfg); err != nil {
 		return err
 	}
 	switch cfg.Kind {
 	case Project:
-		if cfg.Scope != "" || cfg.Access != "" || len(cfg.Grants) > 0 {
-			return fmt.Errorf("a project carries no scope, access, or grants; those are a knowledge base's fields")
+		if cfg.Scope != "" || cfg.Access != "" || len(cfg.Grants) > 0 || len(cfg.Members) > 0 {
+			return fmt.Errorf("a project carries no scope, access, grants, or members; those are a knowledge base's fields")
 		}
 	case Knowledge:
 		if len(cfg.Tags) > 0 || len(cfg.Mounts) > 0 || len(cfg.Repos) > 0 {

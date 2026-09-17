@@ -202,7 +202,11 @@ func mountLines(ix *registry.Index, entry *registry.Entry, now time.Time) string
 			fmt.Fprintf(&b, "Knowledge: %s (unresolved: %s)\n", m.Name, m.Error)
 			continue
 		}
-		parts := []string{fmt.Sprintf("Knowledge: %s (%s)", m.Name, m.Effective)}
+		first := fmt.Sprintf("Knowledge: %s (%s)", m.Name, m.Effective)
+		if m.Through != "" {
+			first = fmt.Sprintf("Knowledge: %s (%s, through %s)", m.Name, m.Effective, m.Through)
+		}
+		parts := []string{first}
 		if kb := ix.ByID(m.ID); kb != nil && kb.Scope != "" {
 			parts = append(parts, kb.Scope)
 		}

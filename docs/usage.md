@@ -22,6 +22,7 @@ one command, so scripts and muscle memory both work:
 | `e` edit a vault, `s` save | `edit NAME --…` |
 | `e` then `r` forget | `remove NAME` |
 | `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
+| `M` members, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` |
 | `R` refresh | `refresh` |
 | `←` `→` switch tabs; `h` shows every key | — |
 | — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
@@ -358,6 +359,7 @@ shows every key, and again hides them.
 | `T` | the Tasks tab |
 | `e` | edit the vault; `s` saves, `r` forgets it |
 | `m` | mounts: mount and unmount on a project; grants on a knowledge base |
+| `M` | members, on a knowledge base: add and drop |
 | `R` | refresh in the background |
 | `q` | quit |
 
@@ -502,6 +504,45 @@ existing mount. `unmount` drops the record; the knowledge base is untouched.
 `refresh` recreates a missing or wrong symlink from the identity file and the
 atlas config; `doctor` reports one that needs it.
 
+### Clusters
+
+A cluster is a knowledge base that gathers others. A project mounts the
+cluster and reaches every member, and a member added later reaches every
+project that mounts it at the next refresh.
+
+```bash
+claude-atlas new-cluster p3 --scope "The moviTHERM ecosystem."
+claude-atlas cluster add p3 p3-software
+claude-atlas cluster add p3 p3-people
+claude-atlas mount vision-algorithms p3
+claude-atlas cluster p3
+claude-atlas cluster remove p3 p3-people
+```
+
+The project's identity file records the cluster, once. The symlinks under
+`kb/` are derived, so `mount` and `refresh` make one per member beside the
+cluster's own:
+
+```text
+kb/p3           -> …/p3/wiki
+kb/p3-software  -> …/p3-software/wiki
+kb/p3-people    -> …/p3-people/wiki
+```
+
+Each member decides what a project may do in it, exactly as if the project
+mounted it directly: one guarded member with no grant stays read-only while
+the rest allow write. A knowledge base a project mounts directly keeps that
+mount, and a member whose name is already taken takes the cluster's name as a
+prefix. A member is not unmounted on its own; unmount the cluster.
+
+A cluster does not hold another cluster yet. The cluster's own wiki is an
+ordinary one: it is where a note about which member covers what belongs.
+
+`doctor` reports a member the scan cannot find and a member that is not a
+knowledge base. `cluster remove NAME KB|ID` drops such a member by the name
+the cluster recorded or by its id, without the knowledge base itself needing
+to be reachable.
+
 A knowledge base sets `access`, `open` or `guarded`, at `new-knowledge` or
 with `edit --access`. `open` lets every project that mounts it write; a
 `guarded` knowledge base lets only a project `grant` names write, and every
@@ -512,11 +553,13 @@ grant still reads only.
 In `view`, `m` on a vault opens its mounts screen. On a project, `a` lists the
 knowledge bases it does not mount yet and mounts the one you choose, `w` and
 `r` change what the mount under the cursor asks for, and `u` unmounts after
-asking. On a knowledge base, `w` grants write, `r` grants read, `x` revokes a
-grant, and `a` lists the projects and grants the one you choose. Nothing is
-typed by name, so a typo cannot pick the wrong vault. Creating a project
-offers the same list: the `Mounts` step mounts one knowledge base with write
-access, and `none` is the default.
+asking. The picker names a cluster with its member count, so mounting one is
+the same two keystrokes as mounting a knowledge base. On a knowledge base,
+`w` grants write, `r` grants read, `x` revokes a grant, and `a` lists the
+projects and grants the one you choose. Nothing is typed by name, so a typo
+cannot pick the wrong vault. Creating a project offers the same list: the
+`Mounts` step mounts one knowledge base with write access, and `none` is the
+default.
 
 When a grant's project is gone, `revoke KB PROJECT` cannot find it by name;
 `revoke KB ID` drops it by its id instead. A knowledge base that moved out of

@@ -38,6 +38,7 @@ type Ref struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Access string `json:"access,omitempty"` // the effective access, on a mount or a mounted-by
+	Error  string `json:"error,omitempty"`  // "no knowledge base with id …", for a member the scan lost
 }
 
 // Grant is what a knowledge base grants one project, resolved against the scan: Name is
@@ -57,6 +58,10 @@ type Mount struct {
 	Effective string `json:"effective,omitempty"` // the lesser of the request and the grant; "" when unresolved
 	Path      string `json:"path,omitempty"`      // the knowledge base's wiki/, when found
 	Error     string `json:"error,omitempty"`     // "no knowledge base with id …"
+	// Through is the cluster a mount comes through; "" for a mount the project recorded
+	// itself. A mount with Through is derived: the project's identity file does not hold
+	// it, and unmounting it means unmounting the cluster.
+	Through string `json:"through,omitempty"`
 }
 
 // Repo is a project's repository resolved to a path.
@@ -81,8 +86,13 @@ type Entry struct {
 	Scope   string     `json:"scope,omitempty"`
 	Access  string     `json:"access,omitempty"`
 	Grants  []Grant    `json:"grants,omitempty"`
-	Mounts  []Mount    `json:"mounts,omitempty"`
-	Repos   []Repo     `json:"repos,omitempty"`
+	// Members are a cluster's knowledge bases, resolved against the scan. A knowledge base
+	// with members is a cluster.
+	Members []Ref `json:"members,omitempty"`
+	// Clusters names the clusters that hold this knowledge base as a member.
+	Clusters []Ref   `json:"clusters,omitempty"`
+	Mounts   []Mount `json:"mounts,omitempty"`
+	Repos    []Repo  `json:"repos,omitempty"`
 	// Host is the repository a project lives in, for a project at REPO/atlas; "" for a
 	// vault that is its own repository. The scan derives it from the folder, and Repos
 	// lists it first.
@@ -348,6 +358,10 @@ func buildEntry(root string, cfg vault.Config) Entry {
 		for _, r := range cfg.Repos {
 			e.Repos = append(e.Repos, Repo{Name: r.Name, Remote: r.Remote, Changes: r.Changes})
 		}
+	} else {
+		for _, m := range cfg.Members {
+			e.Members = append(e.Members, Ref{ID: m.ID, Name: m.Name})
+		}
 	}
 	return e
 }
@@ -360,6 +374,23 @@ func resolve(ix *Index, cfg *home.Config) {
 		e := &ix.Entries[i]
 		if e.Error == "" && e.ID != "" {
 			byID[e.ID] = e
+		}
+	}
+	// Members resolve first: a project's cluster mount expands from them.
+	for i := range ix.Entries {
+		e := &ix.Entries[i]
+		if e.Error != "" || e.Kind != vault.Knowledge {
+			continue
+		}
+		for j := range e.Members {
+			ref := &e.Members[j]
+			kb, ok := byID[ref.ID]
+			if !ok || kb.Kind != vault.Knowledge {
+				ref.Error = "no knowledge base with id " + ref.ID
+				continue
+			}
+			ref.Name = kb.Name
+			kb.Clusters = append(kb.Clusters, Ref{ID: e.ID, Name: e.Name})
 		}
 	}
 	for i := range ix.Entries {
@@ -378,6 +409,7 @@ func resolve(ix *Index, cfg *home.Config) {
 			m.Effective = Effective(m.Access, GrantedAccess(*kb, e.ID))
 			kb.MountedBy = append(kb.MountedBy, Ref{ID: e.ID, Name: e.Name, Access: m.Effective})
 		}
+		e.Mounts = append(e.Mounts, expand(e, byID)...)
 		host := takeHost(e)
 		for j := range e.Repos {
 			r := &e.Repos[j]
@@ -410,6 +442,66 @@ func resolve(ix *Index, cfg *home.Config) {
 			g.Error = "no project with id " + g.ID
 		}
 	}
+}
+
+// expand is the mounts a project reaches through the clusters it mounts, one per member,
+// resolved the way a recorded mount is. A member the project already mounts itself is
+// left out: the project asked for that knowledge base by name, so its own mount stands.
+func expand(project *Entry, byID map[string]*Entry) []Mount {
+	taken := map[string]bool{}   // mount names in use, lowercased
+	mounted := map[string]bool{} // knowledge base ids the project reaches already
+	for _, m := range project.Mounts {
+		taken[strings.ToLower(m.Name)] = true
+		mounted[m.ID] = true
+	}
+	var out []Mount
+	for _, m := range project.Mounts {
+		cluster, ok := byID[m.ID]
+		if !ok || len(cluster.Members) == 0 {
+			continue
+		}
+		for _, ref := range cluster.Members {
+			if ref.Error != "" || mounted[ref.ID] {
+				continue
+			}
+			kb, ok := byID[ref.ID]
+			if !ok || kb.Kind != vault.Knowledge {
+				continue
+			}
+			mounted[ref.ID] = true
+			name := memberName(kb, cluster, taken)
+			taken[strings.ToLower(name)] = true
+			member := Mount{
+				ID: kb.ID, Name: name, Access: m.Access, Through: cluster.Name,
+				Path: kb.Wiki(), Effective: Effective(m.Access, GrantedAccess(*kb, project.ID)),
+			}
+			out = append(out, member)
+			kb.MountedBy = append(kb.MountedBy, Ref{ID: project.ID, Name: project.Name, Access: member.Effective})
+		}
+	}
+	return out
+}
+
+// memberName is the folder a member takes under kb/: its own name, the cluster's name and
+// its own when that is taken, and its id's first eight characters when that is taken too.
+// The last name counts up until it is free, so every member gets a folder of its own and
+// none of them is empty.
+func memberName(kb, cluster *Entry, taken map[string]bool) string {
+	short := kb.ID[:min(8, len(kb.ID))]
+	for _, try := range []string{kb.Name, cluster.Name + "-" + kb.Name, cluster.Name + "-" + short} {
+		if name := links.CleanName(try); name != "" && !taken[strings.ToLower(name)] {
+			return name
+		}
+	}
+	base := links.CleanName("kb-" + short)
+	if base == "" {
+		base = "kb"
+	}
+	name := base
+	for n := 2; taken[strings.ToLower(name)]; n++ {
+		name = fmt.Sprintf("%s-%d", base, n)
+	}
+	return name
 }
 
 // takeHost is the repository a project lives in, pulled out of the identity list: the

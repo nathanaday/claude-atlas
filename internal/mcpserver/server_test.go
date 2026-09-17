@@ -614,6 +614,90 @@ func TestKnowledgeBaseThroughAProjectSession(t *testing.T) {
 	}
 }
 
+// A project that mounts a cluster gets a row per member, each naming the cluster in
+// through; the cluster's own row has an empty through.
+func TestMountsListsAClustersMembers(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := h.Default(filepath.Join(root, "Vaults"))
+	if err := os.MkdirAll(h.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := vaults.PathFor(cfg.VaultsDir, vault.Project, "p")
+	clusterPath := vaults.PathFor(cfg.VaultsDir, vault.Knowledge, "papers")
+	memberPath := vaults.PathFor(cfg.VaultsDir, vault.Knowledge, "ai-ml")
+	if _, err := vault.Init(projectPath, vault.Options{Kind: vault.Project, Name: "p"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Init(clusterPath, vault.Options{Kind: vault.Knowledge, Name: "papers"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Init(memberPath, vault.Options{Kind: vault.Knowledge, Name: "ai-ml"}, now); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster, member := ix.ByPath(clusterPath), ix.ByPath(memberPath)
+	if cluster == nil || member == nil {
+		t.Fatal("fixture not scanned")
+	}
+	scope := "Machine learning papers"
+	if _, err := vaults.EditIdentity(home.Home{}, &home.Config{}, *member, vaults.Edit{Scope: &scope}, now); err != nil {
+		t.Fatal(err)
+	}
+	ix, err = registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster, member = ix.ByPath(clusterPath), ix.ByPath(memberPath)
+	if err := vaults.AddMember(*cluster, *member, now); err != nil {
+		t.Fatal(err)
+	}
+	ix, err = registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, cluster := ix.ByPath(projectPath), ix.ByPath(clusterPath)
+	if project == nil || cluster == nil {
+		t.Fatal("fixture not scanned")
+	}
+	if _, err := vaults.Mount(*project, *cluster, vault.AccessWrite, "", now); err != nil {
+		t.Fatal(err)
+	}
+
+	c := connectIn(t, h, projectPath)
+	var list MountsOut
+	if msg := c.call("mounts", nil, &list); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(list.Mounts) != 2 {
+		t.Fatalf("mounts %+v", list.Mounts)
+	}
+	var clusterRow, memberRow *MountInfo
+	for i := range list.Mounts {
+		switch list.Mounts[i].Name {
+		case "papers":
+			clusterRow = &list.Mounts[i]
+		case "ai-ml":
+			memberRow = &list.Mounts[i]
+		}
+	}
+	if clusterRow == nil || clusterRow.Through != "" {
+		t.Fatalf("the cluster's own row has no through: %+v", clusterRow)
+	}
+	if memberRow == nil || memberRow.Through != "papers" || memberRow.Scope != scope {
+		t.Fatalf("the member's row names the cluster and its own scope: %+v", memberRow)
+	}
+}
+
 func TestReadMountRefusesWrites(t *testing.T) {
 	h, cfg, p, kb := mounted(t)
 	guarded := vault.AccessGuarded

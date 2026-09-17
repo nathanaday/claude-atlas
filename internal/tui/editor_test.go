@@ -87,6 +87,12 @@ func atlasFixture(t *testing.T) (*home.Config, home.Home, Hooks) {
 		EditMount: func(project registry.Entry, target, access string) (vault.Mount, error) {
 			return vaults.SetMountAccess(project, target, access, testNow)
 		},
+		AddMember: func(cluster, kb registry.Entry) error {
+			return vaults.AddMember(cluster, kb, testNow)
+		},
+		RemoveMember: func(cluster registry.Entry, target string) error {
+			return vaults.RemoveMember(cluster, target, testNow)
+		},
 		Grant: func(kb, project registry.Entry, access string) error {
 			return vaults.Grant(kb, project, access, testNow)
 		},
