@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
@@ -48,7 +49,7 @@ type linkRow struct {
 }
 
 type linksScreen struct {
-	hooks   Hooks
+	hooks   actions.Atlas
 	entry   registry.Entry
 	rows    []linkRow
 	cursor  int
@@ -66,7 +67,7 @@ type linksScreen struct {
 	closed  bool
 }
 
-func newLinks(hooks Hooks, e registry.Entry, width int) linksScreen {
+func newLinks(hooks actions.Atlas, e registry.Entry, width int) linksScreen {
 	s := linksScreen{hooks: hooks, entry: e, width: width}
 	s.source = newPathField("~/code/project, or https://github.com/you/repo to clone", 60)
 	s.name = textinput.New()
@@ -533,7 +534,7 @@ func indent(block, pad string) string {
 // linkEditor edits one mounted repository: the folder it mounts, its remote, and how
 // changes land there. A repository's name comes from its folder and does not change.
 type linkEditor struct {
-	hooks     Hooks
+	hooks     actions.Atlas
 	entry     registry.Entry
 	repo      registry.Repo
 	path      string
@@ -556,7 +557,7 @@ const (
 	linkFieldCount
 )
 
-func newLinkEditor(hooks Hooks, e registry.Entry, repo registry.Repo) linkEditor {
+func newLinkEditor(hooks actions.Atlas, e registry.Entry, repo registry.Repo) linkEditor {
 	text := textinput.New()
 	text.Prompt = ""
 	text.CharLimit = 200

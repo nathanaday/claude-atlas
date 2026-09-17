@@ -10,30 +10,12 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
-
-// AddVault is what the user chose on the add-vault or adopt screen.
-type AddVault struct {
-	Kind  vault.Kind
-	Name  string // display name as typed, or the folder's name when adopting
-	Path  string // where the vault will be created, or the vault being adopted
-	Mode  string // generic or lyt
-	Tags  []string
-	Scope string
-	Adopt bool // Path exists already and is adopted rather than created
-	// MountID is the knowledge base a new project mounts once it exists; "" mounts none.
-	// The mount asks for write, and the mounts screen changes that.
-	MountID string
-	// Cluster is set when the user asked for a knowledge base that gathers others, and
-	// MemberIDs are the knowledge bases it gathers. The vault is an ordinary knowledge
-	// base until it has a member.
-	Cluster   bool
-	MemberIDs []string
-}
 
 type step int
 
@@ -419,11 +401,11 @@ func splitTags(s string) []string {
 }
 
 // result is the choice once the user confirmed, or nil.
-func (m model) result() *AddVault {
+func (m model) result() *actions.AddVault {
 	if m.cancelled || !m.done {
 		return nil
 	}
-	out := &AddVault{Kind: m.kind, Name: m.vaultName(), Path: m.target(), Mode: m.mode, Adopt: m.adopting, Cluster: m.cluster}
+	out := &actions.AddVault{Kind: m.kind, Name: m.vaultName(), Path: m.target(), Mode: m.mode, Adopt: m.adopting, Cluster: m.cluster}
 	if m.applies(stepMembers) {
 		for _, kb := range m.members() {
 			out.MemberIDs = append(out.MemberIDs, kb.ID)
@@ -681,7 +663,7 @@ func (m model) View() string {
 	return b.String()
 }
 
-func runChoice(m model) (*AddVault, error) {
+func runChoice(m model) (*actions.AddVault, error) {
 	final, err := tea.NewProgram(m).Run()
 	if err != nil {
 		return nil, fmt.Errorf("interactive screen failed: %w", err)
@@ -690,9 +672,9 @@ func runChoice(m model) (*AddVault, error) {
 }
 
 // RunAddVault shows the add screen and returns nil when the user cancels.
-func RunAddVault(vaultsDir string, kind vault.Kind) (*AddVault, error) {
+func RunAddVault(vaultsDir string, kind vault.Kind) (*actions.AddVault, error) {
 	return runChoice(newModel(vaultsDir, kind))
 }
 
 // RunAdopt shows the adopt screen and returns nil when the user cancels.
-func RunAdopt() (*AddVault, error) { return runChoice(newAdoptModel()) }
+func RunAdopt() (*actions.AddVault, error) { return runChoice(newAdoptModel()) }

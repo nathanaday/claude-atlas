@@ -8,7 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
@@ -181,7 +183,7 @@ func TestReposScreenClonesAndAsksHowChangesLand(t *testing.T) {
 }
 
 func TestReposScreenNeedsHooksAndAProject(t *testing.T) {
-	none := keyV(newView(sample(), Opener{}, Hooks{}), "l")
+	none := keyV(newView(sample(), Opener{}, actions.Atlas{}), "l")
 	if none.links != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("l without hooks reports why")
 	}
@@ -200,9 +202,9 @@ func TestReposScreenNeedsHooksAndAProject(t *testing.T) {
 func TestUnlinkSurvivesAReloadThatDroppedTheRepository(t *testing.T) {
 	entries := entriesOf(sample())
 	removed := 0
-	hooks := Hooks{
+	hooks := actions.Atlas{
 		Load:       func() ([]registry.Entry, error) { return entries, nil },
-		Refresh:    func() error { return nil },
+		Refresh:    func() (*registry.Index, []refresh.ProjectChange, error) { return nil, nil, nil },
 		AddRepo:    func(registry.Entry, string, bool) (vault.Repo, string, error) { return vault.Repo{}, "", nil },
 		RemoveRepo: func(registry.Entry, string) error { removed++; return nil },
 	}

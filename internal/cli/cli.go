@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/console"
@@ -373,18 +374,14 @@ func badEntry(ix *registry.Index, arg string) *registry.Entry {
 // refreshAll rebuilds the registry from a scan and recreates every project's mount
 // symlinks. Callers report the count themselves; only `refresh` reports the symlinks.
 func (e *env) refreshAll(cfg *home.Config) ([]registry.Entry, *registry.Index, error) {
-	entries, ix, _, err := refresh.Registry(e.home, cfg, e.home.StateDir(), time.Now(), true)
+	entries, ix, _, err := refresh.All(e.home, cfg, time.Now())
 	return entries, ix, err
 }
 
 // registryEntries reads the registry the last refresh wrote, writing one first when no
 // refresh has run yet.
 func (e *env) registryEntries(cfg *home.Config) ([]registry.Entry, error) {
-	entries, _, err := registry.Read(e.home.StateDir())
-	if errors.Is(err, os.ErrNotExist) {
-		entries, _, err = e.refreshAll(cfg)
-	}
-	return entries, err
+	return refresh.Entries(e.home, cfg, time.Now())
 }
 
 // refreshed is what a command says after rewriting the registry.
@@ -758,242 +755,6 @@ func (e *env) adoptPath(path string, vopts vault.Options) (int, error) {
 	return 0, nil
 }
 
-// createOrAdopt is what the add screen calls: it makes or adopts the vault, records the
-// fields the template does not carry, and registers it. It returns the vault's path.
-func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, error) {
-	mode, err := parseMode(choice.Mode)
-	if err != nil {
-		return "", err
-	}
-	opts := vault.Options{Kind: choice.Kind, Mode: mode, Name: choice.Name}
-	if choice.Adopt {
-		if _, err := vault.Adopt(choice.Path, opts, time.Now()); err != nil {
-			return "", err
-		}
-	} else if _, err := vaults.Create(choice.Path, opts, e.console, false); err != nil {
-		return "", err
-	}
-	if err := e.recordFacts(cfg, choice); err != nil {
-		return "", err
-	}
-	if _, err := vaults.Register(e.home, cfg, choice.Path); err != nil {
-		return "", err
-	}
-	if err := mountChoice(cfg, choice); err != nil {
-		return choice.Path, err
-	}
-	if err := memberChoice(cfg, choice); err != nil {
-		return choice.Path, err
-	}
-	return choice.Path, nil
-}
-
-// mountChoice mounts the knowledge base a new project chose on the add screen. The
-// project is already written, so a failure here names the mount and leaves the vault.
-// memberChoice records the knowledge bases a new cluster gathers. The cluster is already
-// written, so a failure here names the member and leaves the vault.
-func memberChoice(cfg *home.Config, choice tui.AddVault) error {
-	if len(choice.MemberIDs) == 0 {
-		return nil
-	}
-	for _, id := range choice.MemberIDs {
-		ix, err := registry.Scan(cfg)
-		if err != nil {
-			return err
-		}
-		cluster := ix.ByPath(choice.Path)
-		if cluster == nil {
-			return fmt.Errorf("%s is not in the scan yet; add its members by hand", choice.Name)
-		}
-		kb := ix.ByID(id)
-		if kb == nil {
-			return fmt.Errorf("no knowledge base with id %s to gather", id)
-		}
-		if err := vaults.AddMember(*cluster, *kb, time.Now()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func mountChoice(cfg *home.Config, choice tui.AddVault) error {
-	if choice.MountID == "" {
-		return nil
-	}
-	ix, err := registry.Scan(cfg)
-	if err != nil {
-		return err
-	}
-	kb := ix.ByID(choice.MountID)
-	if kb == nil {
-		return fmt.Errorf("no knowledge base with id %s to mount", choice.MountID)
-	}
-	project := ix.ByPath(choice.Path)
-	if project == nil {
-		return fmt.Errorf("%s is not in the scan yet; mount %s by hand", choice.Name, kb.Name)
-	}
-	_, err = vaults.Mount(*project, *kb, vault.AccessWrite, "", time.Now())
-	return err
-}
-
-// recordFacts writes the identity fields the template does not carry: a project's tags,
-// or a knowledge base's scope.
-func (e *env) recordFacts(cfg *home.Config, choice tui.AddVault) error {
-	edit := vaults.Edit{}
-	switch {
-	case choice.Kind == vault.Knowledge && choice.Scope != "":
-		edit.Scope = &choice.Scope
-	case choice.Kind == vault.Project && len(choice.Tags) > 0:
-		edit.Tags = &choice.Tags
-	}
-	_, err := vaults.EditIdentity(e.home, cfg, registry.Entry{Path: choice.Path, Kind: choice.Kind}, edit, time.Now())
-	return err
-}
-
-// hooks wires the interactive screens to the same backend calls the CLI commands use.
-func (e *env) hooks(cfg *home.Config) tui.Hooks {
-	return tui.Hooks{
-		Load:    func() ([]registry.Entry, error) { return e.registryEntries(cfg) },
-		Create:  func(choice tui.AddVault) (string, error) { return e.createOrAdopt(cfg, choice) },
-		Refresh: func() error { _, _, err := e.refreshAll(cfg); return err },
-		Edit: func(en registry.Entry, edit vaults.Edit) (string, error) {
-			return vaults.EditIdentity(e.home, cfg, en, edit, time.Now())
-		},
-		Unregister: func(en registry.Entry) error { return vaults.Unregister(e.home, cfg, en.Path) },
-		StagePlan: func(en registry.Entry, source string) (*capture.StagePlan, error) {
-			return planStage(en.Path, en.Name, source)
-		},
-		Stage: func(en registry.Entry, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
-			return stage(en.Path, plan)
-		},
-		Sources: func(en registry.Entry) []string {
-			v, err := vault.Open(en.Path)
-			if err != nil {
-				return nil
-			}
-			return capture.Sources(v)
-		},
-		AddRepo: func(en registry.Entry, target string, initGit bool) (vault.Repo, string, error) {
-			return vaults.AddRepo(e.home, cfg, en, target, initGit, time.Now())
-		},
-		NewRepo: func(en registry.Entry, name, at string) (vault.Repo, string, error) {
-			return vaults.CreateRepo(e.home, cfg, en, name, at, time.Now())
-		},
-		CloneRepo: func(en registry.Entry, url, at string) (vault.Repo, string, error) {
-			return vaults.CloneRepo(e.home, cfg, en, url, at, time.Now())
-		},
-		RemoveRepo: func(en registry.Entry, name string) error {
-			return vaults.RemoveRepo(e.home, cfg, en, name, time.Now())
-		},
-		EditRepo: func(en registry.Entry, name string, edit vaults.RepoEdit) (vault.Repo, error) {
-			return vaults.EditRepo(e.home, cfg, en, name, edit, time.Now())
-		},
-		Mount: func(project, kb registry.Entry, access, name string) (vault.Mount, error) {
-			return vaults.Mount(project, kb, access, name, time.Now())
-		},
-		Unmount: func(project registry.Entry, target string) error {
-			return vaults.Unmount(project, target, time.Now())
-		},
-		EditMount: func(project registry.Entry, target, access string) (vault.Mount, error) {
-			return vaults.SetMountAccess(project, target, access, time.Now())
-		},
-		AddMember: func(cluster, kb registry.Entry) error {
-			return vaults.AddMember(cluster, kb, time.Now())
-		},
-		RemoveMember: func(cluster registry.Entry, target string) error {
-			return vaults.RemoveMember(cluster, target, time.Now())
-		},
-		Grant: func(kb, project registry.Entry, access string) error {
-			return vaults.Grant(kb, project, access, time.Now())
-		},
-		Revoke: func(kb registry.Entry, projectID string) error {
-			return vaults.RevokeID(kb, projectID, time.Now())
-		},
-		Tasks: func(en registry.Entry) (tasks.Ledger, []string, error) {
-			v, err := vault.Open(en.Path)
-			if err != nil {
-				return tasks.Ledger{}, nil, err
-			}
-			led, err := tasks.Current(v, time.Now())
-			return led, tasks.Notes(v), err
-		},
-		Plant: func(en registry.Entry, plant tasks.Plant) (txn.Planted, error) {
-			v, err := vault.Open(en.Path)
-			if err != nil {
-				return txn.Planted{}, err
-			}
-			return plantTask(v, plant)
-		},
-		VaultsDir: cfg.VaultsDir,
-	}
-}
-
-// plantTask plants one task in a vault as a single operation.
-func plantTask(v *vault.Vault, plant tasks.Plant) (txn.Planted, error) {
-	now := time.Now()
-	req, planted, err := txn.PlantRequest(v, plant, "", now)
-	if err != nil {
-		return txn.Planted{}, err
-	}
-	plan, err := txn.Prepare(v, req, now)
-	if err != nil {
-		return txn.Planted{}, err
-	}
-	if _, err := txn.Apply(v, plan, now); err != nil {
-		return txn.Planted{}, err
-	}
-	return planted, nil
-}
-
-// ingestSources are the paths an ingest reads: the given ones, or the folders the vault
-// staged from before when none is given.
-func ingestSources(v *vault.Vault, name string, given []string) ([]string, error) {
-	if len(given) > 0 {
-		out := make([]string, 0, len(given))
-		for _, g := range given {
-			out = append(out, home.Expand(g))
-		}
-		return out, nil
-	}
-	sources := capture.Sources(v)
-	if len(sources) == 0 {
-		return nil, fmt.Errorf("name a file or folder to ingest; %s has not ingested from a folder yet", name)
-	}
-	return sources, nil
-}
-
-// planStage plans a staging into the vault at root from one source, or from the folders
-// staged from before when source is empty.
-func planStage(root, name, source string) (*capture.StagePlan, error) {
-	var given []string
-	if strings.TrimSpace(source) != "" {
-		given = []string{strings.TrimSpace(source)}
-	}
-	v, err := vault.Open(root)
-	if err != nil {
-		return nil, err
-	}
-	sources, err := ingestSources(v, name, given)
-	if err != nil {
-		return nil, err
-	}
-	return capture.PlanStage(v, sources, time.Now())
-}
-
-// stage copies a plan into the inbox; the vault remembers the folders, so a later ingest
-// with no path picks up what is new. It returns the folders newly remembered.
-func stage(root string, plan *capture.StagePlan) (*capture.StageResult, []string, error) {
-	v, err := vault.Open(root)
-	if err != nil {
-		return nil, nil, err
-	}
-	res, err := capture.ApplyStage(v, plan, time.Now())
-	if err != nil {
-		return res, nil, err
-	}
-	return res, res.Remembered, nil
-}
-
 func (e *env) view(args []string) (int, error) {
 	if !e.console.Interactive() {
 		return 2, errors.New("view is an interactive screen and needs a terminal")
@@ -1002,7 +763,7 @@ func (e *env) view(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	hooks := e.hooks(cfg)
+	hooks := actions.Bind(e.home, cfg, e.console)
 	entries, err := hooks.Load()
 	if err != nil {
 		return 1, err
@@ -1248,7 +1009,7 @@ func (e *env) ingest(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	sources, err := ingestSources(v, entry.Name, positional[1:])
+	sources, err := capture.SourcesFor(v, positional[1:])
 	if err != nil {
 		return 1, err
 	}
@@ -1288,7 +1049,7 @@ func (e *env) ingest(args []string) (int, error) {
 		if !ok {
 			return 1, vaults.ErrCancelled
 		}
-		res, remembered, err := stage(entry.Path, plan)
+		res, remembered, err := actions.Bind(e.home, cfg, e.console).Stage(entry, plan)
 		if err != nil {
 			return 1, err
 		}

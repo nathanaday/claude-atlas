@@ -9,13 +9,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
+	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 )
 
-func taskHooks(ledgers map[string]*tasks.Ledger, planted *[]string) Hooks {
-	return Hooks{
+func taskHooks(ledgers map[string]*tasks.Ledger, planted *[]string) actions.Atlas {
+	return actions.Atlas{
 		Load: func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
 		Tasks: func(e registry.Entry) (tasks.Ledger, []string, error) {
 			if led, ok := ledgers[e.Path]; ok {
@@ -35,7 +37,7 @@ func taskHooks(ledgers map[string]*tasks.Ledger, planted *[]string) Hooks {
 			led.Tasks = append(led.Tasks, tasks.Record{Task: tasks.Task{ID: id, Path: "wiki/tasks/x.md", Title: plant.Text, Status: "planted", Priority: "normal"}})
 			return txn.Planted{Path: "wiki/tasks/x.md", ID: id}, nil
 		},
-		Refresh: func() error { return nil },
+		Refresh: func() (*registry.Index, []refresh.ProjectChange, error) { return nil, nil, nil },
 	}
 }
 
@@ -128,7 +130,7 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	if cmd == nil || launched[len(launched)-1] != "/v/course||/claude-atlas:task" {
 		t.Fatalf("c on an empty project: %v", launched)
 	}
-	none := keyV(newView(sample(), Opener{}, Hooks{}), "t")
+	none := keyV(newView(sample(), Opener{}, actions.Atlas{}), "t")
 	if none.tasks != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatal("t without hooks reports why")
 	}

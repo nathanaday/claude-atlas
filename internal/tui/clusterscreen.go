@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -26,7 +27,7 @@ const (
 )
 
 type clusterScreen struct {
-	hooks   Hooks
+	hooks   actions.Atlas
 	entry   registry.Entry
 	items   []Item
 	rows    []registry.Ref
@@ -42,7 +43,7 @@ type clusterScreen struct {
 	width   int
 }
 
-func newCluster(hooks Hooks, e registry.Entry, items []Item, width int) clusterScreen {
+func newCluster(hooks actions.Atlas, e registry.Entry, items []Item, width int) clusterScreen {
 	s := clusterScreen{hooks: hooks, entry: e, items: items, width: width}
 	s.build()
 	return s

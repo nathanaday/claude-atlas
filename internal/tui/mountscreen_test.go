@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -79,7 +80,7 @@ func TestMountsScreenMountsAndUnmounts(t *testing.T) {
 }
 
 func TestMountsScreenNeedsHooks(t *testing.T) {
-	none := keyV(newView(sample(), Opener{}, Hooks{}), "m")
+	none := keyV(newView(sample(), Opener{}, actions.Atlas{}), "m")
 	if none.mounts != nil || !strings.Contains(none.errMsg, "not available") {
 		t.Fatalf("m without hooks reports why: err=%q", none.errMsg)
 	}

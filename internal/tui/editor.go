@@ -7,64 +7,12 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nathanaday/claude-atlas/internal/capture"
+	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
-	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
-
-// Hooks connect the screens to the atlas without the screens touching disk themselves.
-// Every hook is one backend call that a CLI command also exposes.
-type Hooks struct {
-	// Load reads the registry, refreshing it first when no refresh has run yet.
-	Load func() ([]registry.Entry, error)
-	// Create makes or adopts a vault and registers it; it returns the vault's path.
-	Create func(AddVault) (string, error)
-	// Refresh reads every vault again and rewrites the registry.
-	Refresh func() error
-	// Edit changes a vault's identity file. Unregister forgets a vault the config names;
-	// the folder stays, and a vault inside the vaults directory cannot be forgotten.
-	// Edit changes a vault's identity and returns the path it sits at afterwards; a
-	// rename moves the folder, so that path may not be the one it was given.
-	Edit       func(registry.Entry, vaults.Edit) (string, error)
-	Unregister func(registry.Entry) error
-	// StagePlan says which files under a source are new to a project's vault; an empty
-	// source means the folders it ingested from before. Stage copies a plan's files into
-	// the inbox and reports the folders the vault now remembers. Sources lists them.
-	StagePlan func(registry.Entry, string) (*capture.StagePlan, error)
-	Stage     func(registry.Entry, *capture.StagePlan) (*capture.StageResult, []string, error)
-	Sources   func(registry.Entry) []string
-	// The repository calls: mount a folder, initializing git there when asked; create
-	// one; clone one from a URL; drop one; and edit its remote, its folder, or how
-	// changes land. The first three also report the folder the repository sits in.
-	AddRepo    func(registry.Entry, string, bool) (vault.Repo, string, error)
-	NewRepo    func(registry.Entry, string, string) (vault.Repo, string, error)
-	CloneRepo  func(registry.Entry, string, string) (vault.Repo, string, error)
-	RemoveRepo func(registry.Entry, string) error
-	EditRepo   func(registry.Entry, string, vaults.RepoEdit) (vault.Repo, error)
-	// The mount calls: mount a knowledge base on a project with an access and a mount name
-	// (empty means write and the knowledge base's name); unmount by knowledge base id, name,
-	// or mount name; grant a project write or read on a knowledge base; revoke by project id.
-	Mount   func(project, kb registry.Entry, access, name string) (vault.Mount, error)
-	Unmount func(project registry.Entry, target string) error
-	// EditMount changes what a mount asks for, read or write.
-	EditMount func(project registry.Entry, target, access string) (vault.Mount, error)
-	Grant     func(kb, project registry.Entry, access string) error
-	Revoke    func(kb registry.Entry, projectID string) error
-	// The cluster calls: add a knowledge base to a cluster's member list, and drop one by
-	// id or name.
-	AddMember    func(cluster, kb registry.Entry) error
-	RemoveMember func(cluster registry.Entry, target string) error
-	// Tasks reads a project's task ledger and the notes waiting in inbox/tasks/; Plant
-	// plants a task in its vault.
-	Tasks func(registry.Entry) (tasks.Ledger, []string, error)
-	Plant func(registry.Entry, tasks.Plant) (txn.Planted, error)
-	// VaultsDir is where a new vault goes by default.
-	VaultsDir string
-}
 
 type editMode int
 
@@ -125,7 +73,7 @@ func (d *draft) set(field int, v string) {
 // editor edits one vault's identity file: its name, and its tags or its scope and
 // access. It also forgets a vault the config names. It is embedded in the view.
 type editor struct {
-	hooks    Hooks
+	hooks    actions.Atlas
 	entry    registry.Entry
 	fields   []int
 	at       int
@@ -149,7 +97,7 @@ func draftOf(e registry.Entry) draft {
 	return d
 }
 
-func newEditor(hooks Hooks, e registry.Entry) editor {
+func newEditor(hooks actions.Atlas, e registry.Entry) editor {
 	text := textinput.New()
 	text.Prompt = ""
 	text.CharLimit = 300
