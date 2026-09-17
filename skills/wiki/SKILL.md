@@ -27,14 +27,11 @@ and `id`: for a project, `mounts`; for a knowledge base, `access` and
 `mounted_by`. The session hook's first line already names the kind:
 `claude-atlas project: …` or `claude-atlas knowledge base: … mounted by …`.
 
-If `status` fails because no vault is selected, stop and tell the user to run one
-of these in a terminal, then start a session inside the vault:
-
-```bash
-claude-atlas new-project               # create a project, step by step
-claude-atlas new-knowledge             # create a knowledge base, step by step
-claude-atlas adopt /path/to/vault      # an existing Obsidian or claude-obsidian vault
-```
+If `status` fails because no vault is selected, the session is outside every
+vault and every project's repository. Hand off: `atlas-project` creates a
+project, `atlas-knowledge` a knowledge base, and either adopts an existing
+Obsidian vault; `atlas` shows what exists. A new vault's session starts with
+`claude-atlas open-claude NAME`, or `cd` there and `claude`.
 
 Do not create vault files yourself. If `status` warns that an operation was
 interrupted, tell the user to run `claude-atlas recover` before anything else.
@@ -72,7 +69,11 @@ In a project, route by intent:
 | Author a Bases `.base` view | `obsidian-bases` |
 | Obsidian syntax questions | `obsidian-markdown` |
 | Reason carefully before a consequential change | `think` |
-| Mount, unmount, grant, or revoke access to a knowledge base | the CLI (`claude-atlas mount …`), not a tool |
+| See the whole atlas, refresh it, or change a setting | `atlas` |
+| Create, rename, retag, or forget a project | `atlas-project` |
+| Create a knowledge base or a cluster, or change its scope, access, or members | `atlas-knowledge` |
+| Mount, unmount, grant, or revoke access to a knowledge base | `atlas-mount` |
+| Link, clone, create, or unlink a repository, or change how changes land | `atlas-repo` |
 
 Query is read-only. Keeping an answer is a separate `save` operation the user
 asks for. Never update the hot cache merely because a session ended.
