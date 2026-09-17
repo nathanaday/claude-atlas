@@ -1161,7 +1161,7 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "List the knowledge bases the project mounts: id, name, the knowledge base's real wiki path, the mount folder, the requested and effective access, what the knowledge base is for, and its page count. Grep the real path; plan a page under a write mount like the project's own. A mount that names through came from a cluster: the project mounted that cluster, and every member is reached the same way. Read-only."}, s.mounts)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",
 		Description: "Read the vault's filing mode (generic or lyt) and the page types it files. Pass set to prepare a plan that changes it; apply that plan to make the change."}, s.mode)
-	mcp.AddTool(server, &mcp.Tool{Name: "atlas", Annotations: ro(),
+	mcp.AddTool(server, &mcp.Tool{Name: "atlas",
 		Description: "Read the whole atlas: every vault with its kind, path, tags or scope, access, mounts with effective access, repositories and their change policy, members, clusters, who mounts it, and state; the folders the atlas cannot read; and the settings. Pass refresh to also rewrite the registry and adopt repositories waiting under repos/."}, s.atlasTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "vault",
 		Description: "Create or adopt a vault, edit its name, tags, scope, or access, or forget one the atlas lists (the folder stays); action is create, adopt, edit, or forget. A create may mount a knowledge base or gather members. State the change and get a yes before calling."}, s.vaultTool)
