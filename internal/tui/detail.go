@@ -117,7 +117,8 @@ func boxLines(e registry.Entry) []string {
 	s := e.State
 	if e.Kind == vault.Knowledge {
 		count := pagesText(s) + " pages"
-		if n := len(e.Members); n > 0 {
+		if vaults.IsCluster(e) {
+			n := len(e.Members)
 			count = fmt.Sprintf("cluster · %d member%s", n, plural(n))
 		}
 		return []string{
@@ -196,7 +197,8 @@ func mountedByLines(e registry.Entry, expanded bool) []string {
 		if n := len(e.MountedBy); n > 0 {
 			text = projectSt.Render(fmt.Sprintf("%d project%s", n, plural(n)))
 		}
-		if n := len(e.Members); n > 0 {
+		if vaults.IsCluster(e) {
+			n := len(e.Members)
 			text += dim.Render(fmt.Sprintf(" · %d member%s", n, plural(n)))
 		}
 		if len(stale) > 0 {

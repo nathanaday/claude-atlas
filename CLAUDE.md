@@ -86,8 +86,7 @@ internal/hooks/         session-start (the kind line for a vault or a project's 
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
 internal/registry/      the scan for identity files, the resolved entries, the registry state file
 internal/refresh/       derive one vault's state, rewrite the registry, list a vault's signals
-internal/vaults/        create, adopt, register, edit identity files, link and create repositories
-internal/vaults/clusters.go   add and remove a cluster's members
+internal/vaults/        create, adopt, register, edit identity files, link and create repositories, add and remove a cluster's members
 internal/links/         git init, create and clone, change policies, the facts git reports
 internal/tui/           Bubble Tea screens: the view (a tab per kind, boards of boxes with connectors), the vault editor, the repositories screen, tasks, ingest, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart

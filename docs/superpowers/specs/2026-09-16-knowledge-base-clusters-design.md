@@ -256,6 +256,10 @@ The add screen's `Mounts` step lists clusters alongside knowledge bases.
   than a skill reading scopes.
 - **`promote`.** Moving a page from one member to another, or from a member up
   into the cluster.
+- **A mount names its cluster by name.** `Mount.Through` holds the cluster's
+  display name. Two clusters with one display name, both mounted on one
+  project, would have their member lists merged in the view's connector
+  column. A `ThroughID` would settle it.
 
 ## Decisions
 

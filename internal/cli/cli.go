@@ -2916,8 +2916,9 @@ func (e *env) doctor(args []string) (int, error) {
 		if en.Kind != vault.Knowledge {
 			continue
 		}
-		// Only a hand-edited identity file names a member that is not a knowledge base or
-		// is a cluster itself; the commands refuse both.
+		// `cluster add` refuses a member that is not a knowledge base, a member that is a
+		// cluster, and a cluster that is already a member. Only a hand-edited identity file
+		// produces those states, so doctor reports them.
 		drop := "; run `claude-atlas cluster remove " + en.Name + " "
 		for _, m := range en.Members {
 			member := ix.ByID(m.ID)

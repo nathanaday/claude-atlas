@@ -132,3 +132,30 @@ func TestAddAndRemoveMembers(t *testing.T) {
 		t.Fatalf("remove from a project: %v", err)
 	}
 }
+
+// A knowledge base that is already a member takes no members of its own, so no command
+// nests one cluster inside another.
+func TestAMemberTakesNoMembers(t *testing.T) {
+	cfg, all := clusterFixture(t)
+	p3, software, people := all["p3"], all["software"], all["people"]
+
+	if err := AddMember(p3, software, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	software = refreshEntry(t, cfg, software.ID)
+	if len(software.Clusters) != 1 || software.Clusters[0].Name != "p3" {
+		t.Fatalf("clusters on the member: %+v", software.Clusters)
+	}
+
+	err := AddMember(software, people, identityNow)
+	if err == nil || !strings.Contains(err.Error(), "is a member of p3") {
+		t.Fatalf("a member taking a member: %v", err)
+	}
+	v, err := vault.Open(software.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Config.Members) != 0 {
+		t.Fatalf("the member's identity file changed: %+v", v.Config.Members)
+	}
+}

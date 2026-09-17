@@ -16,7 +16,8 @@ func IsCluster(e registry.Entry) bool { return e.Kind == vault.Knowledge && len(
 
 // AddMember records kb in cluster's identity file. A project that mounts the cluster
 // reaches the new member at its next refresh. It refuses a member that is not a knowledge
-// base, a cluster as a member, and a knowledge base the cluster already holds.
+// base, a cluster as a member, a cluster that is itself a member, and a knowledge base the
+// cluster already holds.
 func AddMember(cluster, kb registry.Entry, now time.Time) error {
 	if cluster.Kind != vault.Knowledge {
 		return fmt.Errorf("%s is not a knowledge base", cluster.Name)
@@ -29,6 +30,9 @@ func AddMember(cluster, kb registry.Entry, now time.Time) error {
 	}
 	if IsCluster(kb) {
 		return fmt.Errorf("%s is a cluster; a cluster does not hold another cluster yet", kb.Name)
+	}
+	if len(cluster.Clusters) > 0 {
+		return fmt.Errorf("%s is a member of %s; a cluster does not hold another cluster yet", cluster.Name, cluster.Clusters[0].Name)
 	}
 	for _, m := range cluster.Members {
 		if m.ID == kb.ID {
@@ -57,7 +61,8 @@ func RemoveMember(cluster registry.Entry, target string, now time.Time) error {
 		var keep []vault.Member
 		removed := false
 		for _, m := range c.Members {
-			if m.ID == target || strings.EqualFold(m.Name, target) {
+			// Two members may share a display name. Drop the first match only.
+			if !removed && (m.ID == target || strings.EqualFold(m.Name, target)) {
 				removed = true
 				continue
 			}
