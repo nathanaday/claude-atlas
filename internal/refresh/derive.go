@@ -125,6 +125,16 @@ func (c ProjectChange) any() bool {
 	return len(c.Created)+len(c.Repaired)+len(c.Removed)+len(c.Missing)+len(c.Adopted) > 0 || c.Error != ""
 }
 
+// deriveStates fills in every entry's derived state, as one pass over the scan.
+func deriveStates(ix *registry.Index, cfg *home.Config, today time.Time) string {
+	generatedAt := NowUTC()
+	newDays := cfg.NewDays()
+	for i := range ix.Entries {
+		ix.Entries[i].State = Derive(ix.Entries[i], today, generatedAt, newDays)
+	}
+	return generatedAt
+}
+
 // Registry scans, derives every readable entry, writes the registry file, and returns the
 // entries. With ensure, it first links every git repository waiting under a project's
 // repos/ and recreates its mount symlinks, then reports what each project needed; one
@@ -166,11 +176,7 @@ func Registry(h home.Home, cfg *home.Config, stateDir string, today time.Time, e
 			}
 		}
 	}
-	generatedAt := NowUTC()
-	newDays := cfg.NewDays()
-	for i := range ix.Entries {
-		ix.Entries[i].State = Derive(ix.Entries[i], today, generatedAt, newDays)
-	}
+	generatedAt := deriveStates(ix, cfg, today)
 	if err := os.RemoveAll(stateDir); err != nil {
 		return nil, nil, nil, err
 	}
@@ -267,10 +273,6 @@ func Derived(cfg *home.Config, today time.Time) (*registry.Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	generatedAt := NowUTC()
-	newDays := cfg.NewDays()
-	for i := range ix.Entries {
-		ix.Entries[i].State = Derive(ix.Entries[i], today, generatedAt, newDays)
-	}
+	deriveStates(ix, cfg, today)
 	return ix, nil
 }
