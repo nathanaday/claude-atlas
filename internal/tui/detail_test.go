@@ -68,10 +68,11 @@ func TestBoxLinesByKind(t *testing.T) {
 	if lines := boxLines(bad); lines[0] != "old-notes" || lines[1] != "v1 vault; run claude-atlas adopt" {
 		t.Fatalf("problem box %q", lines)
 	}
-	// A cluster names its members where a knowledge base names its pages.
+	// A cluster counts its members before its pages, and its name wears the mark.
 	cluster := registry.Entry{Kind: vault.Knowledge, Name: "papers", Path: "/v/papers", State: &registry.State{Heat: "warm", Pages: &four},
 		Members: []registry.Ref{{ID: "a", Name: "ai-ml"}, {ID: "b", Name: "notes"}}}
-	if lines := boxLines(cluster); lines[1] != "cluster · 2 members · new" {
+	lines := boxLines(cluster)
+	if lines[0] != "🌤️ "+clusterMark+"papers   open" || lines[1] != "2 members · 4 pages · new" {
 		t.Fatalf("cluster box %q", lines)
 	}
 }

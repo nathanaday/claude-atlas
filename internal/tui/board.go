@@ -8,6 +8,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // boardKind says which vaults a board lists.
@@ -35,8 +36,11 @@ type board struct {
 	cursor   int             // an index into items; len(items) is the end marker
 	offset   int
 	width    int
-	rows     []boardRow
-	lines    []string
+	// hasCluster is set when a knowledge base here gathers others, which is when the
+	// board splits into Clusters and Knowledge bases.
+	hasCluster bool
+	rows       []boardRow
+	lines      []string
 }
 
 func newBoard(kind boardKind, items []Item, width int) board {
@@ -56,25 +60,39 @@ func (b board) belongs(e registry.Entry) bool {
 	return e.Error == "" && e.Kind == vault.Project
 }
 
-// group is the header a project sits under: its first tag. Other vaults have none.
-func group(e registry.Entry) string {
-	if e.Error == "" && e.Kind == vault.Project && len(e.Tags) > 0 {
+// group is the header a vault sits under: a project's first tag, and on the Knowledge
+// board, whether it gathers others. The Knowledge board files nothing when no cluster is
+// there to tell apart.
+func (b board) group(e registry.Entry) string {
+	if e.Error != "" {
+		return ""
+	}
+	if b.kind == boardKnowledge {
+		if !b.hasCluster {
+			return ""
+		}
+		if vaults.IsCluster(e) {
+			return "Clusters"
+		}
+		return "Knowledge bases"
+	}
+	if e.Kind == vault.Project && len(e.Tags) > 0 {
 		return e.Tags[0]
 	}
 	return ""
 }
 
-// less orders a board: untagged projects first, then the tag groups by name, and names
-// within a group.
-func less(a, b registry.Entry) bool {
-	ga, gb := group(a), group(b)
-	if ga != gb {
-		if ga == "" || gb == "" {
-			return ga == ""
+// less orders a board: ungrouped vaults first, then the groups by name, and names within
+// a group. Clusters come first on the Knowledge board because "Clusters" sorts first.
+func (b board) less(x, y registry.Entry) bool {
+	gx, gy := b.group(x), b.group(y)
+	if gx != gy {
+		if gx == "" || gy == "" {
+			return gx == ""
 		}
-		return ga < gb
+		return gx < gy
 	}
-	return entryName(a) < entryName(b)
+	return entryName(x) < entryName(y)
 }
 
 // reload takes the vaults again, drops the expansions of vaults that are gone, keeps the
@@ -92,7 +110,13 @@ func (b *board) reload(items []Item) {
 			b.items = append(b.items, &items[i])
 		}
 	}
-	sort.SliceStable(b.items, func(i, j int) bool { return less(b.items[i].Entry, b.items[j].Entry) })
+	b.hasCluster = false
+	for _, it := range b.items {
+		if vaults.IsCluster(it.Entry) {
+			b.hasCluster = true
+		}
+	}
+	sort.SliceStable(b.items, func(i, j int) bool { return b.less(b.items[i].Entry, b.items[j].Entry) })
 	for path := range b.expanded {
 		if b.find(path) < 0 {
 			delete(b.expanded, path)
@@ -176,12 +200,21 @@ func (b *board) collapseAll() bool {
 // borders not counted.
 func boxWidth(width int) int { return min(40, max(26, width/2-4)) }
 
-// labelWidth is what is left for a connector's label after the indent, the box with
-// its borders, and the arrow.
-func (b board) labelWidth() int {
+// entryWidth is the box a vault takes: a cluster's is wider, so it reads as the bigger
+// thing in the column before its name is read.
+func (b board) entryWidth(e registry.Entry) int {
+	if vaults.IsCluster(e) {
+		return min(b.width/2, boxWidth(b.width)+6)
+	}
+	return boxWidth(b.width)
+}
+
+// labelWidth is what is left for a connector's label beside a box of that width, after
+// the indent, the borders, and the arrow.
+func (b board) labelWidth(box int) int {
 	// One column stays free: a connector that filled the screen would wrap onto a line
 	// of its own and push the frame past the last row.
-	return max(12, b.width-3-(boxWidth(b.width)+2)-len([]rune(arrowOut)))
+	return max(12, b.width-3-(box+2)-len([]rune(arrowOut)))
 }
 
 // layout renders the boxes into lines and records the span of each vault. A group's
@@ -192,10 +225,10 @@ func (b *board) layout() {
 	last := ""
 	for i, it := range b.items {
 		start := len(b.lines)
-		if g := group(it.Entry); g != "" && g != last {
+		if g := b.group(it.Entry); g != "" && g != last {
 			b.lines = append(b.lines, dim.Render(g))
 		}
-		last = group(it.Entry)
+		last = b.group(it.Entry)
 		b.render(it, i == b.cursor, start)
 	}
 	if len(b.lines) > 0 {
@@ -209,7 +242,7 @@ func (b *board) layout() {
 
 // side is the connector column beside a box: a project's mounts, or the projects that
 // mount a knowledge base. A problem has none.
-func (b board) side(e registry.Entry) []string {
+func (b board) side(e registry.Entry, label int) []string {
 	switch b.kind {
 	case boardProjects:
 		if len(e.Mounts) == 0 {
@@ -230,10 +263,10 @@ func (b board) side(e registry.Entry) []string {
 			}
 			name := b.kbName(m)
 			members := through[name]
-			out = append(out, mountLine(e, m, name, len(members) > 0, b.labelWidth()))
+			out = append(out, mountLine(e, m, name, len(members) > 0, label))
 			if len(members) > 0 {
 				text := "through " + name + ": " + strings.Join(members, ", ")
-				out = append(out, noArrow+dim.Render(clip(text, b.labelWidth())))
+				out = append(out, noArrow+dim.Render(clip(text, label)))
 			}
 		}
 		return out
@@ -261,11 +294,12 @@ func (b board) kbName(m registry.Mount) string {
 func (b *board) render(it *Item, selected bool, start int) {
 	e := it.Entry
 	content := boxLines(e)
-	side := b.side(e)
+	width := b.entryWidth(e)
+	side := b.side(e, b.labelWidth(width))
 	for len(content) < len(side) {
 		content = append(content, "")
 	}
-	box := boxStyle(e.Kind, selected).Width(boxWidth(b.width)).Render(strings.Join(content, "\n"))
+	box := entryBox(e, selected).Width(width).Render(strings.Join(content, "\n"))
 	// The view indents every line by two, so a line stops two short of the screen. One
 	// that reached the edge would wrap and push the frame past the last row.
 	narrow := lipgloss.NewStyle().MaxWidth(max(10, b.width-2))

@@ -336,7 +336,10 @@ tab per kind. The Projects tab lists every project as a box with a dashed line
 to each knowledge base it mounts and the access it has there. The Knowledge tab
 lists every knowledge base with how many projects mount it; Enter turns the
 count into one line per project. The arrow always points at the knowledge
-base. The row under the cursor is the colored one; every other row is plain.
+base. The row under the cursor is the colored one; every other row is plain. A
+cluster stands apart: it wears a ◈ before its name in its own color, takes a
+double rule and a wider box, and the tab files every cluster above the rest
+under a `Clusters` header, with the plain ones under `Knowledge bases`.
 The Tasks tab is every project's open tasks. A Problems tab appears when
 the scan found a vault it could not read. Enter on any vault expands it in
 place: path, created, a knowledge base's scope, access, and grants, the vault

@@ -5,7 +5,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // muted replaces gray for secondary text; gray is unreadable on dark terminals.
@@ -16,7 +18,12 @@ const muted = lipgloss.Color("#FFC600")
 const (
 	projectColor   = lipgloss.Color("12")
 	knowledgeColor = lipgloss.Color("2")
+	// A cluster is a knowledge base that gathers others, so it wears a color of its own.
+	clusterColor = lipgloss.Color("13")
 )
+
+// clusterMark leads a cluster's name: a facet, for a vault that holds others.
+const clusterMark = "◈ "
 
 var (
 	title       = lipgloss.NewStyle().Bold(true)
@@ -35,6 +42,10 @@ var (
 	boxSelSt    = boxSt.BorderForeground(projectColor)
 	projectSt   = lipgloss.NewStyle().Foreground(projectColor).Bold(true)
 	knowledgeSt = lipgloss.NewStyle().Foreground(knowledgeColor).Bold(true)
+	clusterSt   = lipgloss.NewStyle().Foreground(clusterColor).Bold(true)
+	// clusterBoxSt is a cluster's box: a double rule, so it reads as a container at a
+	// glance and not only by its name.
+	clusterBoxSt = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(muted).Padding(0, 1)
 	// captionSt is the sentence under the tab bar: a quiet gray aside, not a second row
 	// of keys.
 	captionSt = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
@@ -59,6 +70,25 @@ func boxStyle(k vault.Kind, selected bool) lipgloss.Style {
 		return boxSt.BorderForeground(kindColor(k))
 	}
 	return boxSt
+}
+
+// entryStyle renders a vault's name: its kind's color, or a cluster's own.
+func entryStyle(e registry.Entry) lipgloss.Style {
+	if vaults.IsCluster(e) {
+		return clusterSt
+	}
+	return kindStyle(e.Kind)
+}
+
+// entryBox is a vault's box: a cluster takes the double rule and its own color.
+func entryBox(e registry.Entry, selected bool) lipgloss.Style {
+	if !vaults.IsCluster(e) {
+		return boxStyle(e.Kind, selected)
+	}
+	if selected {
+		return clusterBoxSt.BorderForeground(clusterColor)
+	}
+	return clusterBoxSt
 }
 
 // onFill is the text color that reads on a filled tab: dark on the light fills, white on

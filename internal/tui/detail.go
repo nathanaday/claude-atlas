@@ -113,13 +113,14 @@ func boxLines(e registry.Entry) []string {
 	if e.Error != "" {
 		return []string{filepath.Base(e.Path), errSt.Render(e.Error)}
 	}
-	name := kindStyle(e.Kind).Render(entryName(e))
+	name := entryStyle(e).Render(entryName(e))
 	s := e.State
 	if e.Kind == vault.Knowledge {
 		count := pagesText(s) + " pages"
 		if vaults.IsCluster(e) {
 			n := len(e.Members)
-			count = fmt.Sprintf("cluster · %d member%s", n, plural(n))
+			count = fmt.Sprintf("%d member%s · %s pages", n, plural(n), pagesText(s))
+			name = clusterSt.Render(clusterMark) + name
 		}
 		return []string{
 			heatMark(s) + " " + name + "   " + dim.Render(accessOf(e)),

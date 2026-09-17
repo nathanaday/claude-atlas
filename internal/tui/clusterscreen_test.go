@@ -225,15 +225,20 @@ func TestTheKnowledgeTabShowsAClusterAndItsMembers(t *testing.T) {
 	items[4].Entry.Clusters = []registry.Ref{{ID: "id-papers", Name: "papers"}}
 	v := findVault(t, newView(items, Opener{}, Hooks{}), "papers")
 	out := v.View()
-	for _, want := range []string{"◀╌╌╌╌ 1 project · 1 member", "cluster · 1 member"} {
+	for _, want := range []string{"◀╌╌╌╌ 1 project · 1 member", clusterMark + "papers", "1 member · 4 pages"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	// The member count takes the page count's place; the ordinary knowledge base keeps it.
-	if lines := strings.Split(out, "\n"); !strings.Contains(boxLine(t, lines, "papers"), "cluster · 1 member") ||
-		strings.Contains(boxLine(t, lines, "papers"), "pages") || !strings.Contains(boxLine(t, lines, "ai-ml"), "4 pages") {
-		t.Errorf("a cluster's box names its members in place of its pages:\n%s", out)
+	// A cluster counts its members first; an ordinary knowledge base counts only pages.
+	lines := strings.Split(out, "\n")
+	if !strings.Contains(boxLine(t, lines, "papers"), "1 member · 4 pages") || strings.Contains(boxLine(t, lines, "ai-ml"), "member") {
+		t.Errorf("a cluster's box counts its members:\n%s", out)
+	}
+	// The Knowledge tab files the cluster above the rest, under its own header.
+	clusters, bases := strings.Index(out, "Clusters"), strings.Index(out, "Knowledge bases")
+	if clusters < 0 || bases < 0 || clusters > bases || clusters > strings.Index(out, "papers") {
+		t.Errorf("clusters come first, under their own header:\n%s", out)
 	}
 	// Expanded, the connectors name the project that mounts it and then the member.
 	v = pressV(v, tea.KeyEnter)
