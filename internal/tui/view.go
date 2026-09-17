@@ -563,14 +563,6 @@ func (v view) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	cmd = v.wrote(path, verb+choice.Name)
 	v.reload(path)
-	// A cluster is a knowledge base until it has a member, so the members screen opens on
-	// the new vault: that is where a member is added, and it says what a cluster is.
-	if choice.Cluster {
-		if it := v.current(); it != nil && it.Entry.Path == path {
-			next, open := v.openCluster(it)
-			return next, tea.Batch(cmd, open)
-		}
-	}
 	return v, cmd
 }
 
@@ -626,6 +618,9 @@ func (v view) updateEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case editRemoved:
 		cmd = v.wrote("", fmt.Sprintf("forgot %s; the vault is still on disk", ed.entry.Name))
 		v.reload("")
+	case editMembers:
+		v.edit = nil
+		return v.openCluster(&Item{Entry: ed.entry})
 	}
 	v.edit = nil
 	return v, cmd

@@ -22,7 +22,7 @@ one command, so scripts and muscle memory both work:
 | `e` edit a vault, `s` save | `edit NAME --…` |
 | `e` then `r` forget | `remove NAME` |
 | `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
-| `C` new cluster; `M` members, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` |
+| `C` new cluster; `e` then Enter on `Members`, or `M`: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` |
 | `R` refresh | `refresh` |
 | `←` `→` switch tabs; `h` shows every key | — |
 | — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
@@ -519,11 +519,16 @@ claude-atlas cluster p3
 claude-atlas cluster remove p3 p3-people
 ```
 
-In `view`, `C` makes one: the add screen opens with its kind on `cluster`, asks
-the same questions a knowledge base does, and then opens the new vault's
-members screen, where `a` adds one. The kind step cycles through project,
-knowledge base, and cluster, so `N` reaches it too. A cluster is an ordinary
-knowledge base until it has a member.
+In `view`, `C` makes one: the add screen opens with its kind on `cluster` and
+asks the same questions a knowledge base does, plus a `Members` step that
+lists every knowledge base, where `↑` `↓` move and space picks. The kind step
+cycles through project, knowledge base, and cluster, so `N` reaches it too.
+
+To change what a cluster gathers afterwards, press `e` on it and Enter on the
+`Members` row, or press `M` on it; both open the members screen, where `a`
+adds one from a list and `x` drops the one under the cursor. A cluster is an
+ordinary knowledge base until it has a member, so a knowledge base becomes one
+the same way.
 
 The project's identity file records the cluster, once. The symlinks under
 `kb/` are derived, so `mount` and `refresh` make one per member beside the

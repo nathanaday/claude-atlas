@@ -28,10 +28,11 @@ type AddVault struct {
 	// MountID is the knowledge base a new project mounts once it exists; "" mounts none.
 	// The mount asks for write, and the mounts screen changes that.
 	MountID string
-	// Cluster is set when the user asked for a knowledge base that gathers others. The
-	// vault is an ordinary knowledge base until it has a member, so this only tells the
-	// view to open the new vault's members screen.
-	Cluster bool
+	// Cluster is set when the user asked for a knowledge base that gathers others, and
+	// MemberIDs are the knowledge bases it gathers. The vault is an ordinary knowledge
+	// base until it has a member.
+	Cluster   bool
+	MemberIDs []string
 }
 
 type step int
@@ -40,8 +41,9 @@ const (
 	stepKind step = iota
 	stepName
 	stepMode
-	stepFacts // tags for a project, scope for a knowledge base
-	stepMount // the knowledge base a new project mounts, or none
+	stepFacts   // tags for a project, scope for a knowledge base
+	stepMembers // the knowledge bases a new cluster gathers
+	stepMount   // the knowledge base a new project mounts, or none
 	stepPath
 	stepConfirm
 )
@@ -67,7 +69,9 @@ type model struct {
 	// others. It changes what the screen says, not what is written.
 	cluster   bool
 	kbs       []registry.Entry
-	kb        int // an index into kbs, or len(kbs) for no mount
+	kb        int             // an index into kbs, or len(kbs) for no mount
+	member    int             // an index into kbs: the member the cursor stands on
+	chosen    map[string]bool // the knowledge bases a new cluster gathers, by id
 	err       string
 	done      bool
 	cancelled bool
@@ -96,10 +100,41 @@ func (m model) mountChoice() *registry.Entry {
 // applies says whether a step belongs in this run: only a new project with a knowledge
 // base to reach is asked what to mount.
 func (m model) applies(s step) bool {
-	if s == stepMount {
+	switch s {
+	case stepMount:
 		return !m.adopting && m.kind == vault.Project && len(m.kbs) > 0
+	case stepMembers:
+		return !m.adopting && m.cluster && len(m.kbs) > 0
 	}
 	return true
+}
+
+// members are the knowledge bases the new cluster gathers, in the order they are listed.
+func (m model) members() []registry.Entry {
+	var out []registry.Entry
+	for _, kb := range m.kbs {
+		if m.chosen[kb.ID] {
+			out = append(out, kb)
+		}
+	}
+	return out
+}
+
+// memberAt is the knowledge base the members step stands on.
+func (m model) memberAt() *registry.Entry {
+	if m.member < 0 || m.member >= len(m.kbs) {
+		return nil
+	}
+	return &m.kbs[m.member]
+}
+
+// memberNames lists what the cluster gathers, for the step's answer line.
+func (m model) memberNames() string {
+	var names []string
+	for _, kb := range m.members() {
+		names = append(names, kb.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 func newInput(placeholder string) textinput.Model {
@@ -121,13 +156,14 @@ func newClusterModel(vaultsDir string) model {
 func newModel(vaultsDir string, kind vault.Kind) model {
 	m := model{
 		vaultsDir: vaultsDir,
-		steps:     []step{stepKind, stepName, stepMode, stepFacts, stepMount, stepPath, stepConfirm},
+		steps:     []step{stepKind, stepName, stepMode, stepFacts, stepMembers, stepMount, stepPath, stepConfirm},
 		kind:      kind,
 		mode:      string(vault.Generic),
 		name:      newInput("sensor-triage"),
 		tags:      newInput("usc, fall (optional)"),
 		scope:     newInput("one or two sentences on what it covers (optional)"),
 		path:      newPathField("", 60),
+		chosen:    map[string]bool{},
 	}
 	return m
 }
@@ -300,6 +336,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isKey && (key.Type == tea.KeyLeft || key.Type == tea.KeyRight || key.Type == tea.KeySpace) {
 			m.toggle(key.Type != tea.KeyLeft)
 		}
+	case stepMembers:
+		if isKey {
+			switch key.Type {
+			case tea.KeyUp, tea.KeyLeft:
+				if m.member > 0 {
+					m.member--
+				}
+			case tea.KeyDown, tea.KeyRight:
+				if m.member < len(m.kbs)-1 {
+					m.member++
+				}
+			case tea.KeySpace:
+				if kb := m.memberAt(); kb != nil {
+					m.chosen[kb.ID] = !m.chosen[kb.ID]
+				}
+			}
+		}
 	case stepMount:
 		if isKey {
 			switch key.Type {
@@ -371,6 +424,11 @@ func (m model) result() *AddVault {
 		return nil
 	}
 	out := &AddVault{Kind: m.kind, Name: m.vaultName(), Path: m.target(), Mode: m.mode, Adopt: m.adopting, Cluster: m.cluster}
+	if m.applies(stepMembers) {
+		for _, kb := range m.members() {
+			out.MemberIDs = append(out.MemberIDs, kb.ID)
+		}
+	}
 	if m.kind == vault.Knowledge {
 		out.Scope = strings.TrimSpace(m.scope.Value())
 	} else {
@@ -453,6 +511,32 @@ func (m model) content(s step) string {
 			return dim.Render(m.mode)
 		}
 		return m.mode
+	case stepMembers:
+		if at {
+			var lines []string
+			for i, kb := range m.kbs {
+				mark, name := "○ ", kb.Name
+				if m.chosen[kb.ID] {
+					mark = "● "
+				}
+				line := "  " + mark + name
+				if i == m.member {
+					line = "▸ " + mark + selSt.Render(name)
+				}
+				if i > 0 {
+					line = fieldPad + line
+				}
+				lines = append(lines, line)
+			}
+			return strings.Join(lines, "\n")
+		}
+		if !done {
+			return dim.Render("the knowledge bases this cluster gathers")
+		}
+		if names := m.memberNames(); names != "" {
+			return names
+		}
+		return dim.Render("none yet; press M on the cluster to add one")
 	case stepMount:
 		name, hint := "none", "this project reaches no knowledge base yet"
 		if kb := m.mountChoice(); kb != nil {
@@ -531,6 +615,8 @@ func stepLabel(s step, kind vault.Kind) string {
 		return "Name"
 	case stepMode:
 		return "Mode"
+	case stepMembers:
+		return "Members"
 	case stepMount:
 		return "Mounts"
 	case stepFacts:
@@ -563,7 +649,7 @@ func (m model) View() string {
 		case m.adopting:
 			verb = "adopt this vault"
 		case m.cluster:
-			verb = "create this cluster, then choose its members"
+			verb = "create this cluster"
 		}
 		b.WriteString("  " + rule.Render(strings.Repeat("─", 56)) + "\n")
 		b.WriteString("  " + label.Render("Vault") + value.Render(home.Display(m.target())) + "\n")
@@ -576,6 +662,8 @@ func (m model) View() string {
 		hints += " · ←→ project, knowledge base, or cluster"
 	case stepMode:
 		hints += " · ←→ generic or lyt"
+	case stepMembers:
+		hints += " · ↑↓ move · space picks one"
 	case stepMount:
 		hints += " · ←→ which knowledge base"
 	case stepPath:

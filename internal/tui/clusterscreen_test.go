@@ -6,26 +6,20 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
-	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
-// M on a knowledge base opens its members: a picker adds one, x drops one, and the
-// knowledge base's own identity file is what changes.
-// C makes a cluster: the add screen opens on the third kind, and the new vault's members
-// screen opens the moment it exists, which is where a member is added.
-func TestCNewClusterLandsOnItsMembers(t *testing.T) {
+// C makes a cluster: the add screen opens on the third kind and asks which knowledge
+// bases it gathers, so the members are chosen while it is created.
+func TestCNewClusterPicksItsMembers(t *testing.T) {
 	cfg, _, hooks := atlasFixture(t)
-	// The add screen needs a Create; this one writes the vault the way the CLI does.
+	makeVault(t, cfg, vault.Knowledge, "notes", nil)
+	var got []AddVault
 	hooks.Create = func(c AddVault) (string, error) {
+		got = append(got, c)
 		if _, err := vault.Init(c.Path, vault.Options{Kind: c.Kind, Name: c.Name}, testNow); err != nil {
 			return "", err
-		}
-		if c.Scope != "" {
-			_, err := vaults.EditIdentity(home.Home{}, cfg, registry.Entry{Path: c.Path, Kind: c.Kind}, vaults.Edit{Scope: &c.Scope}, testNow)
-			return c.Path, err
 		}
 		return c.Path, nil
 	}
@@ -43,8 +37,7 @@ func TestCNewClusterLandsOnItsMembers(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	// The kind cycles both ways: left from cluster is a knowledge base, and right wraps
-	// round to a project.
+	// The kind cycles both ways: left from cluster is a knowledge base, right wraps round.
 	v = pressV(v, tea.KeyLeft)
 	if v.add.cluster || v.add.kind != vault.Knowledge {
 		t.Fatalf("left from cluster: kind=%q cluster=%v", v.add.kind, v.add.cluster)
@@ -54,45 +47,96 @@ func TestCNewClusterLandsOnItsMembers(t *testing.T) {
 		t.Fatalf("right from cluster wraps to a project: kind=%q cluster=%v", v.add.kind, v.add.cluster)
 	}
 	v = pressV(v, tea.KeyRight, tea.KeyRight) // back to cluster
-	if !v.add.cluster {
-		t.Fatalf("back to cluster: %+v", v.add)
-	}
 
 	v = pressV(v, tea.KeyEnter) // kind
 	v = typeV(v, "p3")
 	v = pressV(v, tea.KeyEnter, tea.KeyEnter) // name, mode
 	v = typeV(v, "The ecosystem.")
-	v = pressV(v, tea.KeyEnter, tea.KeyEnter) // scope, path
-	if !strings.Contains(v.View(), "create this cluster, then choose its members") {
-		t.Fatalf("the confirm line:\n%s", v.View())
-	}
-	v = pressV(v, tea.KeyEnter) // confirm
+	v = pressV(v, tea.KeyEnter) // scope
 
-	if v.add != nil || !v.changed {
-		t.Fatalf("the cluster should be made: add=%v changed=%v err=%q", v.add, v.changed, v.errMsg)
+	// The members step lists the knowledge bases, and space picks one.
+	if v.add.step() != stepMembers {
+		t.Fatalf("the members step should follow the scope: step=%d", v.add.step())
 	}
-	if v.cluster == nil {
-		t.Fatalf("the members screen should open on it: err=%q\n%s", v.errMsg, v.View())
-	}
-	if out := v.View(); !strings.Contains(out, "p3   members") || !strings.Contains(out, "no members yet") {
-		t.Fatalf("it lands on the new cluster's members:\n%s", out)
-	}
-	// It is an ordinary knowledge base until it has one, and the picker offers them.
-	made := entryNamed(t, cfg, "p3")
-	if made.Kind != vault.Knowledge || len(made.Members) != 0 || made.Scope != "The ecosystem." {
-		t.Fatalf("identity file: %+v", made)
-	}
-	v = keyV(v, "a")
-	if v.cluster.mode != clusterPick || len(v.cluster.picks) == 0 {
-		t.Fatalf("a lists what it may gather: mode=%d picks=%+v", v.cluster.mode, v.cluster.picks)
-	}
-	for _, e := range v.cluster.picks {
-		if e.Name == "p3" {
-			t.Fatal("a cluster is not its own member")
+	out = v.View()
+	for _, want := range []string{"Members", "ai-ml", "notes", "space picks one"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the members step missing %q:\n%s", want, out)
 		}
+	}
+	at := -1
+	for i, kb := range v.add.kbs {
+		if kb.Name == "notes" {
+			at = i
+		}
+	}
+	if at < 0 {
+		t.Fatalf("notes should be listed: %+v", v.add.kbs)
+	}
+	for i := 0; i < at; i++ {
+		v = pressV(v, tea.KeyDown)
+	}
+	v = pressV(v, tea.KeySpace)
+	if names := v.add.memberNames(); names != "notes" {
+		t.Fatalf("space picks the one under the cursor: %q", names)
+	}
+	v = pressV(v, tea.KeySpace)
+	if v.add.memberNames() != "" {
+		t.Fatal("space again drops it")
+	}
+	v = pressV(v, tea.KeySpace, tea.KeyEnter) // pick it again, then move on
+	v = pressV(v, tea.KeyEnter)               // path
+	v = pressV(v, tea.KeyEnter)               // confirm
+
+	if v.add != nil || len(got) != 1 {
+		t.Fatalf("create: add=%v got=%+v err=%q", v.add, got, v.errMsg)
+	}
+	c := got[0]
+	wanted := entryNamed(t, cfg, "notes").ID
+	if c.Kind != vault.Knowledge || !c.Cluster || c.Scope != "The ecosystem." || len(c.MemberIDs) != 1 || c.MemberIDs[0] != wanted {
+		t.Fatalf("the choice carries the members: %+v", c)
 	}
 }
 
+// A knowledge base's editor reaches its members: e, then Enter on the Members row.
+func TestTheEditorOpensTheMembers(t *testing.T) {
+	cfg, _, hooks := atlasFixture(t)
+	makeVault(t, cfg, vault.Knowledge, "notes", nil)
+	v := keyV(findVault(t, openView(t, hooks), "ai-ml"), "e")
+	if v.edit == nil {
+		t.Fatalf("e should open the editor: err=%q", v.errMsg)
+	}
+	out := v.View()
+	for _, want := range []string{"Members", "none; this is an ordinary knowledge base", "Enter on Members opens them"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the editor missing %q:\n%s", want, out)
+		}
+	}
+	// Down from Name to Scope, Access, Members.
+	v = pressV(v, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyEnter)
+	if v.edit != nil || v.cluster == nil {
+		t.Fatalf("Enter on Members opens the members screen: edit=%v cluster=%v err=%q", v.edit, v.cluster, v.errMsg)
+	}
+	if !strings.Contains(v.View(), "ai-ml   members") {
+		t.Fatalf("it opens on this knowledge base:\n%s", v.View())
+	}
+	// A member added there shows on the editor's row afterwards.
+	v = keyV(v, "a")
+	for v.cluster.picks[v.cluster.pick].Name != "notes" {
+		v = pressV(v, tea.KeyDown)
+	}
+	v = pressV(v, tea.KeyEnter, tea.KeyEsc)
+	v = keyV(findVault(t, v, "ai-ml"), "e")
+	if out := v.View(); !strings.Contains(out, "notes") {
+		t.Fatalf("the Members row names what it gathers:\n%s", out)
+	}
+	if kb := entryNamed(t, cfg, "ai-ml"); len(kb.Members) != 1 || kb.Members[0].Name != "notes" {
+		t.Fatalf("identity file: %+v", kb.Members)
+	}
+}
+
+// M on a knowledge base opens its members: a picker adds one, x drops one, and the
+// knowledge base's own identity file is what changes.
 func TestClusterScreenAddsAndRemovesMembers(t *testing.T) {
 	cfg, _, hooks := atlasFixture(t)
 	makeVault(t, cfg, vault.Knowledge, "notes", nil)

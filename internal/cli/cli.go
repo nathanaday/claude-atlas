@@ -782,11 +782,40 @@ func (e *env) createOrAdopt(cfg *home.Config, choice tui.AddVault) (string, erro
 	if err := mountChoice(cfg, choice); err != nil {
 		return choice.Path, err
 	}
+	if err := memberChoice(cfg, choice); err != nil {
+		return choice.Path, err
+	}
 	return choice.Path, nil
 }
 
 // mountChoice mounts the knowledge base a new project chose on the add screen. The
 // project is already written, so a failure here names the mount and leaves the vault.
+// memberChoice records the knowledge bases a new cluster gathers. The cluster is already
+// written, so a failure here names the member and leaves the vault.
+func memberChoice(cfg *home.Config, choice tui.AddVault) error {
+	if len(choice.MemberIDs) == 0 {
+		return nil
+	}
+	for _, id := range choice.MemberIDs {
+		ix, err := registry.Scan(cfg)
+		if err != nil {
+			return err
+		}
+		cluster := ix.ByPath(choice.Path)
+		if cluster == nil {
+			return fmt.Errorf("%s is not in the scan yet; add its members by hand", choice.Name)
+		}
+		kb := ix.ByID(id)
+		if kb == nil {
+			return fmt.Errorf("no knowledge base with id %s to gather", id)
+		}
+		if err := vaults.AddMember(*cluster, *kb, time.Now()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func mountChoice(cfg *home.Config, choice tui.AddVault) error {
 	if choice.MountID == "" {
 		return nil

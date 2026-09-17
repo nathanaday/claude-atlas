@@ -82,6 +82,8 @@ const (
 	editCancelled
 	editSaved
 	editRemoved
+	// editMembers asks the view to open this knowledge base's members screen.
+	editMembers
 )
 
 // The fields an editor shows: a project has a name and tags, a knowledge base a name, a
@@ -91,9 +93,10 @@ const (
 	fieldTags
 	fieldScope
 	fieldAccess
+	fieldMembers
 )
 
-var fieldNames = []string{fieldName: "Name", fieldTags: "Tags", fieldScope: "Scope", fieldAccess: "Access"}
+var fieldNames = []string{fieldName: "Name", fieldTags: "Tags", fieldScope: "Scope", fieldAccess: "Access", fieldMembers: "Members"}
 
 // labelWidth fits the longest field name.
 const labelWidth = 8
@@ -101,7 +104,9 @@ const labelWidth = 8
 type draft struct{ Name, Tags, Scope, Access string }
 
 func (d draft) get(field int) string {
-	return [...]string{fieldName: d.Name, fieldTags: d.Tags, fieldScope: d.Scope, fieldAccess: d.Access}[field]
+	// Members are the knowledge base's own list, not a draft field: Enter on that row
+	// opens the members screen, so there is nothing here to compare or edit.
+	return [...]string{fieldName: d.Name, fieldTags: d.Tags, fieldScope: d.Scope, fieldAccess: d.Access, fieldMembers: ""}[field]
 }
 
 func (d *draft) set(field int, v string) {
@@ -151,7 +156,7 @@ func newEditor(hooks Hooks, e registry.Entry) editor {
 	text.Width = 60
 	fields := []int{fieldName, fieldTags}
 	if e.Kind == vault.Knowledge {
-		fields = []int{fieldName, fieldScope, fieldAccess}
+		fields = []int{fieldName, fieldScope, fieldAccess, fieldMembers}
 	}
 	return editor{hooks: hooks, entry: e, fields: fields, original: draftOf(e), draft: draftOf(e), text: text}
 }
@@ -223,6 +228,14 @@ func (e editor) updateFields(msg tea.Msg) (editor, tea.Cmd) {
 			e.cycleAccess()
 		}
 	case tea.KeyEnter:
+		if e.field() == fieldMembers {
+			if e.dirty() {
+				e.err = "save or discard first: members are the knowledge base's own list"
+				return e, nil
+			}
+			e.outcome = editMembers
+			return e, nil
+		}
 		if e.field() == fieldAccess {
 			e.cycleAccess()
 			return e, nil
@@ -313,6 +326,8 @@ func (e editor) view() string {
 			content = e.text.View()
 		case f == fieldAccess:
 			content = "◂ " + e.draft.Access + " ▸" + dim.Render("  "+accessHint(e.draft.Access))
+		case f == fieldMembers:
+			content = memberSummary(e.entry) + dim.Render("  Enter to add or drop")
 		default:
 			content = e.draft.get(f)
 			if content == "" {
@@ -334,7 +349,7 @@ func (e editor) view() string {
 	default:
 		hints := "↑↓ field · Enter edit"
 		if e.entry.Kind == vault.Knowledge {
-			hints += " · ←→ access"
+			hints += " · ←→ access · Enter on Members opens them"
 		}
 		if e.dirty() {
 			hints += " · " + title.Render("s") + " save"
@@ -352,6 +367,21 @@ func (e editor) view() string {
 }
 
 // accessHint says what an access level means for a knowledge base.
+// memberSummary is what a knowledge base gathers, for the editor's Members row.
+func memberSummary(e registry.Entry) string {
+	if len(e.Members) == 0 {
+		return dim.Render("none; this is an ordinary knowledge base")
+	}
+	names := make([]string, len(e.Members))
+	for i, m := range e.Members {
+		names[i] = m.Name
+		if m.Error != "" {
+			names[i] = m.Name + " (" + m.Error + ")"
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
 func accessHint(access string) string {
 	if access == vault.AccessGuarded {
 		return "only the projects it grants may write"
