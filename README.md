@@ -5,7 +5,7 @@ Knowledge vaults for Claude Code, and one view across all of them.
 [![License: MIT](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](.claude-plugin/plugin.json)
-[![Version](https://img.shields.io/badge/version-1.1.0-d97745.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-1.2.0-d97745.svg)](.claude-plugin/plugin.json)
 
 ## About
 
@@ -178,9 +178,10 @@ A project reaches a knowledge base through a mount, `kb/<name>` in the
 project: `claude-atlas mount PROJECT KB` links it, `unmount` drops it. A
 knowledge base sets `access`, `open` or `guarded`; `grant` and `revoke` name
 which projects may write a guarded one. The `mounts` tool reports a project's
-mounts with their effective access. `new-project NAME --in REPO` puts a
-project inside an existing git repository instead of giving it a history of
-its own.
+mounts with their effective access. A cluster is a knowledge base that
+gathers others; a project mounts the cluster once and reaches every member.
+`new-project NAME --in REPO` puts a project inside an existing git repository
+instead of giving it a history of its own.
 
 ## Conventions
 
