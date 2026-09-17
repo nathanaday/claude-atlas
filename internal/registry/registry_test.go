@@ -754,6 +754,52 @@ func TestExplicitMountWinsAndNamesDoNotCollide(t *testing.T) {
 	}
 }
 
+// Every candidate name taken, a member still gets a folder of its own: the last name
+// counts up until it is free.
+func TestAMemberNameCountsUpWhenEveryCandidateIsTaken(t *testing.T) {
+	cfg, vs := buildVaults(t,
+		clusterVault{"knowledge/p3", vault.Knowledge, "p3"},
+		clusterVault{"knowledge/software", vault.Knowledge, "software"},
+		clusterVault{"knowledge/f1", vault.Knowledge, "f1"},
+		clusterVault{"knowledge/f2", vault.Knowledge, "f2"},
+		clusterVault{"knowledge/f3", vault.Knowledge, "f3"},
+		clusterVault{"knowledge/f4", vault.Knowledge, "f4"},
+		clusterVault{"projects/vision", vault.Project, "vision"},
+	)
+	p3, software, vision := vs["knowledge/p3"], vs["knowledge/software"], vs["projects/vision"]
+	short := software.Config.ID[:8]
+	edit(t, p3.Root, "members", func(c *vault.Config) error {
+		c.Members = []vault.Member{{ID: software.Config.ID, Name: "software"}}
+		return nil
+	})
+	// The project's own mounts take every name memberName would try.
+	edit(t, vision.Root, "mount", func(c *vault.Config) error {
+		c.Mounts = []vault.Mount{
+			{ID: p3.Config.ID, Name: "p3", Access: vault.AccessWrite},
+			{ID: vs["knowledge/f1"].Config.ID, Name: "software", Access: vault.AccessRead},
+			{ID: vs["knowledge/f2"].Config.ID, Name: "p3-software", Access: vault.AccessRead},
+			{ID: vs["knowledge/f3"].Config.ID, Name: "p3-" + short, Access: vault.AccessRead},
+			{ID: vs["knowledge/f4"].Config.ID, Name: "kb-" + short, Access: vault.AccessRead},
+		}
+		return nil
+	})
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ix.ByID(vision.Config.ID)
+	if len(e.Mounts) != 6 {
+		t.Fatalf("mounts %+v", e.Mounts)
+	}
+	derived := e.Mounts[5]
+	if derived.ID != software.Config.ID || derived.Through != "p3" {
+		t.Fatalf("the derived mount: %+v", derived)
+	}
+	if derived.Name != "kb-"+short+"-2" {
+		t.Fatalf("the last name should count up past the one that is taken: %q", derived.Name)
+	}
+}
+
 // A member the scan does not hold is reported, not dropped.
 func TestAMemberTheScanLost(t *testing.T) {
 	cfg, vs := buildVaults(t,

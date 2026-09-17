@@ -50,7 +50,7 @@ Vaults:
                             --in REPO puts it inside a code repository, at REPO/atlas
   new-knowledge NAME|PATH   create a knowledge base: sources, entities, concepts
   new-cluster NAME|PATH     create a knowledge base meant to gather others; add members with cluster add
-  adopt [PATH]            make an existing Obsidian or claude-obsidian vault one of these
+  adopt [PATH]              make an existing Obsidian or claude-obsidian vault one of these
   open-vault [NAME|PATH]    open a vault in Obsidian; with no name, the one you are in
   open-claude NAME          start Claude Code inside a vault; --task ID continues a task in its workdir
   ingest NAME [PATH...]     stage new files from outside a project into its inbox, then ingest them
@@ -1841,7 +1841,7 @@ func (e *env) clusterRemove(cfg *home.Config, args []string) (int, error) {
 	}
 	// The member comes first, by name or id, so one the scan lost still drops. Only when
 	// the cluster holds no such member does the argument name a vault.
-	target, label := args[1], args[1]
+	var target, label string
 	if member := findMember(cluster, args[1]); member != nil {
 		target, label = member.ID, member.Name
 	} else {
@@ -2910,15 +2910,19 @@ func (e *env) doctor(args []string) (int, error) {
 		if en.Kind != vault.Knowledge {
 			continue
 		}
+		// Only a hand-edited identity file names a member that is not a knowledge base or
+		// is a cluster itself; the commands refuse both.
+		drop := "; run `claude-atlas cluster remove " + en.Name + " "
 		for _, m := range en.Members {
-			if m.Error != "" {
+			member := ix.ByID(m.ID)
+			switch {
+			case member != nil && member.Kind != vault.Knowledge:
 				ok = false
-				c.Step(console.Fail, en.Name+" · member "+m.Name, m.Error+"; run `claude-atlas cluster remove "+en.Name+" "+m.ID+"`")
-				continue
-			}
-			// Only a hand-edited identity file holds a cluster as a member; the commands
-			// refuse it.
-			if member := ix.ByID(m.ID); member != nil && len(member.Members) > 0 {
+				c.Step(console.Fail, en.Name+" · member "+m.Name, fmt.Sprintf("%s is a %s, not a knowledge base%s%s`", member.Name, member.Kind, drop, m.ID))
+			case m.Error != "":
+				ok = false
+				c.Step(console.Fail, en.Name+" · member "+m.Name, m.Error+drop+m.ID+"`")
+			case member != nil && len(member.Members) > 0:
 				ok = false
 				c.Step(console.Fail, en.Name+" · member "+m.Name, m.Name+" is a cluster too, and a cluster holds no cluster; edit "+home.Display(filepath.Join(en.Path, vault.Marker)))
 			}

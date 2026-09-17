@@ -534,6 +534,26 @@ func TestClusterCommands(t *testing.T) {
 		t.Fatalf("unmount a member: exit %d %s", code, h.err.String())
 	}
 
+	// A hand-edited identity file that names a project as a member: doctor says what it
+	// is, and `cluster remove` drops it.
+	welcomeID := ""
+	if v, err := vault.Open(welcome); err == nil {
+		welcomeID = v.Config.ID
+	}
+	err = vault.UpdateConfig(filepath.Join(vaults, "knowledge", "p3"), "member welcome", time.Now(), func(c *vault.Config) error {
+		c.Members = append(c.Members, vault.Member{ID: welcomeID, Name: "welcome"})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "welcome is a project, not a knowledge base") || !strings.Contains(h.out.String(), "cluster remove p3 "+welcomeID) {
+		t.Fatalf("doctor should name the member that is no knowledge base: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("cluster", "remove", "p3", welcomeID); code != 0 {
+		t.Fatalf("cluster remove a project: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+
 	// A member the scan lost: doctor names it and names the command that drops it.
 	err = vault.UpdateConfig(filepath.Join(vaults, "knowledge", "p3"), "member gone", time.Now(), func(c *vault.Config) error {
 		c.Members = append(c.Members, vault.Member{ID: "gone-0000", Name: "gone"})
