@@ -484,13 +484,15 @@ func expand(project *Entry, byID map[string]*Entry) []Mount {
 
 // memberName is the folder a member takes under kb/: its own name, the cluster's name and
 // its own when that is taken, and its id's first eight characters when that is taken too.
+// The id is unique, so the last candidate is a name no other mount holds.
 func memberName(kb, cluster *Entry, taken map[string]bool) string {
-	for _, try := range []string{kb.Name, cluster.Name + "-" + kb.Name} {
+	short := kb.ID[:min(8, len(kb.ID))]
+	for _, try := range []string{kb.Name, cluster.Name + "-" + kb.Name, cluster.Name + "-" + short} {
 		if name := links.CleanName(try); name != "" && !taken[strings.ToLower(name)] {
 			return name
 		}
 	}
-	return links.CleanName(cluster.Name + "-" + kb.ID[:min(8, len(kb.ID))])
+	return "kb-" + short
 }
 
 // takeHost is the repository a project lives in, pulled out of the identity list: the
