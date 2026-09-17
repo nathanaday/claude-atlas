@@ -593,3 +593,193 @@ func TestTheHostsNameIsCleanedLikeALinkedOne(t *testing.T) {
 		t.Fatalf("a name that cleaning leaves nothing of stands: %q", got)
 	}
 }
+
+// clusterVault names one vault a cluster test builds.
+type clusterVault struct {
+	rel  string
+	kind vault.Kind
+	name string
+}
+
+// buildVaults makes a vaults directory holding one vault per entry and returns the atlas
+// config and the vaults keyed by their relative path.
+func buildVaults(t *testing.T, want ...clusterVault) (*home.Config, map[string]*vault.Vault) {
+	t.Helper()
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
+	out := map[string]*vault.Vault{}
+	for _, w := range want {
+		path := filepath.Join(cfg.VaultsDir, filepath.FromSlash(w.rel))
+		if _, err := vault.Init(path, vault.Options{Kind: w.kind, Name: w.name}, now); err != nil {
+			t.Fatal(err)
+		}
+		v, err := vault.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[w.rel] = v
+	}
+	return cfg, out
+}
+
+// edit rewrites one vault's identity file and fails the test when it cannot.
+func edit(t *testing.T, root, summary string, change func(*vault.Config) error) {
+	t.Helper()
+	if err := vault.UpdateConfig(root, summary, now, change); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A project that mounts a cluster reaches every member: the scan adds one derived mount
+// per member, names the cluster it came through, and gives each member the access its own
+// grant allows.
+func TestScanExpandsAClusterMount(t *testing.T) {
+	cfg, vs := buildVaults(t,
+		clusterVault{"knowledge/p3", vault.Knowledge, "p3"},
+		clusterVault{"knowledge/software", vault.Knowledge, "software"},
+		clusterVault{"knowledge/people", vault.Knowledge, "people"},
+		clusterVault{"projects/vision", vault.Project, "vision"},
+	)
+	p3, software, people, vision := vs["knowledge/p3"], vs["knowledge/software"], vs["knowledge/people"], vs["projects/vision"]
+	edit(t, people.Root, "guard", func(c *vault.Config) error {
+		c.Access = vault.AccessGuarded
+		return nil
+	})
+	edit(t, p3.Root, "members", func(c *vault.Config) error {
+		// Stale names, so the scan has to resolve them.
+		c.Members = []vault.Member{{ID: software.Config.ID, Name: "old-software"}, {ID: people.Config.ID, Name: "old-people"}}
+		return nil
+	})
+	edit(t, vision.Root, "mount", func(c *vault.Config) error {
+		c.Mounts = []vault.Mount{{ID: p3.Config.ID, Name: "p3", Access: vault.AccessWrite}}
+		return nil
+	})
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ix.ByID(vision.Config.ID)
+	if len(e.Mounts) != 3 {
+		t.Fatalf("mounts %+v", e.Mounts)
+	}
+	want := []Mount{
+		{ID: p3.Config.ID, Name: "p3", Through: "", Effective: vault.AccessWrite, Path: filepath.Join(p3.Root, "wiki")},
+		{ID: software.Config.ID, Name: "software", Through: "p3", Effective: vault.AccessWrite, Path: filepath.Join(software.Root, "wiki")},
+		{ID: people.Config.ID, Name: "people", Through: "p3", Effective: vault.AccessRead, Path: filepath.Join(people.Root, "wiki")},
+	}
+	for i, w := range want {
+		got := e.Mounts[i]
+		if got.ID != w.ID || got.Name != w.Name || got.Through != w.Through || got.Effective != w.Effective || got.Path != w.Path {
+			t.Fatalf("mount %d: %+v, want %+v", i, got, w)
+		}
+	}
+	cluster := ix.ByID(p3.Config.ID)
+	if len(cluster.Members) != 2 {
+		t.Fatalf("members %+v", cluster.Members)
+	}
+	if cluster.Members[0].Name != "software" || cluster.Members[0].Error != "" {
+		t.Fatalf("a member resolves to its current name: %+v", cluster.Members[0])
+	}
+	if cluster.Members[1].Name != "people" || cluster.Members[1].Error != "" {
+		t.Fatalf("a member resolves to its current name: %+v", cluster.Members[1])
+	}
+	for _, m := range []*vault.Vault{software, people} {
+		member := ix.ByID(m.Config.ID)
+		if len(member.Clusters) != 1 || member.Clusters[0].ID != p3.Config.ID || member.Clusters[0].Name != "p3" {
+			t.Fatalf("%s clusters %+v", m.Config.Name, member.Clusters)
+		}
+	}
+	sw := ix.ByID(software.Config.ID)
+	if len(sw.MountedBy) != 1 || sw.MountedBy[0].Name != "vision" || sw.MountedBy[0].Access != vault.AccessWrite {
+		t.Fatalf("a member knows it is reached: %+v", sw.MountedBy)
+	}
+	pe := ix.ByID(people.Config.ID)
+	if len(pe.MountedBy) != 1 || pe.MountedBy[0].Name != "vision" || pe.MountedBy[0].Access != vault.AccessRead {
+		t.Fatalf("a guarded member is reached for reading: %+v", pe.MountedBy)
+	}
+}
+
+// An explicit mount wins over the one a cluster would derive, and a derived mount whose
+// name is taken takes the cluster's name as a prefix.
+func TestExplicitMountWinsAndNamesDoNotCollide(t *testing.T) {
+	cfg, vs := buildVaults(t,
+		clusterVault{"knowledge/p3", vault.Knowledge, "p3"},
+		clusterVault{"knowledge/software", vault.Knowledge, "software"},
+		clusterVault{"knowledge/p3-people", vault.Knowledge, "people"},
+		clusterVault{"knowledge/own-people", vault.Knowledge, "people"},
+		clusterVault{"projects/vision", vault.Project, "vision"},
+	)
+	p3, software := vs["knowledge/p3"], vs["knowledge/software"]
+	member, own, vision := vs["knowledge/p3-people"], vs["knowledge/own-people"], vs["projects/vision"]
+	edit(t, p3.Root, "members", func(c *vault.Config) error {
+		c.Members = []vault.Member{{ID: software.Config.ID, Name: "software"}, {ID: member.Config.ID, Name: "people"}}
+		return nil
+	})
+	edit(t, vision.Root, "mount", func(c *vault.Config) error {
+		c.Mounts = []vault.Mount{
+			{ID: p3.Config.ID, Name: "p3", Access: vault.AccessWrite},
+			{ID: software.Config.ID, Name: "software", Access: vault.AccessRead},
+			{ID: own.Config.ID, Name: "people", Access: vault.AccessRead},
+		}
+		return nil
+	})
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ix.ByID(vision.Config.ID)
+	if len(e.Mounts) != 4 {
+		t.Fatalf("mounts %+v", e.Mounts)
+	}
+	var forSoftware []Mount
+	for _, m := range e.Mounts {
+		if m.ID == software.Config.ID {
+			forSoftware = append(forSoftware, m)
+		}
+	}
+	if len(forSoftware) != 1 || forSoftware[0].Through != "" || forSoftware[0].Access != vault.AccessRead {
+		t.Fatalf("the project's own mount stands: %+v", forSoftware)
+	}
+	derived := e.Mounts[3]
+	if derived.ID != member.Config.ID || derived.Name != "p3-people" || derived.Through != "p3" {
+		t.Fatalf("a derived mount whose name is taken: %+v", derived)
+	}
+	for _, m := range e.Mounts {
+		if m.ID == own.Config.ID && (m.Name != "people" || m.Through != "") {
+			t.Fatalf("the explicit mount keeps its name: %+v", m)
+		}
+	}
+}
+
+// A member the scan does not hold is reported, not dropped.
+func TestAMemberTheScanLost(t *testing.T) {
+	cfg, vs := buildVaults(t,
+		clusterVault{"knowledge/p3", vault.Knowledge, "p3"},
+		clusterVault{"projects/vision", vault.Project, "vision"},
+	)
+	p3, vision := vs["knowledge/p3"], vs["projects/vision"]
+	const gone = "00000000-0000-4000-8000-000000000009"
+	edit(t, p3.Root, "members", func(c *vault.Config) error {
+		c.Members = []vault.Member{{ID: gone, Name: "gone"}}
+		return nil
+	})
+	edit(t, vision.Root, "mount", func(c *vault.Config) error {
+		c.Mounts = []vault.Mount{{ID: p3.Config.ID, Name: "p3", Access: vault.AccessWrite}}
+		return nil
+	})
+	ix, err := Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := ix.ByID(p3.Config.ID)
+	if len(cluster.Members) != 1 || cluster.Members[0].Error != "no knowledge base with id "+gone {
+		t.Fatalf("members %+v", cluster.Members)
+	}
+	e := ix.ByID(vision.Config.ID)
+	if len(e.Mounts) != 1 || e.Mounts[0].ID != p3.Config.ID {
+		t.Fatalf("a member the scan lost derives no mount: %+v", e.Mounts)
+	}
+}
