@@ -57,6 +57,9 @@ base states in `scope` what it holds.
   knowledge base's scope covers.
 - Two scopes cover the source, or none of them clearly does: ask the user once,
   with the scopes listed, then file the rest of the batch without asking again.
+- A mount that names `through` came from a cluster. Its members are the
+  candidates, and their own scopes decide among them as above; the cluster's
+  own wiki takes a source about the domain as a whole, not one part of it.
 
 The file name, the user's words, and the scopes usually settle it. When they do
 not, skim the inbox file to classify the source, then capture it. Reading the

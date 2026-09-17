@@ -32,8 +32,17 @@ is refused: "`<project> mounts <kb> read-only`".
 Lists a project's mounts. Each entry carries `id`, `name`, `path` (the
 knowledge base's real path), `link` (`kb/<name>`), `access` (the mount's own
 setting), `effective` (the access that actually applies), `scope` (the
-knowledge base's one-line scope), `pages`, and `error` when the mount could
-not be resolved.
+knowledge base's one-line scope), `pages`, `error` when the mount could not
+be resolved, and `through` (the cluster this mount came from, empty for a
+mount the project recorded itself).
+
+## Clusters
+
+A cluster is a knowledge base that gathers others as members. A project
+mounts the cluster and reaches every member; the `mounts` tool names the
+cluster in `through`. Each member is written exactly like any mount: read
+its `path`, write through its `link`, check its own `access`. The cluster's
+own wiki holds what is about the domain as a whole, not any one member.
 
 ## `route` across mounts
 

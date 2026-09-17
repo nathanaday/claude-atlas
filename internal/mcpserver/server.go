@@ -321,6 +321,9 @@ type MountInfo struct {
 	Scope     string `json:"scope,omitempty"`
 	Pages     *int   `json:"pages,omitempty"`
 	Error     string `json:"error,omitempty"`
+	// Through is the cluster this knowledge base came through; empty when the project
+	// mounts it directly. Every member of a cluster is reached the same way as any mount.
+	Through string `json:"through,omitempty"`
 }
 
 // MountedBy is one project that mounts a knowledge base, with its effective access.
@@ -337,7 +340,7 @@ type MountsOut struct {
 // mountInfo describes one mount. pages counts the knowledge base's pages, which costs a
 // lint run, so status leaves it out.
 func (sess *session) mountInfo(m registry.Mount, pages bool, now time.Time) MountInfo {
-	info := MountInfo{ID: m.ID, Name: m.Name, Path: m.Path, Link: vault.KbDir + "/" + m.Name, Access: m.Access, Effective: m.Effective, Error: m.Error}
+	info := MountInfo{ID: m.ID, Name: m.Name, Path: m.Path, Link: vault.KbDir + "/" + m.Name, Access: m.Access, Effective: m.Effective, Error: m.Error, Through: m.Through}
 	if sess.ix != nil {
 		if kb := sess.ix.ByID(m.ID); kb != nil {
 			info.Scope = kb.Scope
@@ -1155,7 +1158,7 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "repos", Annotations: ro(),
 		Description: "List the repositories mounted on the vault's project: path, remote, branch, uncommitted changes, and how changes land there (pr: branch and pull request; commit: on the current branch). Read it before changing files in a repository."}, s.repos)
 	mcp.AddTool(server, &mcp.Tool{Name: "mounts", Annotations: ro(),
-		Description: "List the knowledge bases the project mounts: id, name, the knowledge base's real wiki path, the mount folder, the requested and effective access, what the knowledge base is for, and its page count. Grep the real path; plan a page under a write mount like the project's own. Read-only."}, s.mounts)
+		Description: "List the knowledge bases the project mounts: id, name, the knowledge base's real wiki path, the mount folder, the requested and effective access, what the knowledge base is for, and its page count. Grep the real path; plan a page under a write mount like the project's own. A mount that names through came from a cluster: the project mounted that cluster, and every member is reached the same way. Read-only."}, s.mounts)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",
 		Description: "Read the vault's filing mode (generic or lyt) and the page types it files. Pass set to prepare a plan that changes it; apply that plan to make the change."}, s.mode)
 	return server
