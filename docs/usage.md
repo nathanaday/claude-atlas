@@ -2,7 +2,7 @@
 
 Every command, with examples. `claude-atlas help` prints the short form.
 
-## Two layers
+## Three layers
 
 `claude-atlas` on its own opens the whole atlas as one interactive screen
 (`claude-atlas view` says the same explicitly). Everything it does is also
@@ -23,7 +23,7 @@ memory, and the `atlas` skills all work:
 | `e` edit a vault, `s` save | `edit NAME --…` | `vault` edit |
 | `e` then `r` forget | `remove NAME` | `vault` forget |
 | `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` | `mount` |
-| `C` new cluster; `M` members, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` | `vault` create with `members`; `cluster` |
+| `C` new cluster; `M` or `e` then Enter on `Members`, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` | `vault` create with `members`; `cluster` |
 | `R` refresh | `refresh` | `atlas` with `refresh` |
 | — | `config KEY VALUE` | `settings` |
 | `←` `→` switch tabs; `h` shows every key | — | — |

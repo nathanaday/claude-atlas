@@ -190,6 +190,13 @@ These tools do not use `plan` and `apply`. Nothing they do deletes user data:
 folder where it is; `create` and `adopt` refuse an existing or occupied path;
 identity file changes are `setup` commits in the vault's own git.
 
+One write does widen access: the `mount` tool's `grant` action can give the
+session's own project write access to a guarded knowledge base. It moves a
+capability the session already had rather than adding one, because a session
+with Bash could always run `claude-atlas grant`. The skills' state-then-confirm
+gate is what holds it: a grant is stated in one line and waits for yes, like
+every other write.
+
 The gate is the skill. Before a write, the skill states the change in one
 line and waits for yes, the same confirm the view's screens give. A skill
 never writes an identity file, the atlas config, or `registry.json` with

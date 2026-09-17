@@ -40,8 +40,8 @@ type AddVault struct {
 	MemberIDs []string
 }
 
-// Atlas is every action the view and the tools reach. Each field is one function from
-// the package that owns the action, bound to the atlas home and its config.
+// Atlas is every action the CLI, the view, and the tools reach. Each field is one
+// function from the package that owns the action, bound to the atlas home and its config.
 type Atlas struct {
 	// Load reads the registry, refreshing it first when no refresh has run yet. Scan
 	// reads every vault afresh, with its state derived, and writes nothing.
