@@ -2615,6 +2615,13 @@ Obsidian vault; `atlas` shows what exists. A new vault's session starts with
 ])
 
 edit('skills/wiki-ingest/SKILL.md', [
+('''base: ask the user once, and offer the choices, each mounted knowledge base
+with its scope and the project's wiki. When there is no mount, say so, and
+name `claude-atlas mount <project> <kb>` as the way to add one before the
+ingest.''',
+'''base: ask the user once, and offer the choices, each mounted knowledge base
+with its scope and the project's wiki. When there is no mount, say so, and
+hand off to `atlas-mount`, which adds one before the ingest.'''),
 ('''No network is needed. If the user gives a URL, ask them to save the page into
 `inbox/` (or paste the text). Do not fetch it yourself.''',
 '''No network is needed. If the user gives a URL, ask them to save the page into
@@ -2642,6 +2649,13 @@ grep -n "atlas-mount\|stage" skills/wiki-ingest/SKILL.md | head && grep -n "atla
 ```
 
 Expected: `edited`, then the new lines.
+
+`skills/wiki-ingest/SKILL.md` is under edit in another session while this plan
+is written. If an `assert` fails because its text moved, do not weaken the
+assert: read the file, find the sentence that still names a `claude-atlas`
+command, and replace that sentence with the same hand-off (`atlas-mount` for a
+mount or a grant, `stage` for a file outside the vault). The rule is that no
+skill sends the user to a terminal for something a tool now does.
 
 - [ ] **Step 7: Read every new skill once for the writing guide, then commit**
 
