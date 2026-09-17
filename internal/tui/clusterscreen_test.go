@@ -6,12 +6,93 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // M on a knowledge base opens its members: a picker adds one, x drops one, and the
 // knowledge base's own identity file is what changes.
+// C makes a cluster: the add screen opens on the third kind, and the new vault's members
+// screen opens the moment it exists, which is where a member is added.
+func TestCNewClusterLandsOnItsMembers(t *testing.T) {
+	cfg, _, hooks := atlasFixture(t)
+	// The add screen needs a Create; this one writes the vault the way the CLI does.
+	hooks.Create = func(c AddVault) (string, error) {
+		if _, err := vault.Init(c.Path, vault.Options{Kind: c.Kind, Name: c.Name}, testNow); err != nil {
+			return "", err
+		}
+		if c.Scope != "" {
+			_, err := vaults.EditIdentity(home.Home{}, cfg, registry.Entry{Path: c.Path, Kind: c.Kind}, vaults.Edit{Scope: &c.Scope}, testNow)
+			return c.Path, err
+		}
+		return c.Path, nil
+	}
+	v := pressV(openView(t, hooks), tea.KeyRight) // the Knowledge tab
+	if out := v.View(); !strings.Contains(out, "C new cluster") {
+		t.Fatalf("the Knowledge tab names the key:\n%s", out)
+	}
+	v = keyV(v, "C")
+	if v.add == nil || !v.add.cluster || v.add.kind != vault.Knowledge {
+		t.Fatalf("C opens the add screen on cluster: %+v", v.add)
+	}
+	out := v.View()
+	for _, want := range []string{"◂ cluster ▸", "gathers other knowledge bases", "←→ project, knowledge base, or cluster"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// The kind cycles both ways: left from cluster is a knowledge base, and right wraps
+	// round to a project.
+	v = pressV(v, tea.KeyLeft)
+	if v.add.cluster || v.add.kind != vault.Knowledge {
+		t.Fatalf("left from cluster: kind=%q cluster=%v", v.add.kind, v.add.cluster)
+	}
+	v = pressV(v, tea.KeyRight, tea.KeyRight)
+	if v.add.kind != vault.Project || v.add.cluster {
+		t.Fatalf("right from cluster wraps to a project: kind=%q cluster=%v", v.add.kind, v.add.cluster)
+	}
+	v = pressV(v, tea.KeyRight, tea.KeyRight) // back to cluster
+	if !v.add.cluster {
+		t.Fatalf("back to cluster: %+v", v.add)
+	}
+
+	v = pressV(v, tea.KeyEnter) // kind
+	v = typeV(v, "p3")
+	v = pressV(v, tea.KeyEnter, tea.KeyEnter) // name, mode
+	v = typeV(v, "The ecosystem.")
+	v = pressV(v, tea.KeyEnter, tea.KeyEnter) // scope, path
+	if !strings.Contains(v.View(), "create this cluster, then choose its members") {
+		t.Fatalf("the confirm line:\n%s", v.View())
+	}
+	v = pressV(v, tea.KeyEnter) // confirm
+
+	if v.add != nil || !v.changed {
+		t.Fatalf("the cluster should be made: add=%v changed=%v err=%q", v.add, v.changed, v.errMsg)
+	}
+	if v.cluster == nil {
+		t.Fatalf("the members screen should open on it: err=%q\n%s", v.errMsg, v.View())
+	}
+	if out := v.View(); !strings.Contains(out, "p3   members") || !strings.Contains(out, "no members yet") {
+		t.Fatalf("it lands on the new cluster's members:\n%s", out)
+	}
+	// It is an ordinary knowledge base until it has one, and the picker offers them.
+	made := entryNamed(t, cfg, "p3")
+	if made.Kind != vault.Knowledge || len(made.Members) != 0 || made.Scope != "The ecosystem." {
+		t.Fatalf("identity file: %+v", made)
+	}
+	v = keyV(v, "a")
+	if v.cluster.mode != clusterPick || len(v.cluster.picks) == 0 {
+		t.Fatalf("a lists what it may gather: mode=%d picks=%+v", v.cluster.mode, v.cluster.picks)
+	}
+	for _, e := range v.cluster.picks {
+		if e.Name == "p3" {
+			t.Fatal("a cluster is not its own member")
+		}
+	}
+}
+
 func TestClusterScreenAddsAndRemovesMembers(t *testing.T) {
 	cfg, _, hooks := atlasFixture(t)
 	makeVault(t, cfg, vault.Knowledge, "notes", nil)

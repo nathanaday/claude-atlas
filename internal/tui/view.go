@@ -439,6 +439,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Project).withKnowledge(v.items))
 		case "N":
 			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Knowledge).withKnowledge(v.items))
+		case "C":
+			return v.openAdd(newClusterModel(v.hooks.VaultsDir).withKnowledge(v.items))
 		case "a":
 			return v.openAdd(v.adoptModel())
 		case "R":
@@ -561,6 +563,14 @@ func (v view) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	cmd = v.wrote(path, verb+choice.Name)
 	v.reload(path)
+	// A cluster is a knowledge base until it has a member, so the members screen opens on
+	// the new vault: that is where a member is added, and it says what a cluster is.
+	if choice.Cluster {
+		if it := v.current(); it != nil && it.Entry.Path == path {
+			next, open := v.openCluster(it)
+			return next, tea.Batch(cmd, open)
+		}
+	}
 	return v, cmd
 }
 
@@ -1086,7 +1096,7 @@ func (v view) hints() []string {
 		return []string{quit}
 	}
 	if v.help {
-		return []string{v.boardHints(), "←→ tabs · n new project · N new knowledge base · a adopt · R refresh · " + quit}
+		return []string{v.boardHints(), "←→ tabs · n new project · N new knowledge base · C new cluster · a adopt · R refresh · " + quit}
 	}
 	bd := v.board()
 	it := bd.current()
@@ -1098,7 +1108,7 @@ func (v view) hints() []string {
 	case tabProjects:
 		parts = append(parts, "n new project")
 	case tabKnowledge:
-		parts = append(parts, "N new knowledge base")
+		parts = append(parts, "N new knowledge base", "C new cluster")
 	case tabProblems:
 		if it != nil && it.Entry.Reason != registry.ReasonMissing {
 			parts = append(parts, "a adopt")

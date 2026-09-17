@@ -446,7 +446,7 @@ Every key is one command:
 
 | Key | Command |
 |---|---|
-| `n` new project, `N` new knowledge base | `new-project NAME`, `new-knowledge NAME` |
+| `n` new project, `N` new knowledge base, `C` new cluster | `new-project NAME`, `new-knowledge NAME`, `new-cluster NAME` |
 | `a` adopt | `adopt PATH --as project\|knowledge` |
 | Enter on a vault | `show NAME` |
 | `e` edit, then `r` forget | `edit NAME --name --tags --scope --access`, `remove NAME` |

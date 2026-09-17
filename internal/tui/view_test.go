@@ -304,7 +304,7 @@ func TestFooterNamesTheTabsKeysUntilHelp(t *testing.T) {
 	out = stripANSI(v.View())
 	for _, want := range []string{
 		"↑↓ move · Enter details · o Obsidian · c Claude · i ingest", "m mounts",
-		"←→ tabs · n new project · N new knowledge base · a adopt", "h hide help · q quit",
+		"←→ tabs · n new project · N new knowledge base · C new cluster", "h hide", "q quit",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help missing %q:\n%s", want, out)
@@ -315,7 +315,7 @@ func TestFooterNamesTheTabsKeysUntilHelp(t *testing.T) {
 		t.Fatal("h again hides the keys")
 	}
 	v = findVault(t, v, "ai-ml")
-	if out := v.View(); !strings.Contains(out, "Enter details · N new knowledge base · h help · q quit") || strings.Contains(out, "n new project") {
+	if out := v.View(); !strings.Contains(out, "Enter details · N new knowledge base · C new cluster · h help · q quit") || strings.Contains(out, "n new project") {
 		t.Fatalf("knowledge footer:\n%s", out)
 	}
 	if hints := v.boardHints(); strings.Contains(hints, "ingest") || strings.Contains(hints, "repos") || !strings.Contains(hints, "m mounts · e edit") {
@@ -341,7 +341,7 @@ func TestFooterNamesTheTabsKeysUntilHelp(t *testing.T) {
 	v = keyV(v, "h")
 	withHelp := v.bodyHeight()
 	v = pressV(v, tea.KeyRight)
-	if !v.help || !strings.Contains(v.View(), "h hide help") {
+	if !v.help || !strings.Contains(v.View(), "h hide") {
 		t.Fatalf("help across tabs: help=%v\n%s", v.help, v.View())
 	}
 	v = keyV(v, "h")

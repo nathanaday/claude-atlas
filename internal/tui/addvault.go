@@ -28,6 +28,10 @@ type AddVault struct {
 	// MountID is the knowledge base a new project mounts once it exists; "" mounts none.
 	// The mount asks for write, and the mounts screen changes that.
 	MountID string
+	// Cluster is set when the user asked for a knowledge base that gathers others. The
+	// vault is an ordinary knowledge base until it has a member, so this only tells the
+	// view to open the new vault's members screen.
+	Cluster bool
 }
 
 type step int
@@ -59,6 +63,9 @@ type model struct {
 	scope     textinput.Model
 	path      pathField
 	edited    bool // the user typed a path of their own
+	// cluster is the third value of the kind step: a knowledge base meant to gather
+	// others. It changes what the screen says, not what is written.
+	cluster   bool
 	kbs       []registry.Entry
 	kb        int // an index into kbs, or len(kbs) for no mount
 	err       string
@@ -102,6 +109,13 @@ func newInput(placeholder string) textinput.Model {
 	input.CharLimit = 200
 	input.Width = 60
 	return input
+}
+
+// newCluster is the add screen with the kind step already on cluster.
+func newClusterModel(vaultsDir string) model {
+	m := newModel(vaultsDir, vault.Knowledge)
+	m.cluster = true
+	return m
 }
 
 func newModel(vaultsDir string, kind vault.Kind) model {
@@ -226,13 +240,27 @@ func (m *model) focus() tea.Cmd {
 	return nil
 }
 
-// toggle swaps a two-value field: the kind or the mode.
-func (m *model) toggle() {
+// toggle steps a cycling field: the kind or the mode. forward is false for the left key.
+func (m *model) toggle(forward bool) {
 	switch m.step() {
 	case stepKind:
-		if m.kind == vault.Project {
-			m.kind = vault.Knowledge
+		// project, knowledge, cluster, and round again; left walks it the other way. A
+		// cluster is a knowledge base that gathers others, so only the screen tells the
+		// last two apart.
+		at := 0
+		switch {
+		case m.cluster:
+			at = 2
+		case m.kind == vault.Knowledge:
+			at = 1
+		}
+		if forward {
+			at = (at + 1) % 3
 		} else {
+			at = (at + 2) % 3
+		}
+		m.kind, m.cluster = vault.Knowledge, at == 2
+		if at == 0 {
 			m.kind = vault.Project
 		}
 	case stepMode:
@@ -270,7 +298,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.step() {
 	case stepKind, stepMode:
 		if isKey && (key.Type == tea.KeyLeft || key.Type == tea.KeyRight || key.Type == tea.KeySpace) {
-			m.toggle()
+			m.toggle(key.Type != tea.KeyLeft)
 		}
 	case stepMount:
 		if isKey {
@@ -342,7 +370,7 @@ func (m model) result() *AddVault {
 	if m.cancelled || !m.done {
 		return nil
 	}
-	out := &AddVault{Kind: m.kind, Name: m.vaultName(), Path: m.target(), Mode: m.mode, Adopt: m.adopting}
+	out := &AddVault{Kind: m.kind, Name: m.vaultName(), Path: m.target(), Mode: m.mode, Adopt: m.adopting, Cluster: m.cluster}
 	if m.kind == vault.Knowledge {
 		out.Scope = strings.TrimSpace(m.scope.Value())
 	} else {
@@ -356,9 +384,21 @@ func (m model) result() *AddVault {
 	return out
 }
 
+// kindName is what the kind step shows: the vault's kind, or cluster for a knowledge
+// base meant to gather others.
+func kindName(kind vault.Kind, cluster bool) string {
+	if cluster {
+		return "cluster"
+	}
+	return string(kind)
+}
+
 // kindHint says what a kind is for.
-func kindHint(kind vault.Kind) string {
-	if kind == vault.Knowledge {
+func kindHint(kind vault.Kind, cluster bool) string {
+	switch {
+	case cluster:
+		return "gathers other knowledge bases; a project mounts it and reaches them all"
+	case kind == vault.Knowledge:
 		return "sources, entities, concepts; projects mount it"
 	}
 	return "tasks, questions, notes, repositories"
@@ -389,13 +429,14 @@ func (m model) content(s step) string {
 	at, done := m.step() == s, m.stepDone(s)
 	switch s {
 	case stepKind:
+		name := kindName(m.kind, m.cluster)
 		if at {
-			return "◂ " + string(m.kind) + " ▸" + dim.Render("  "+kindHint(m.kind))
+			return "◂ " + name + " ▸" + dim.Render("  "+kindHint(m.kind, m.cluster))
 		}
 		if !done {
-			return dim.Render(string(m.kind))
+			return dim.Render(name)
 		}
-		return string(m.kind)
+		return name
 	case stepName:
 		if at {
 			return m.name.View()
@@ -518,8 +559,11 @@ func (m model) View() string {
 	}
 	if m.step() == stepConfirm {
 		verb := "create this vault"
-		if m.adopting {
+		switch {
+		case m.adopting:
 			verb = "adopt this vault"
+		case m.cluster:
+			verb = "create this cluster, then choose its members"
 		}
 		b.WriteString("  " + rule.Render(strings.Repeat("─", 56)) + "\n")
 		b.WriteString("  " + label.Render("Vault") + value.Render(home.Display(m.target())) + "\n")
@@ -529,7 +573,7 @@ func (m model) View() string {
 	hints := "Enter next"
 	switch m.step() {
 	case stepKind:
-		hints += " · ←→ project or knowledge base"
+		hints += " · ←→ project, knowledge base, or cluster"
 	case stepMode:
 		hints += " · ←→ generic or lyt"
 	case stepMount:

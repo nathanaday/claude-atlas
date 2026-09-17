@@ -22,7 +22,7 @@ one command, so scripts and muscle memory both work:
 | `e` edit a vault, `s` save | `edit NAME --…` |
 | `e` then `r` forget | `remove NAME` |
 | `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` |
-| `M` members, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` |
+| `C` new cluster; `M` members, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` |
 | `R` refresh | `refresh` |
 | `←` `→` switch tabs; `h` shows every key | — |
 | — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` |
@@ -352,7 +352,7 @@ shows every key, and again hides them.
 | `↑` `↓` | move |
 | Enter | expand the vault under the cursor, or collapse it |
 | Esc | collapse what is expanded; on the Tasks tab, back to Projects; otherwise quit |
-| `n` `N` | create a project, create a knowledge base |
+| `n` `N` `C` | create a project, a knowledge base, or a cluster |
 | `a` | adopt a folder as a vault; on the Problems tab, the folder under the cursor |
 | `o` `c` | open the vault in Obsidian, start Claude Code in it |
 | `i` `t` `l` | on a project: ingest sources, tasks, repositories |
@@ -518,6 +518,12 @@ claude-atlas mount vision-algorithms p3
 claude-atlas cluster p3
 claude-atlas cluster remove p3 p3-people
 ```
+
+In `view`, `C` makes one: the add screen opens with its kind on `cluster`, asks
+the same questions a knowledge base does, and then opens the new vault's
+members screen, where `a` adds one. The kind step cycles through project,
+knowledge base, and cluster, so `N` reaches it too. A cluster is an ordinary
+knowledge base until it has a member.
 
 The project's identity file records the cluster, once. The symlinks under
 `kb/` are derived, so `mount` and `refresh` make one per member beside the
