@@ -444,3 +444,77 @@ func (s *Server) mountOut(acts actions.Atlas, projectID, mountName string) (*mcp
 	}
 	return nil, MountToolOut{}, fmt.Errorf("kb/%s is recorded but the scan does not list it; call atlas with refresh", mountName)
 }
+
+type ClusterToolArgs struct {
+	Action    string `json:"action" jsonschema:"add or remove"`
+	Cluster   string `json:"cluster" jsonschema:"the cluster, by name, id, or path; a knowledge base becomes a cluster with its first member"`
+	Knowledge string `json:"knowledge" jsonschema:"add: the knowledge base to gather, by name, id, or path; remove: a member by name or id, even one the scan lost"`
+}
+
+// ClusterToolOut is the cluster's members after the change.
+type ClusterToolOut struct {
+	Cluster string         `json:"cluster"`
+	Members []registry.Ref `json:"members"`
+}
+
+func (s *Server) clusterTool(ctx context.Context, req *mcp.CallToolRequest, a ClusterToolArgs) (*mcp.CallToolResult, ClusterToolOut, error) {
+	acts, _, err := s.bind()
+	if err != nil {
+		return nil, ClusterToolOut{}, err
+	}
+	ix, err := acts.Scan()
+	if err != nil {
+		return nil, ClusterToolOut{}, err
+	}
+	cluster, err := entryOf(ix, a.Cluster)
+	if err != nil {
+		return nil, ClusterToolOut{}, err
+	}
+	switch a.Action {
+	case "add":
+		kb, err := entryOf(ix, a.Knowledge)
+		if err != nil {
+			return nil, ClusterToolOut{}, err
+		}
+		if err := acts.AddMember(cluster, kb); err != nil {
+			return nil, ClusterToolOut{}, err
+		}
+	case "remove":
+		// The member first, by name or id, so one the scan lost still drops; only when
+		// the cluster holds no such member does the argument name a vault.
+		target := ""
+		for _, m := range cluster.Members {
+			if m.ID == a.Knowledge || strings.EqualFold(m.Name, a.Knowledge) {
+				target = m.ID
+			}
+		}
+		if target == "" {
+			kb, err := entryOf(ix, a.Knowledge)
+			if err != nil {
+				return nil, ClusterToolOut{}, fmt.Errorf("%s holds no member named %q", cluster.Name, a.Knowledge)
+			}
+			target = kb.ID
+			held := false
+			for _, m := range cluster.Members {
+				held = held || m.ID == target
+			}
+			if !held {
+				return nil, ClusterToolOut{}, fmt.Errorf("%s holds no member named %q", cluster.Name, kb.Name)
+			}
+		}
+		if err := acts.RemoveMember(cluster, target); err != nil {
+			return nil, ClusterToolOut{}, err
+		}
+	default:
+		return nil, ClusterToolOut{}, fmt.Errorf("action must be add or remove, not %q", a.Action)
+	}
+	after, err := acts.Scan()
+	if err != nil {
+		return nil, ClusterToolOut{}, err
+	}
+	out := ClusterToolOut{Cluster: cluster.Name, Members: []registry.Ref{}}
+	if c := after.ByID(cluster.ID); c != nil && c.Members != nil {
+		out.Members = c.Members
+	}
+	return nil, out, nil
+}

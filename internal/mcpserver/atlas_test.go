@@ -194,3 +194,27 @@ func TestMountAccessGrantRevokeUnmount(t *testing.T) {
 		t.Fatalf("unmount: %q %+v", msg, out.Mounts)
 	}
 }
+
+func TestClusterAddAndRemove(t *testing.T) {
+	h, _, p, _ := mounted(t)
+	c := connectIn(t, h, p.Root)
+	if msg := c.call("vault", map[string]any{"action": "create", "kind": "knowledge", "name": "domain"}, nil); msg != "" {
+		t.Fatal(msg)
+	}
+	var out ClusterToolOut
+	if msg := c.call("cluster", map[string]any{"action": "add", "cluster": "domain", "knowledge": "kb"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Cluster != "domain" || len(out.Members) != 1 || out.Members[0].Name != "kb" {
+		t.Fatalf("add: %+v", out)
+	}
+	if msg := c.call("cluster", map[string]any{"action": "add", "cluster": "domain", "knowledge": "p"}, nil); msg == "" {
+		t.Fatal("a project is not a member")
+	}
+	if msg := c.call("cluster", map[string]any{"action": "remove", "cluster": "domain", "knowledge": "nobody"}, nil); !strings.Contains(msg, "no member") {
+		t.Fatalf("unknown member: %q", msg)
+	}
+	if msg := c.call("cluster", map[string]any{"action": "remove", "cluster": "domain", "knowledge": "kb"}, &out); msg != "" || len(out.Members) != 0 {
+		t.Fatalf("remove: %q %+v", msg, out)
+	}
+}

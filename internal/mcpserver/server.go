@@ -1167,6 +1167,8 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "Create or adopt a vault, edit its name, tags, scope, or access, or forget one the atlas lists (the folder stays); action is create, adopt, edit, or forget. A create may mount a knowledge base or gather members. State the change and get a yes before calling."}, s.vaultTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "mount",
 		Description: "Change how a project reaches a knowledge base: mount or unmount it, set what the mount asks for (read or write), grant or revoke a project on a guarded knowledge base; action is mount, unmount, access, grant, or revoke. Returns the mount with its effective access, or the grants. State the change and get a yes before calling."}, s.mountTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "cluster",
+		Description: "Add a knowledge base to a cluster or drop a member; action is add or remove. A cluster is a knowledge base with members, and a project that mounts it reaches every member. State the change and get a yes before calling."}, s.clusterTool)
 	return server
 }
 
@@ -1177,7 +1179,7 @@ func Run(ctx context.Context, opts Options) error {
 
 // ToolNames lists every tool MCP registers, sorted, for docs and tests.
 func ToolNames() []string {
-	names := []string{"apply", "atlas", "capture", "history", "inbox", "lint", "mode", "mount", "mounts", "plan", "plant", "repos", "route", "status", "stub", "tasks", "undo", "vault"}
+	names := []string{"apply", "atlas", "capture", "cluster", "history", "inbox", "lint", "mode", "mount", "mounts", "plan", "plant", "repos", "route", "status", "stub", "tasks", "undo", "vault"}
 	sort.Strings(names)
 	return names
 }
