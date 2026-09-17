@@ -13,6 +13,8 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 // The atlas tools: the whole atlas as one read, and the writes that configure it. They
@@ -113,4 +115,172 @@ func (s *Server) atlasTool(ctx context.Context, req *mcp.CallToolRequest, a Atla
 		out.Problems = []registry.Problem{}
 	}
 	return nil, out, nil
+}
+
+type VaultToolArgs struct {
+	Action  string    `json:"action" jsonschema:"create, adopt, edit, or forget"`
+	Target  string    `json:"target,omitempty" jsonschema:"edit, forget: the vault, by name, id, or path"`
+	Kind    string    `json:"kind,omitempty" jsonschema:"create, adopt: project (default) or knowledge; a cluster is a knowledge base with members"`
+	Name    string    `json:"name,omitempty" jsonschema:"create: the vault's name; adopt: its display name, default the folder's; edit: the new name, which renames the folder too"`
+	Path    string    `json:"path,omitempty" jsonschema:"create: where the vault goes, default <vaults dir>/projects/<name> or knowledge/<name>; adopt: the folder to adopt"`
+	Mode    string    `json:"mode,omitempty" jsonschema:"create, adopt: the filing mode, generic (default) or lyt"`
+	Tags    *[]string `json:"tags,omitempty" jsonschema:"create, edit: a project's tags; on edit an empty list clears them"`
+	Scope   *string   `json:"scope,omitempty" jsonschema:"create, edit: what a knowledge base covers, one or two sentences; on edit an empty string clears it"`
+	Access  *string   `json:"access,omitempty" jsonschema:"create, edit: a knowledge base's access, open (default) or guarded"`
+	InRepo  string    `json:"in_repo,omitempty" jsonschema:"create: a git repository's top level; the project goes to REPO/atlas/ and shares its git; not with path"`
+	Mount   string    `json:"mount,omitempty" jsonschema:"create: a knowledge base a new project mounts for writing, by name, id, or path"`
+	Members []string  `json:"members,omitempty" jsonschema:"create: the knowledge bases a new cluster gathers, by name, id, or path"`
+}
+
+// VaultToolOut is the vault as the atlas sees it after the change, or the path forget dropped.
+type VaultToolOut struct {
+	Vault     *registry.Entry `json:"vault,omitempty"`
+	Forgotten string          `json:"forgotten,omitempty" jsonschema:"the path the atlas no longer lists; the folder stays"`
+}
+
+func (s *Server) vaultTool(ctx context.Context, req *mcp.CallToolRequest, a VaultToolArgs) (*mcp.CallToolResult, VaultToolOut, error) {
+	acts, cfg, err := s.bind()
+	if err != nil {
+		return nil, VaultToolOut{}, err
+	}
+	ix, err := acts.Scan()
+	if err != nil {
+		return nil, VaultToolOut{}, err
+	}
+	switch a.Action {
+	case "create", "adopt":
+		choice, err := vaultChoice(ix, cfg, a)
+		if err != nil {
+			return nil, VaultToolOut{}, err
+		}
+		path, err := acts.Create(choice)
+		if err != nil {
+			return nil, VaultToolOut{}, err
+		}
+		return s.entryOut(acts, path)
+	case "edit":
+		en, err := entryOf(ix, a.Target)
+		if err != nil {
+			return nil, VaultToolOut{}, err
+		}
+		path, err := acts.Edit(en, vaults.Edit{Name: a.Name, Tags: a.Tags, Scope: a.Scope, Access: a.Access})
+		if err != nil {
+			return nil, VaultToolOut{}, err
+		}
+		return s.entryOut(acts, path)
+	case "forget":
+		en, err := anyEntryOf(ix, a.Target)
+		if err != nil {
+			return nil, VaultToolOut{}, err
+		}
+		if err := vaults.CheckForget(cfg, en.Path); err != nil {
+			return nil, VaultToolOut{}, err
+		}
+		if err := acts.Unregister(en); err != nil {
+			return nil, VaultToolOut{}, err
+		}
+		return nil, VaultToolOut{Forgotten: en.Path}, nil
+	}
+	return nil, VaultToolOut{}, fmt.Errorf("action must be create, adopt, edit, or forget, not %q", a.Action)
+}
+
+// vaultChoice turns the create and adopt arguments into what Create takes, with the
+// mount and the members resolved to ids before anything is written.
+func vaultChoice(ix *registry.Index, cfg *home.Config, a VaultToolArgs) (actions.AddVault, error) {
+	kind := vault.Project
+	if a.Kind != "" {
+		var err error
+		if kind, err = vault.ParseKind(a.Kind); err != nil {
+			return actions.AddVault{}, err
+		}
+	}
+	choice := actions.AddVault{Kind: kind, Name: a.Name, Mode: a.Mode, Adopt: a.Action == "adopt"}
+	if a.Tags != nil {
+		choice.Tags = *a.Tags
+	}
+	if a.Scope != nil {
+		choice.Scope = *a.Scope
+	}
+	if a.Access != nil {
+		choice.Access = *a.Access
+	}
+	switch {
+	case choice.Adopt:
+		if a.Path == "" {
+			return actions.AddVault{}, errors.New("adopt needs path: the folder to adopt")
+		}
+		abs, err := filepath.Abs(home.Expand(a.Path))
+		if err != nil {
+			return actions.AddVault{}, err
+		}
+		choice.Path = abs
+		if choice.Name == "" {
+			choice.Name = filepath.Base(abs)
+		}
+	case a.InRepo != "":
+		if a.Path != "" {
+			return actions.AddVault{}, errors.New("give path or in_repo, not both")
+		}
+		if kind != vault.Project {
+			return actions.AddVault{}, errors.New("only a project lives inside a repository")
+		}
+		if a.Name == "" {
+			return actions.AddVault{}, errors.New("create needs name")
+		}
+		choice.InRepo = home.Expand(a.InRepo)
+	default:
+		if a.Name == "" {
+			return actions.AddVault{}, errors.New("create needs name")
+		}
+		arg := a.Path
+		if arg == "" {
+			arg = a.Name
+		}
+		path, err := vaults.ResolvePath(arg, cfg.VaultsDir, kind)
+		if err != nil {
+			return actions.AddVault{}, err
+		}
+		choice.Path = path
+	}
+	if a.Mount != "" {
+		if kind != vault.Project {
+			return actions.AddVault{}, errors.New("only a project mounts a knowledge base")
+		}
+		kb, err := entryOf(ix, a.Mount)
+		if err != nil {
+			return actions.AddVault{}, err
+		}
+		if kb.Kind != vault.Knowledge {
+			return actions.AddVault{}, fmt.Errorf("%s is a project; a project mounts knowledge bases", kb.Name)
+		}
+		choice.MountID = kb.ID
+	}
+	for _, m := range a.Members {
+		if kind != vault.Knowledge {
+			return actions.AddVault{}, errors.New("only a knowledge base gathers members")
+		}
+		kb, err := entryOf(ix, m)
+		if err != nil {
+			return actions.AddVault{}, err
+		}
+		if kb.Kind != vault.Knowledge {
+			return actions.AddVault{}, fmt.Errorf("%s is a project; a cluster gathers knowledge bases", kb.Name)
+		}
+		choice.Cluster = true
+		choice.MemberIDs = append(choice.MemberIDs, kb.ID)
+	}
+	return choice, nil
+}
+
+// entryOut scans again and returns the vault at path as the atlas now sees it.
+func (s *Server) entryOut(acts actions.Atlas, path string) (*mcp.CallToolResult, VaultToolOut, error) {
+	ix, err := acts.Scan()
+	if err != nil {
+		return nil, VaultToolOut{}, err
+	}
+	en := ix.ByPath(path)
+	if en == nil {
+		return nil, VaultToolOut{}, fmt.Errorf("%s was written but the scan does not list it; call atlas with refresh", home.Display(path))
+	}
+	return nil, VaultToolOut{Vault: en}, nil
 }
