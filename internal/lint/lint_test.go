@@ -334,38 +334,17 @@ func TestNewVaultHasNoFindings(t *testing.T) {
 		t.Skip("git is not installed")
 	}
 	asOf := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
-	for _, kind := range vault.Kinds {
-		for _, mode := range vault.Modes {
-			root := filepath.Join(t.TempDir(), string(kind)+"-"+string(mode))
-			if _, err := vault.Init(root, vault.Options{Kind: kind, Mode: mode}, asOf); err != nil {
-				t.Fatal(err)
-			}
-			r, err := Run(root, Options{AsOf: asOf})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if r.Summary.IssuesFound != 0 || r.Summary.WantedPages != 0 || r.Summary.Stubs != 0 {
-				t.Errorf("%s vault in %s mode:\n%s", kind, mode, r.Markdown())
-			}
-		}
-	}
 	for _, mode := range vault.Modes {
-		repoRoot := filepath.Join(t.TempDir(), "code")
-		if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+		root := filepath.Join(t.TempDir(), string(mode))
+		if _, err := vault.Init(root, vault.Options{Mode: mode}, asOf); err != nil {
 			t.Fatal(err)
 		}
-		if err := (gitx.Repo{Dir: repoRoot}).Init(); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := vault.InitIn(repoRoot, vault.Options{Kind: vault.Project, Mode: mode}, asOf); err != nil {
-			t.Fatal(err)
-		}
-		r, err := Run(filepath.Join(repoRoot, vault.InRepoDir), Options{AsOf: asOf})
+		r, err := Run(root, Options{AsOf: asOf})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if r.Summary.IssuesFound != 0 || r.Summary.WantedPages != 0 || r.Summary.Stubs != 0 {
-			t.Errorf("project in %s mode inside a repository:\n%s", mode, r.Markdown())
+			t.Errorf("knowledge base in %s mode:\n%s", mode, r.Markdown())
 		}
 	}
 }
@@ -373,12 +352,14 @@ func TestNewVaultHasNoFindings(t *testing.T) {
 func TestKindErrors(t *testing.T) {
 	asOf := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
 	kb := fixture(t, map[string]string{
-		".claude-atlas.json":                 `{"schema":"claude-atlas.vault.v2","id":"1","kind":"knowledge","name":"kb","mode":"generic","created":"2026-09-14","mounts":[{"id":"2","name":"p","access":"write"}]}`,
-		"wiki/index.md":                      mkpage("Index", "# Index\n"),
-		"inbox/paper.md":                     "x",
-		"wiki/tasks/tasks.md":                mkpage("Tasks", "# Tasks\n"),
-		"wiki/questions/Q.md":                mkpage("Q", "# Q\n"),
-		"wiki/meta/ledgers/task-ledger.json": `{"schema":"claude-atlas.task-ledger.v1","tasks":[]}`,
+		".claude-atlas.json":  `{"schema":"claude-atlas.vault.v3","id":"1","kind":"knowledge","name":"kb","mode":"generic","created":"2026-09-14"}`,
+		"wiki/index.md":       mkpage("Index", "# Index\n"),
+		"inbox/paper.md":      "x",
+		"ideas/note.md":       "x",
+		"wiki/tasks/tasks.md": mkpage("Tasks", "# Tasks\n"),
+		"wiki/questions/Q.md": mkpage("Q", "# Q\n"),
+		"kb/x/index.md":       "x",
+		"repos/x/README.md":   "x",
 	})
 	r, err := Run(kb, Options{AsOf: asOf})
 	if err != nil {
@@ -388,269 +369,33 @@ func TestKindErrors(t *testing.T) {
 	for _, f := range r.KindErrors {
 		got = append(got, f.Path)
 	}
-	if strings.Join(got, ",") != ".claude-atlas.json,inbox,wiki/meta/ledgers/task-ledger.json,wiki/questions,wiki/tasks" {
+	if strings.Join(got, ",") != "kb,repos,wiki/questions,wiki/tasks" {
 		t.Fatalf("kind errors %v", got)
 	}
-	if r.Summary.CategoryCounts["kind_errors"] != 5 || r.Version != 3 || !strings.Contains(r.Markdown(), "## Kind (5)") {
+	if r.Summary.CategoryCounts["kind_errors"] != 4 || r.Version != 3 || !strings.Contains(r.Markdown(), "## Kind (4)") {
 		t.Fatalf("summary %+v\n%s", r.Summary, r.Markdown())
 	}
+	if _, ok := r.Summary.CategoryCounts["mount_errors"]; ok {
+		t.Fatal("no mount category")
+	}
+	if _, ok := r.Summary.CategoryCounts["task_errors"]; ok {
+		t.Fatal("no task category")
+	}
 	project := fixture(t, map[string]string{
-		".claude-atlas.json": `{"schema":"claude-atlas.vault.v2","id":"2","kind":"project","name":"p","mode":"generic","created":"2026-09-14","scope":"x"}`,
+		".claude-atlas.json": `{"schema":"claude-atlas.vault.v2","id":"2","kind":"project","name":"p","mode":"generic","created":"2026-09-14"}`,
 		"wiki/index.md":      mkpage("Index", "# Index\n"),
 	})
 	r, _ = Run(project, Options{AsOf: asOf})
-	if len(r.KindErrors) != 1 || r.KindErrors[0].Path != ".claude-atlas.json" || !strings.Contains(r.KindErrors[0].Message, "scope") {
-		t.Fatalf("project kind errors %+v", r.KindErrors)
+	if len(r.KindErrors) != 1 || r.KindErrors[0].Path != ".claude-atlas.json" || !strings.Contains(r.KindErrors[0].Message, "claude-atlas init") {
+		t.Fatalf("v2 project kind errors %+v", r.KindErrors)
 	}
 	plain := fixture(t, map[string]string{
-		"wiki/index.md": mkpage("Index", "# Index\n"),
-		"inbox/x.md":    "x",
+		"wiki/index.md":   mkpage("Index", "# Index\n"),
+		"wiki/tasks/x.md": mkpage("x", "# x\n"),
 	})
 	r, _ = Run(plain, Options{AsOf: asOf})
 	if len(r.KindErrors) != 0 {
 		t.Fatalf("no identity file, no kind checks: %+v", r.KindErrors)
-	}
-}
-
-// A project reads a mounted knowledge base through kb/<name>, the way Obsidian follows
-// the symlink, so a link to one of its pages resolves.
-func TestLinksResolveThroughMounts(t *testing.T) {
-	asOf := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
-	aiml := fixture(t, map[string]string{
-		"wiki/index.md":                    mkpage("Index", "# Index\n\n- [[Backpropagation]]\n"),
-		"wiki/hot.md":                      mkpage("Hot", "# Hot\n"),
-		"wiki/concepts/Backpropagation.md": "---\ntitle: Backpropagation\ntype: concept\nstatus: developing\ncreated: 2026-01-01\nupdated: 2026-01-01\naliases:\n  - backprop\ntags:\n  - x\n---\n\n# Backpropagation\n\n## Causes\n\ntext\n",
-		"wiki/concepts/Shared.md":          mkpage("Shared", "# Shared\n\nthe knowledge base's page\n\n## Only In The Mount\n\ntext\n"),
-		"wiki/concepts/Twice.md":           mkpage("Twice", "# Twice\n\ntext\n"),
-	})
-	other := fixture(t, map[string]string{
-		"wiki/concepts/Twice.md": mkpage("Twice", "# Twice\n\ntext\n"),
-	})
-	root := fixture(t, map[string]string{
-		"wiki/index.md":           mkpage("Index", "# Index\n\n- [[Own]]\n- [[Shared]]\n"),
-		"wiki/concepts/Own.md":    mkpage("Own", "# Own\n\ntext\n"),
-		"wiki/concepts/Shared.md": mkpage("Shared", "# Shared\n\nthe project's page\n"),
-		"wiki/concepts/Notes.md": mkpage("Notes", "# Notes\n\n[[Backpropagation]] [[backprop]] [[Backpropogation]] [[Shared]] [[Twice]]\n"+
-			"[[Backpropagation#Causes]] [[Nowhere]] [[kb/ai-ml/concepts/Shared]] [[Shared#Only In The Mount]]\n"),
-	})
-
-	check := func(what string, r *Report) {
-		t.Helper()
-		var dead []string
-		for _, f := range r.DeadLinks {
-			dead = append(dead, f.Source+"→"+f.Target+":"+f.Reason+":"+f.Suggestion+":"+f.ResolvedPath)
-		}
-		// Shared is a name both tiers hold: the project's own page wins, so the heading
-		// only the mount's copy carries is missing.
-		wantDead := []string{
-			"wiki/concepts/Notes.md→Backpropogation:target-not-found:Backpropagation:",
-			"wiki/concepts/Notes.md→Shared#Only In The Mount:heading-not-found::wiki/concepts/Shared.md",
-		}
-		if strings.Join(dead, "|") != strings.Join(wantDead, "|") {
-			t.Fatalf("%s: dead links\n got %v\nwant %v", what, dead, wantDead)
-		}
-		if len(r.AmbiguousTargets) != 1 || r.AmbiguousTargets[0].Target != "Twice" ||
-			strings.Join(r.AmbiguousTargets[0].Candidates, ",") != "kb/ai-ml/concepts/Twice.md,kb/other/concepts/Twice.md" {
-			t.Fatalf("%s: ambiguous %+v", what, r.AmbiguousTargets)
-		}
-		var dups []string
-		for _, d := range r.DuplicateBasenames {
-			dups = append(dups, d.Basename+":"+strings.Join(d.Paths, ","))
-		}
-		wantDups := []string{
-			"Shared:kb/ai-ml/concepts/Shared.md,wiki/concepts/Shared.md",
-			"Twice:kb/ai-ml/concepts/Twice.md,kb/other/concepts/Twice.md",
-		}
-		if strings.Join(dups, "|") != strings.Join(wantDups, "|") {
-			t.Fatalf("%s: duplicates\n got %v\nwant %v", what, dups, wantDups)
-		}
-		var wanted []string
-		for _, w := range r.WantedPages {
-			wanted = append(wanted, w.Title)
-		}
-		if strings.Join(wanted, ",") != "Nowhere" {
-			t.Fatalf("%s: wanted %v", what, wanted)
-		}
-		if r.Summary.PagesScanned != 4 || r.Summary.LinksScanned != 11 {
-			t.Fatalf("%s: a mount's pages and links are not the project's: %+v", what, r.Summary)
-		}
-		// The own page Shared answers both the project's index and Notes, so nothing
-		// sends it to the mount's copy.
-		if len(r.Orphans) != 1 || r.Orphans[0].Path != "wiki/concepts/Notes.md" {
-			t.Fatalf("%s: orphans %+v", what, r.Orphans)
-		}
-		if len(r.MountErrors) != 0 {
-			t.Fatalf("%s: mount errors %+v", what, r.MountErrors)
-		}
-		var named []string
-		for _, f := range r.Orphans {
-			named = append(named, f.Path)
-		}
-		for _, f := range r.UnindexedPages {
-			named = append(named, f.Path)
-		}
-		for _, f := range r.MissingFrontmatter {
-			named = append(named, f.Path)
-		}
-		for _, f := range r.EmptySections {
-			named = append(named, f.Path)
-		}
-		for _, f := range r.ReadErrors {
-			named = append(named, f.Path)
-		}
-		for _, f := range r.StaleIndexEntries {
-			named = append(named, f.Source)
-		}
-		for _, s := range r.Stubs {
-			named = append(named, s.Path)
-		}
-		for _, f := range r.DeadLinks {
-			named = append(named, f.Source, f.ResolvedPath)
-		}
-		for _, w := range r.WantedPages {
-			for _, l := range w.Links {
-				named = append(named, l.Source)
-			}
-		}
-		if joined := strings.Join(named, ","); strings.Contains(joined, vault.KbDir+"/") {
-			t.Fatalf("%s: a mount's page is a finding: %s", what, joined)
-		}
-	}
-
-	// Given mounts, before the project has a kb/ folder at all.
-	given := map[string]string{"ai-ml": filepath.Join(aiml, "wiki"), "other": filepath.Join(other, "wiki")}
-	r, err := Run(root, Options{AsOf: asOf, Mounts: given})
-	if err != nil {
-		t.Fatal(err)
-	}
-	check("given mounts", r)
-
-	if err := os.MkdirAll(filepath.Join(root, vault.KbDir), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"ai-ml", "other"} {
-		if err := os.Symlink(given[name], filepath.Join(root, vault.KbDir, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	r, err = Run(root, Options{AsOf: asOf})
-	if err != nil {
-		t.Fatal(err)
-	}
-	check("symlinks", r)
-	issues := r.Summary.IssuesFound
-
-	// A map of no mounts leaves the symlinks unread.
-	r, err = Run(root, Options{AsOf: asOf, Mounts: map[string]string{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wanted []string
-	for _, w := range r.WantedPages {
-		wanted = append(wanted, w.Title)
-	}
-	if strings.Join(wanted, ",") != "backprop,Backpropagation,Backpropogation,Nowhere,Twice" {
-		t.Fatalf("no mounts, nothing resolves: %v", wanted)
-	}
-
-	if err := os.Symlink(filepath.Join(root, "gone"), filepath.Join(root, vault.KbDir, "gone")); err != nil {
-		t.Fatal(err)
-	}
-	r, err = Run(root, Options{AsOf: asOf})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(r.MountErrors) != 1 || r.MountErrors[0].Path != "kb/gone" || !strings.Contains(r.MountErrors[0].Message, "points at nothing") {
-		t.Fatalf("mount errors %+v", r.MountErrors)
-	}
-	if r.Summary.CategoryCounts["mount_errors"] != 1 || r.Summary.IssuesFound != issues+1 {
-		t.Fatalf("summary %+v", r.Summary)
-	}
-	if !strings.Contains(r.Markdown(), "## Mounts (1)") {
-		t.Fatalf("markdown:\n%s", r.Markdown())
-	}
-	// The mounts that do resolve still do: the dead links are the same two.
-	if len(r.DeadLinks) != 2 || r.DeadLinks[0].Target != "Backpropogation" {
-		t.Fatalf("dead links beside the broken mount: %+v", r.DeadLinks)
-	}
-}
-
-// A mount brings a wiki root page and a folder index page of its own; the project's own
-// layout answers for every name it repeats.
-func TestDuplicateBasenamesAcrossAMount(t *testing.T) {
-	kb := fixture(t, map[string]string{
-		"wiki/index.md":          mkpage("Index", "# Index\n"),
-		"wiki/log.md":            mkpage("Log", "# Log\n"),
-		"wiki/tasks/tasks.md":    mkpage("Tasks", "# Tasks\n"),
-		"wiki/concepts/Alpha.md": mkpage("Alpha", "# Alpha\n\ntext\n"),
-	})
-	root := fixture(t, map[string]string{
-		"wiki/index.md":          mkpage("Index", "# Index\n\n- [[Alpha]]\n"),
-		"wiki/log.md":            mkpage("Log", "# Log\n"),
-		"wiki/concepts/index.md": mkpage("Index", "# Index\n\ntext\n"),
-		"wiki/tasks/tasks.md":    mkpage("Tasks", "# Tasks\n"),
-		"wiki/concepts/Alpha.md": mkpage("Alpha", "# Alpha\n\ntext\n"),
-	})
-	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC), Mounts: map[string]string{"x": filepath.Join(kb, "wiki")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var dups []string
-	for _, d := range r.DuplicateBasenames {
-		dups = append(dups, d.Basename+":"+strings.Join(d.Paths, ","))
-	}
-	// Alpha collides across the mount; the project's two index pages collide with each
-	// other; the mount's index, log, and folder index answer for nobody.
-	want := []string{
-		"Alpha:kb/x/concepts/Alpha.md,wiki/concepts/Alpha.md",
-		"index:wiki/concepts/index.md,wiki/index.md",
-	}
-	if strings.Join(dups, "|") != strings.Join(want, "|") {
-		t.Fatalf("duplicates\n got %v\nwant %v", dups, want)
-	}
-}
-
-// kb/ and repos/ hold other repositories and other vaults, so the project's own walk
-// leaves them alone: a file there is neither a page nor a target a link reaches.
-func TestReservedFoldersAreNotTheProjectsFiles(t *testing.T) {
-	root := fixture(t, map[string]string{
-		"wiki/index.md":     mkpage("Index", "# Index\n\n- [[notes]]\n- [[README]]\n"),
-		"kb/notes.md":       mkpage("Notes", "# Notes\n\nnot a mount and not a page\n"),
-		"repos/x/README.md": "# README\n\na deliverable, not a wiki page\n",
-	})
-	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Summary.PagesScanned != 1 {
-		t.Fatalf("pages %+v", r.Summary)
-	}
-	var dead []string
-	for _, f := range r.DeadLinks {
-		dead = append(dead, f.Target)
-	}
-	if strings.Join(dead, ",") != "notes,README" {
-		t.Fatalf("a reserved folder holds no targets: %v", dead)
-	}
-	// A folder under kb/ that is not a mount is still worth naming.
-	if len(r.MountErrors) != 1 || r.MountErrors[0].Path != "kb/notes.md" || !strings.Contains(r.MountErrors[0].Message, "not a mount") {
-		t.Fatalf("mount errors %+v", r.MountErrors)
-	}
-}
-
-// A mount points at a knowledge base's wiki, not at its root.
-func TestMountMustPointAtAWiki(t *testing.T) {
-	kb := fixture(t, map[string]string{"wiki/concepts/Alpha.md": mkpage("Alpha", "# Alpha\n\ntext\n")})
-	root := fixture(t, map[string]string{"wiki/index.md": mkpage("Index", "# Index\n\n- [[Alpha]]\n")})
-	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC), Mounts: map[string]string{"x": kb}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(r.MountErrors) != 1 || r.MountErrors[0].Path != "kb/x" || !strings.Contains(r.MountErrors[0].Message, "not a wiki directory") {
-		t.Fatalf("mount errors %+v", r.MountErrors)
-	}
-	if len(r.DeadLinks) != 1 || r.DeadLinks[0].Target != "Alpha" {
-		t.Fatalf("a refused mount resolves nothing: %+v", r.DeadLinks)
 	}
 }
 
@@ -685,32 +430,18 @@ func TestExcludeAndFrontmatterYAMLError(t *testing.T) {
 	}
 }
 
-func TestTaskErrors(t *testing.T) {
-	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "wiki", "tasks", "archive"), 0o755)
-	write := func(rel, text string) {
-		os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(text), 0o644)
-	}
-	task := func(status, id, extra string) string {
-		return "---\ntype: task\ntitle: T\nstatus: " + status + "\npriority: normal\ncreated: 2026-08-01\nupdated: 2026-08-01\ntags:\n  - task\ntask_id: " + id + "\n---\n\n# T\n\n## Idea\n\nx\n" + extra
-	}
-	write("wiki/tasks/tasks.md", "---\ntype: meta\ntitle: Tasks\nstatus: evergreen\ncreated: 2026-08-01\nupdated: 2026-08-01\ntags:\n  - meta\n---\n\n[[ok]] [[stale]] [[noplan]] [[wrong]]\n")
-	write("wiki/tasks/ok.md", task("planted", "task-20260801-aaaa", ""))
-	write("wiki/tasks/stale.md", task("active", "task-20260801-bbbb", "\n## Plan\n\n1. Go.\n"))
-	write("wiki/tasks/noplan.md", task("planned", "task-20260801-cccc", ""))
-	write("wiki/tasks/wrong.md", task("done", "task-20260801-dddd", ""))
-	report, err := Run(root, Options{AsOf: time.Date(2026, 9, 1, 0, 0, 0, 0, time.Local)})
+// Pages under wiki/tasks/ are ordinary pages: nothing checks them as tasks, and the
+// index catalogs them like any other.
+func TestTaskPagesAreOrdinaryPages(t *testing.T) {
+	root := fixture(t, map[string]string{
+		"wiki/index.md":          mkpage("Index", "# Index\n\n- [[Old task]]\n"),
+		"wiki/tasks/Old task.md": "---\ntype: task\ntitle: Old task\nstatus: done\ncreated: 2026-08-01\nupdated: 2026-08-01\ntags:\n  - task\ntask_id: task-20260801-aaaa\n---\n\n# Old task\n\nx\n",
+	})
+	r, err := Run(root, Options{AsOf: time.Date(2026, 9, 1, 0, 0, 0, 0, time.Local)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]string{}
-	for _, f := range report.TaskErrors {
-		got[f.Path] = f.Message
-	}
-	if len(got) != 3 || !strings.Contains(got["wiki/tasks/stale.md"], "untouched since 2026-08-01") || !strings.Contains(got["wiki/tasks/noplan.md"], "without a Plan section") || !strings.Contains(got["wiki/tasks/wrong.md"], "moves to wiki/tasks/archive/") {
-		t.Fatalf("task errors %+v", got)
-	}
-	if report.Summary.CategoryCounts["task_errors"] != 3 || len(report.UnindexedPages) != 0 || !strings.Contains(report.Markdown(), "## Tasks (3)") {
-		t.Fatalf("summary %+v unindexed %v", report.Summary, report.UnindexedPages)
+	if len(r.Orphans) != 0 || len(r.UnindexedPages) != 0 || len(r.DeadLinks) != 0 {
+		t.Fatalf("orphans %v unindexed %v dead %v", r.Orphans, r.UnindexedPages, r.DeadLinks)
 	}
 }

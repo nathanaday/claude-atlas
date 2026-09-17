@@ -18,7 +18,6 @@ import (
 	"unicode"
 
 	"github.com/nathanaday/claude-atlas/internal/ledger"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -32,10 +31,6 @@ type Options struct {
 	// Exclude lists path globs (relative to the vault) to leave out of every check.
 	Exclude []string
 	AsOf    time.Time
-	// Mounts names the knowledge bases a project mounts: a mount name maps to the path
-	// of that knowledge base's wiki directory. A nil map means Run reads the symlinks
-	// under kb/ itself; an empty map means the project mounts nothing.
-	Mounts map[string]string
 }
 
 // LinkFinding is a link that does not resolve as written.
@@ -124,9 +119,7 @@ type Report struct {
 	StaleIndexEntries  []LinkFinding        `json:"stale_index_entries"`
 	ReadErrors         []PathFinding        `json:"read_errors"`
 	LedgerErrors       []PathFinding        `json:"ledger_errors"`
-	TaskErrors         []PathFinding        `json:"task_errors"`
 	KindErrors         []PathFinding        `json:"kind_errors"`
-	MountErrors        []PathFinding        `json:"mount_errors"`
 	WantedPages        []WantedPage         `json:"wanted_pages"`
 	Stubs              []Stub               `json:"stubs"`
 }
@@ -189,185 +182,31 @@ var orphanExcluded = map[string]bool{
 
 // folderIndexes are the index pages the layout names after their folder, so that no two
 // pages share the basename index.
-var folderIndexes = map[string]bool{vault.TasksIndex: true, vault.CanvasIndex: true}
+var folderIndexes = map[string]bool{vault.CanvasIndex: true}
 
-// rootPages are the pages every wiki root holds, so a project and each knowledge base it
-// mounts have one of each.
-var rootPages = map[string]bool{"index": true, "log": true, "hot": true, "overview": true}
-
-// mountRoot reports whether dir is a mount's top folder, kb/<name>.
-func mountRoot(dir string) bool {
-	name, ok := strings.CutPrefix(dir, vault.KbDir+"/")
-	return ok && name != "" && !strings.Contains(name, "/")
-}
-
-// duplicateExempt reports whether a basename repeats by design. A mount brings a wiki
-// root page and a folder index page of its own, and neither is the project's doing. The
-// project's own pages keep every name, so the layout's rule that a folder index takes its
-// folder's name still shows up as a duplicate when a page breaks it.
+// duplicateExempt reports whether a basename repeats by design: _index pages do.
 func duplicateExempt(rel string) bool {
-	stem := strings.ToLower(strings.TrimSuffix(path.Base(rel), path.Ext(rel)))
-	if stem == "_index" {
-		return true
-	}
-	if !strings.HasPrefix(rel, vault.KbDir+"/") {
-		return false
-	}
-	dir := path.Dir(rel)
-	if strings.EqualFold(path.Base(dir), stem) {
-		return true
-	}
-	return rootPages[stem] && mountRoot(dir)
+	return strings.ToLower(strings.TrimSuffix(path.Base(rel), path.Ext(rel))) == "_index"
 }
 
-// taskErrors checks a task page: the rules the core enforces, a plan where the status
-// promises one, and an active task nobody has touched for tasks.StaleDays.
-func taskErrors(pg *page, asOf time.Time) []PathFinding {
-	t, err := tasks.Parse(pg.path, []byte(pg.text))
-	if err != nil {
-		return []PathFinding{{Path: pg.path, Message: strings.TrimPrefix(err.Error(), pg.path+": ")}}
-	}
-	var out []PathFinding
-	if (t.Status == "planned" || t.Status == "active") && !t.HasPlan {
-		out = append(out, PathFinding{Path: pg.path, Message: t.Status + " without a Plan section; run task-plan or set the status back to planted"})
-	}
-	if t.Status == "active" {
-		if updated, err := time.ParseInLocation("2006-01-02", t.Updated, time.Local); err == nil && asOf.Sub(updated).Hours()/24 >= tasks.StaleDays {
-			out = append(out, PathFinding{Path: pg.path, Message: fmt.Sprintf("active but untouched since %s; continue it, block it, or finish it", t.Updated)})
-		}
-	}
-	return out
-}
-
-// knowledgeHasNo says why each project-only folder is out of place in a knowledge base.
-var knowledgeHasNo = map[string]string{
-	vault.InboxDir:     "sources enter through a project that mounts it",
-	vault.IdeasDir:     "ideas live in a project",
-	vault.TasksDir:     "tasks live in a project",
-	vault.QuestionsDir: "move its pages to a project or delete them",
-	vault.SessionsDir:  "move its pages to a project or delete them",
-}
-
-// kindErrors checks the vault against its kind. A knowledge base has none of the
-// project-only paths and carries no project fields; a project carries no knowledge base
-// fields. A tree without a current identity file is not checked.
-func kindErrors(root string, present map[string]bool) []PathFinding {
-	// Reads the file on disk, not the overlay; a plan that rewrites the identity file
-	// (mount, grant) will need the overlay here.
+// kindErrors checks the vault against its kind: the identity file names a knowledge
+// base, and the v2 folders a knowledge base does not have are gone. A tree without a
+// readable identity file is not checked.
+func kindErrors(root string) []PathFinding {
 	cfg, ok := vault.ReadConfig(root)
-	if !ok || cfg.Schema != vault.Schema {
+	if !ok || (cfg.Schema != vault.Schema && cfg.Schema != vault.SchemaV2) {
 		return nil
 	}
 	var out []PathFinding
-	switch cfg.Kind {
-	case vault.Knowledge:
-		for _, rel := range vault.ProjectOnly {
-			if rel == vault.TaskLedgerPath {
-				if present[rel] {
-					out = append(out, PathFinding{Path: rel, Message: "a knowledge base has no task ledger"})
-				}
-				continue
-			}
-			if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil && info.IsDir() {
-				out = append(out, PathFinding{Path: rel, Message: "a knowledge base has no " + rel + "/; " + knowledgeHasNo[rel]})
-			}
-		}
-		if len(cfg.Tags)+len(cfg.Mounts)+len(cfg.Repos) > 0 {
-			out = append(out, PathFinding{Path: vault.Marker, Message: "a knowledge base carries no tags, mounts, or repos; those are a project's fields"})
-		}
-	case vault.Project:
-		if cfg.Scope != "" || cfg.Access != "" || len(cfg.Grants) > 0 {
-			out = append(out, PathFinding{Path: vault.Marker, Message: "a project carries no scope, access, or grants; those are a knowledge base's fields"})
+	if cfg.Kind != vault.Kind {
+		out = append(out, PathFinding{Path: vault.Marker, Message: fmt.Sprintf("kind is %q; a v3 vault is a knowledge base, and a v2 project vault is recreated with `claude-atlas init`", cfg.Kind)})
+	}
+	for _, rel := range []string{"wiki/tasks", "wiki/questions", "wiki/sessions", "kb", "repos"} {
+		if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err == nil && info.IsDir() {
+			out = append(out, PathFinding{Path: rel, Message: "a v2 project folder; tasks live in a project's atlas/ folder now, and knowledge pages move under wiki/"})
 		}
 	}
 	return out
-}
-
-// readMounts lists the knowledge bases a project mounts, in name order: the mount name
-// and the wiki directory it leads to. given replaces the scan of kb/; a nil map means
-// read the symlinks. A mount that leads nowhere is left out and named in the findings.
-func readMounts(root string, given map[string]string) ([]string, map[string]string, []PathFinding) {
-	paths := map[string]string{}
-	var names []string
-	var errs []PathFinding
-	rel := func(name string) string { return vault.KbDir + "/" + name }
-	// keep takes a mount whose target is a directory named wiki, and names the mistake
-	// otherwise. shown is the target as the user wrote it.
-	keep := func(name, dir, shown string) {
-		switch info, err := os.Stat(dir); {
-		case err != nil || !info.IsDir():
-			errs = append(errs, PathFinding{Path: rel(name), Message: "the mount is not a directory: " + shown})
-		case filepath.Base(dir) != vault.WikiDir:
-			errs = append(errs, PathFinding{Path: rel(name), Message: "target is not a wiki directory: " + shown})
-		default:
-			names = append(names, name)
-			paths[name] = dir
-		}
-	}
-	if given != nil {
-		var wanted []string
-		for name := range given {
-			wanted = append(wanted, name)
-		}
-		sort.Strings(wanted)
-		for _, name := range wanted {
-			keep(name, given[name], given[name])
-		}
-		return names, paths, errs
-	}
-	entries, err := os.ReadDir(filepath.Join(root, vault.KbDir))
-	if err != nil {
-		return nil, paths, nil
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		link := filepath.Join(root, vault.KbDir, name)
-		target, err := os.Readlink(link)
-		if err != nil {
-			errs = append(errs, PathFinding{Path: rel(name), Message: "not a mount: a mount is a symlink to a knowledge base's wiki"})
-			continue
-		}
-		dir, err := filepath.EvalSymlinks(link)
-		if err != nil {
-			errs = append(errs, PathFinding{Path: rel(name), Message: "the mount points at nothing: " + target})
-			continue
-		}
-		keep(name, dir, target)
-	}
-	return names, paths, errs
-}
-
-// mountTargets walks every mounted knowledge base into targets a link can reach. A target
-// keeps the path the project reads it at, kb/<name>/<path under the wiki>, and its pages
-// are parsed for headings, blocks, and aliases only: they are not the project's pages.
-func mountTargets(root string, opts Options) ([]target, []PathFinding) {
-	names, paths, errs := readMounts(root, opts.Mounts)
-	var out []target
-	for _, name := range names {
-		dir := paths[name]
-		files, err := walk(dir)
-		if err != nil {
-			errs = append(errs, PathFinding{Path: vault.KbDir + "/" + name, Message: "unable to read the mount: " + err.Error()})
-			continue
-		}
-		for _, rel := range files {
-			p := vault.KbDir + "/" + name + "/" + rel
-			if excluded(p, opts.Exclude) {
-				continue
-			}
-			t := target{path: p}
-			if strings.EqualFold(path.Ext(rel), ".md") {
-				if data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))); err == nil {
-					t.page = parsePage(p, string(data))
-				}
-			}
-			out = append(out, t)
-		}
-	}
-	return out, errs
 }
 
 // Run lints the vault at root.
@@ -383,7 +222,7 @@ func Run(root string, opts Options) (*Report, error) {
 	if asOf.IsZero() {
 		asOf = time.Now().UTC()
 	}
-	files, err := walk(root, vault.KbDir, vault.ReposDir)
+	files, err := walk(root)
 	if err != nil {
 		return nil, err
 	}
@@ -431,11 +270,8 @@ func Run(root string, opts Options) (*Report, error) {
 		targets = append(targets, target{path: rel, page: pg})
 	}
 
-	mounted, mountErrs := mountTargets(root, opts)
-	report.MountErrors = mountErrs
-
-	resolver := newResolver(targets, mounted)
-	near := newNearIndex(targets, mounted)
+	resolver := newResolver(targets)
+	near := newNearIndex(targets)
 	wanted := map[string]*WantedPage{}
 	incoming := map[string]map[string]bool{}
 	for _, pg := range pages {
@@ -494,8 +330,6 @@ func Run(root string, opts Options) (*Report, error) {
 		report.WantedPages = append(report.WantedPages, *w)
 	}
 
-	// A basename is a duplicate wherever the project reads it: in its own wiki, or
-	// through a mount, where Obsidian shows it beside the project's own pages.
 	byStem := map[string][]string{}
 	addStem := func(rel string) {
 		if duplicateExempt(rel) {
@@ -506,11 +340,6 @@ func Run(root string, opts Options) (*Report, error) {
 	}
 	for _, pg := range pages {
 		addStem(pg.path)
-	}
-	for _, t := range mounted {
-		if t.page != nil {
-			addStem(t.path)
-		}
 	}
 	for _, names := range byStem {
 		if len(names) < 2 {
@@ -567,12 +396,7 @@ func Run(root string, opts Options) (*Report, error) {
 	}
 
 	report.LedgerErrors = ledgerErrors(root, opts.Overlay, present, asOf)
-	report.KindErrors = kindErrors(root, present)
-	for _, pg := range pages {
-		if tasks.IsPage(pg.path) {
-			report.TaskErrors = append(report.TaskErrors, taskErrors(pg, asOf)...)
-		}
-	}
+	report.KindErrors = kindErrors(root)
 
 	sortFindings(report)
 	report.Summary = Summary{PagesScanned: len(pages), LinksScanned: links, WantedPages: len(report.WantedPages), Stubs: len(report.Stubs), CategoryCounts: map[string]int{
@@ -586,9 +410,7 @@ func Run(root string, opts Options) (*Report, error) {
 		"stale_index_entries": len(report.StaleIndexEntries),
 		"read_errors":         len(report.ReadErrors),
 		"ledger_errors":       len(report.LedgerErrors),
-		"task_errors":         len(report.TaskErrors),
 		"kind_errors":         len(report.KindErrors),
-		"mount_errors":        len(report.MountErrors),
 	}}
 	for _, n := range report.Summary.CategoryCounts {
 		report.Summary.IssuesFound += n
@@ -597,13 +419,8 @@ func Run(root string, opts Options) (*Report, error) {
 	return report, nil
 }
 
-// walk lists the files under root. skipTop names the folders at root it leaves out: the
-// vault's own walk leaves out kb/ and repos/, which hold other vaults.
-func walk(root string, skipTop ...string) ([]string, error) {
-	reserved := map[string]bool{}
-	for _, name := range skipTop {
-		reserved[name] = true
-	}
+// walk lists the files under root.
+func walk(root string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -618,9 +435,6 @@ func walk(root string, skipTop ...string) ([]string, error) {
 		name := d.Name()
 		if d.IsDir() {
 			if strings.HasPrefix(name, ".") || name == "node_modules" {
-				return fs.SkipDir
-			}
-			if reserved[name] && filepath.Dir(p) == root {
 				return fs.SkipDir
 			}
 			return nil
@@ -836,15 +650,13 @@ type tier struct {
 	byAlias    map[string][]target
 }
 
-// resolver resolves a link against the vault's own files first, and the mounts second: a
-// page of the project's own wins over a page of the same name in a knowledge base.
+// resolver resolves a link against the vault's files.
 type resolver struct {
-	own    *tier
-	mounts *tier
+	own *tier
 }
 
-func newResolver(own, mounts []target) *resolver {
-	return &resolver{own: newTier(own), mounts: newTier(mounts)}
+func newResolver(own []target) *resolver {
+	return &resolver{own: newTier(own)}
 }
 
 func newTier(targets []target) *tier {
@@ -913,10 +725,7 @@ func (r *resolver) resolve(l link) []target {
 	if !strings.HasPrefix(strings.ToLower(raw), "wiki/") {
 		queries = append(queries, path.Clean(path.Join("wiki", raw)))
 	}
-	if found := r.own.find(queries, raw); len(found) > 0 {
-		return found
-	}
-	return r.mounts.find(queries, raw)
+	return r.own.find(queries, raw)
 }
 
 // find returns the targets a link names: an exact path, then a bare name against
@@ -1102,7 +911,7 @@ func orphanCandidate(rel string) bool {
 // an empty file a page other than the log links to. The log, the hot cache, the overview,
 // index pages, task pages, meta pages, and folds are never stubs.
 func stubOf(pg *page, incoming map[string]bool) (Stub, bool) {
-	if !orphanCandidate(pg.path) || tasks.IsPage(pg.path) || pg.frontErr != nil {
+	if !orphanCandidate(pg.path) || pg.frontErr != nil {
 		return Stub{}, false
 	}
 	from := []string{}
@@ -1234,7 +1043,6 @@ func sortFindings(r *Report) {
 	})
 	sort.SliceStable(r.ReadErrors, func(i, j int) bool { return pathLess(r.ReadErrors[i].Path, r.ReadErrors[j].Path) })
 	sort.SliceStable(r.KindErrors, func(i, j int) bool { return pathLess(r.KindErrors[i].Path, r.KindErrors[j].Path) })
-	sort.SliceStable(r.MountErrors, func(i, j int) bool { return pathLess(r.MountErrors[i].Path, r.MountErrors[j].Path) })
 	// A wanted title and a stub path are each unique, and pathLess breaks a case-insensitive
 	// tie on the exact string, so the map order these come from never reaches the report.
 	sort.SliceStable(r.WantedPages, func(i, j int) bool { return pathLess(r.WantedPages[i].Title, r.WantedPages[j].Title) })
@@ -1283,14 +1091,8 @@ func (r *Report) fillEmpty() {
 	if r.LedgerErrors == nil {
 		r.LedgerErrors = []PathFinding{}
 	}
-	if r.TaskErrors == nil {
-		r.TaskErrors = []PathFinding{}
-	}
 	if r.KindErrors == nil {
 		r.KindErrors = []PathFinding{}
-	}
-	if r.MountErrors == nil {
-		r.MountErrors = []PathFinding{}
 	}
 	if r.WantedPages == nil {
 		r.WantedPages = []WantedPage{}
@@ -1352,20 +1154,12 @@ func (r *Report) Markdown() string {
 	for _, f := range r.ReadErrors {
 		fmt.Fprintf(&b, "- `%s`: %s\n", f.Path, f.Message)
 	}
-	section("Tasks", len(r.TaskErrors))
-	for _, f := range r.TaskErrors {
-		fmt.Fprintf(&b, "- `%s`: %s\n", f.Path, f.Message)
-	}
 	section("Ledger", len(r.LedgerErrors))
 	for _, f := range r.LedgerErrors {
 		fmt.Fprintf(&b, "- %s\n", f.Message)
 	}
 	section("Kind", len(r.KindErrors))
 	for _, f := range r.KindErrors {
-		fmt.Fprintf(&b, "- `%s`: %s\n", f.Path, f.Message)
-	}
-	section("Mounts", len(r.MountErrors))
-	for _, f := range r.MountErrors {
 		fmt.Fprintf(&b, "- `%s`: %s\n", f.Path, f.Message)
 	}
 	section("Wanted pages", len(r.WantedPages))

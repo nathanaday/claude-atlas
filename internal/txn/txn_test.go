@@ -5,16 +5,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -37,21 +34,7 @@ func newVault(t *testing.T) *vault.Vault {
 	t.Helper()
 	needGit(t)
 	root := filepath.Join(t.TempDir(), "v")
-	if _, err := vault.Init(root, vault.Options{Kind: vault.Project, Mode: vault.Generic}, now); err != nil {
-		t.Fatal(err)
-	}
-	v, err := vault.Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return v
-}
-
-func newKnowledge(t *testing.T) *vault.Vault {
-	t.Helper()
-	needGit(t)
-	root := filepath.Join(t.TempDir(), "kb")
-	if _, err := vault.Init(root, vault.Options{Kind: vault.Knowledge}, now); err != nil {
+	if _, err := vault.Init(root, vault.Options{Mode: vault.Generic}, now); err != nil {
 		t.Fatal(err)
 	}
 	v, err := vault.Open(root)
@@ -101,8 +84,8 @@ func TestPrepareValidates(t *testing.T) {
 		{"dotdot", Request{Kind: Save, Summary: "x", Writes: []Write{{Path: "wiki/../x.md", Mode: Create, Content: mkpage("A", "")}}}, "clean vault-relative"},
 		{"unknown source", Request{Kind: Ingest, Summary: "x", Sources: []ledger.Update{{ID: "src-nope", Ingested: true}}}, "capture it first"},
 		{"uncaptured inbox", Request{Kind: Ingest, Summary: "x", Writes: []Write{{Path: "inbox/.gitkeep", Mode: Delete}}}, "has not been captured"},
-		{"kb", Request{Kind: Save, Summary: "x", Writes: []Write{{Path: "kb/ai-ml/concepts/A.md", Mode: Create, Content: mkpage("A", "")}}}, "mounted knowledge base"},
-		{"repos", Request{Kind: Repair, Summary: "x", Writes: []Write{{Path: "repos/code/README.md", Mode: Create, Content: []byte("x")}}}, "not the vault's files"},
+		{"ideas", Request{Kind: Repair, Summary: "x", Writes: []Write{{Path: "ideas/a.md", Mode: Create, Content: []byte("x")}}}, "scratch space"},
+		{"task kind", Request{Kind: "task", Summary: "x", Writes: []Write{{Path: "wiki/a.md", Mode: Create, Content: mkpage("A", "")}}}, "unknown operation kind"},
 	}
 	for _, c := range cases {
 		_, err := Prepare(v, c.req, now)
@@ -282,227 +265,6 @@ func TestUndoRevertsAnOperation(t *testing.T) {
 	}
 }
 
-// inRepoVault makes a project at REPO/atlas inside a repository that already holds code.
-// It returns the vault and the whole repository, which the tests use to watch the code.
-func inRepoVault(t *testing.T) (*vault.Vault, gitx.Repo) {
-	t.Helper()
-	needGit(t)
-	repoRoot := filepath.Join(t.TempDir(), "code")
-	os.MkdirAll(repoRoot, 0o755)
-	host := gitx.Repo{Dir: repoRoot}
-	if err := host.Init(); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(repoRoot, "main.go"), []byte("package main\n"), 0o644)
-	host.AddAll()
-	if _, err := host.Commit("code"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := vault.InitIn(repoRoot, vault.Options{Kind: vault.Project, Name: "Notes"}, now); err != nil {
-		t.Fatal(err)
-	}
-	v, err := vault.Open(filepath.Join(repoRoot, vault.InRepoDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return v, host
-}
-
-// outsideTheVault lists the whole repository's changes as "<code> <path>", sorted.
-func outsideTheVault(host gitx.Repo) string {
-	entries, _ := host.Status()
-	var out []string
-	for _, e := range entries {
-		out = append(out, e.Code+" "+e.Path)
-	}
-	sort.Strings(out)
-	return strings.Join(out, ",")
-}
-
-// staged is a path's content in the index: an empty revision makes `git show :path`.
-func staged(t *testing.T, host gitx.Repo, path string) string {
-	t.Helper()
-	data, err := host.ShowFile("", path)
-	if err != nil {
-		t.Fatalf("index %s: %v", path, err)
-	}
-	return string(data)
-}
-
-func TestAnOperationInsideARepositoryCommitsOnlyTheVault(t *testing.T) {
-	v, host := inRepoVault(t)
-	repoRoot := host.Dir
-	// Half-written code outside the vault, staged code next to it, and a hand edit inside.
-	os.WriteFile(filepath.Join(repoRoot, "main.go"), []byte("package main // half\n"), 0o644)
-	os.WriteFile(filepath.Join(repoRoot, "other.go"), []byte("package main // staged\n"), 0o644)
-	if err := host.Add("other.go"); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(v.Path("wiki/hot.md"), []byte("# hot\n\nby hand\n"), 0o644)
-	page := "---\ntype: concept\ntitle: A\nstatus: seed\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# A\n\ntext\n"
-	plan, err := Prepare(v, Request{Kind: Save, Summary: "add A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: []byte(page)}}}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := Apply(v, plan, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, sha := range []string{res.ManualCommit, res.Commit} {
-		if sha == "" {
-			continue
-		}
-		paths, _ := host.ChangedPaths(sha)
-		for _, p := range paths {
-			if !strings.HasPrefix(p, "atlas/") {
-				t.Fatalf("commit %s touched %s", sha, p)
-			}
-		}
-	}
-	if res.ManualCommit == "" {
-		t.Fatal("the hand edit must be committed first")
-	}
-	if outside := outsideTheVault(host); outside != " M main.go,A  other.go" {
-		t.Fatalf("the code must stay as it was: %q", outside)
-	}
-	if staged(t, host, "other.go") != "package main // staged\n" {
-		t.Fatal("the staged file must keep its staged content")
-	}
-	ops, err := History(v, 0, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ops) < 2 || ops[0].Kind != "save" {
-		t.Fatalf("history %+v", ops)
-	}
-	if _, err := UndoOperation(v, ops[0].ID, now.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(v.Path("wiki/concepts/A.md")); err == nil {
-		t.Fatal("undo must remove A")
-	}
-	if data, _ := os.ReadFile(filepath.Join(repoRoot, "main.go")); string(data) != "package main // half\n" {
-		t.Fatalf("undo touched the code: %q", data)
-	}
-	if staged(t, host, "other.go") != "package main // staged\n" {
-		t.Fatal("undo must leave the staged file alone")
-	}
-}
-
-func TestAConflictingUndoInsideARepositoryLeavesTheCodeAlone(t *testing.T) {
-	v, host := inRepoVault(t)
-	first, err := Prepare(v, Request{Kind: Save, Summary: "add A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: mkpage("A", "# A\n\none\n")}}}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	applied, err := Apply(v, first, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A later operation overtakes the page, so undoing the first one conflicts.
-	second, err := Prepare(v, Request{Kind: Markdown, Summary: "edit A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Replace, Content: mkpage("A", "# A\n\ntwo\n")}}}, now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Apply(v, second, now.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	// Code the user staged, and code they are still writing.
-	os.WriteFile(filepath.Join(host.Dir, "other.go"), []byte("package main // staged\n"), 0o644)
-	if err := host.Add("other.go"); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(host.Dir, "main.go"), []byte("package main // half\n"), 0o644)
-	if _, err := UndoOperation(v, applied.OperationID, now.Add(time.Hour)); err == nil {
-		t.Fatal("undoing an overtaken operation must fail")
-	}
-	if staged(t, host, "other.go") != "package main // staged\n" {
-		t.Fatal("a failed undo must not discard the staged code")
-	}
-	if data, _ := os.ReadFile(filepath.Join(host.Dir, "main.go")); string(data) != "package main // half\n" {
-		t.Fatalf("a failed undo must not touch the code: %q", data)
-	}
-	if outside := outsideTheVault(host); outside != " M main.go,A  other.go" {
-		t.Fatalf("the code must stay as it was: %q", outside)
-	}
-	if dirty, _ := v.Repo().Dirty(); dirty {
-		t.Fatal("the vault must be back at HEAD")
-	}
-	if read(t, v, "wiki/concepts/A.md") != string(mkpage("A", "# A\n\ntwo\n")) {
-		t.Fatal("the page must keep the content the later operation wrote")
-	}
-	if _, err := os.Stat(filepath.Join(host.Dir, ".git", "REVERT_HEAD")); err == nil {
-		t.Fatal("a failed revert must leave no state behind")
-	}
-}
-
-// TestTheEngineWaitsOutAMergeInTheHost covers a conflicted merge in the code repository.
-// A commit made then would join the merge, and `git merge --abort` would throw the
-// operation away with it.
-func TestTheEngineWaitsOutAMergeInTheHost(t *testing.T) {
-	v, host := inRepoVault(t)
-	git := func(args ...string) (string, error) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = host.Dir
-		out, err := cmd.CombinedOutput()
-		return string(out), err
-	}
-	code := func(text string) {
-		os.WriteFile(filepath.Join(host.Dir, "main.go"), []byte(text), 0o644)
-		if out, err := git("commit", "-q", "-a", "-m", "code"); err != nil {
-			t.Fatalf("commit: %s %v", out, err)
-		}
-	}
-	if out, err := git("checkout", "-q", "-b", "other"); err != nil {
-		t.Fatalf("branch: %s %v", out, err)
-	}
-	code("package main // other\n")
-	if out, err := git("checkout", "-q", "main"); err != nil {
-		t.Fatalf("checkout: %s %v", out, err)
-	}
-	code("package main // main\n")
-	conflict := func() {
-		t.Helper()
-		if out, err := git("merge", "other"); err == nil {
-			t.Fatalf("the merge must conflict: %s", out)
-		}
-		if got := host.InProgress(); got != "merge" {
-			t.Fatalf("InProgress %q", got)
-		}
-	}
-	abort := func() {
-		t.Helper()
-		if out, err := git("merge", "--abort"); err != nil {
-			t.Fatalf("merge --abort: %s %v", out, err)
-		}
-	}
-
-	req := Request{Kind: Save, Summary: "add A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: mkpage("A", "# A\n\none\n")}}}
-	conflict()
-	if _, err := Prepare(v, req, now); err == nil || !strings.Contains(err.Error(), "in the middle of a merge") {
-		t.Fatalf("plan during a merge: %v", err)
-	}
-	abort()
-	plan, err := Prepare(v, req, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conflict()
-	if _, err := Apply(v, plan, now); err == nil || !strings.Contains(err.Error(), "in the middle of a merge") {
-		t.Fatalf("apply during a merge: %v", err)
-	}
-	if _, err := os.Stat(v.Path("wiki/concepts/A.md")); err == nil {
-		t.Fatal("a refused apply must write nothing")
-	}
-	abort()
-	if _, err := Apply(v, plan, now); err != nil {
-		t.Fatal(err)
-	}
-	if read(t, v, "wiki/concepts/A.md") != string(mkpage("A", "# A\n\none\n")) {
-		t.Fatal("the page after the merge is finished")
-	}
-}
-
 func TestConfigAndSources(t *testing.T) {
 	v := newVault(t)
 	plan, err := Prepare(v, ConfigRequest(v, vault.LYT), now)
@@ -616,139 +378,6 @@ func TestPrependLogHandlesEmptyAndHeaderOnly(t *testing.T) {
 	}
 }
 
-func taskPage(title, status, id, folder, extra string) (string, []byte) {
-	p := folder + "/" + title + ".md"
-	return p, []byte("---\ntype: task\ntitle: \"" + title + "\"\nstatus: " + status + "\npriority: normal\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - task\ntask_id: " + id + "\n---\n\n# " + title + "\n\n## Idea\n\nDo it.\n" + extra)
-}
-
-func TestPlantRequestNeedsAPlanToStart(t *testing.T) {
-	v := newVault(t)
-	if _, _, err := PlantRequest(v, tasks.Plant{Title: "Ship", Start: true}, "", now); err == nil || !strings.Contains(err.Error(), "start needs a plan") {
-		t.Fatalf("start without a plan: %v", err)
-	}
-	if _, _, err := PlantRequest(v, tasks.Plant{Title: "Ship", Repos: []string{" "}}, "", now); err == nil {
-		t.Fatal("blank repo names")
-	}
-	req, planted, err := PlantRequest(v, tasks.Plant{Title: "Ship", Plan: "1. Go.", Start: true, Repos: []string{"app"}}, "", now)
-	if err != nil || req.Summary != "plant and start Ship" || planted.Path != "wiki/tasks/Ship.md" {
-		t.Fatalf("%+v %+v %v", req, planted, err)
-	}
-	if req, _, _ := PlantRequest(v, tasks.Plant{Title: "Ship", Plan: "1. Go."}, "", now); req.Summary != "plant and plan Ship" {
-		t.Fatalf("summary %q", req.Summary)
-	}
-}
-
-func TestTaskOperationsPlantMoveAndRebuildTheLedger(t *testing.T) {
-	v := newVault(t)
-	os.MkdirAll(v.Path(vault.InboxTasksDir), 0o755)
-	os.WriteFile(v.Path(vault.InboxTasksDir+"/note.md"), []byte("# Fix the dialog\n\nIt quits on Enter."), 0o644)
-	req, planted, err := PlantRequest(v, tasks.Plant{Text: "# Fix the dialog\n\nIt quits on Enter."}, "inbox/tasks/note.md", now)
-	if err != nil || planted.Path != vault.TasksDir+"/Fix the dialog.md" || req.Kind != Task || len(req.Writes) != 2 {
-		t.Fatalf("plant request: %+v %+v %v", req, planted, err)
-	}
-	plan, err := Prepare(v, req, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := Apply(v, plan, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{planted.Path, vault.TaskLedgerPath, vault.TasksIndex, vault.LogPage, "inbox/tasks/note.md"} {
-		if !contains(res.ChangedPaths, want) {
-			t.Errorf("changed paths lack %s: %v", want, res.ChangedPaths)
-		}
-	}
-	if _, err := os.Stat(v.Path("inbox/tasks/note.md")); err == nil {
-		t.Fatal("the note should be gone")
-	}
-	led, _ := tasks.LoadLedger(v)
-	if len(led.Tasks) != 1 || led.Tasks[0].ID != planted.ID || led.Tasks[0].Status != "planted" || len(led.Tasks[0].History) != 1 || led.Tasks[0].History[0].OperationID != res.OperationID {
-		t.Fatalf("ledger %+v", led)
-	}
-	if index := read(t, v, vault.TasksIndex); !strings.Contains(index, "[[Fix the dialog]] | planted") {
-		t.Fatalf("index:\n%s", index)
-	}
-	if strings.Contains(read(t, v, vault.LogPage), "task-ledger") {
-		t.Fatal("the log names pages, not the ledger")
-	}
-	// A second plant with the same title gets a numbered page.
-	req2, planted2, _ := PlantRequest(v, tasks.Plant{Title: "Fix the dialog"}, "", now)
-	if planted2.Path != vault.TasksDir+"/Fix the dialog (2).md" {
-		t.Fatalf("second path %s", planted2.Path)
-	}
-	plan2, _ := Prepare(v, req2, now)
-	if _, err := Apply(v, plan2, now); err != nil {
-		t.Fatal(err)
-	}
-	// Finishing moves the page to the archive in one plan; the ledger keeps its history.
-	page := read(t, v, planted.Path)
-	done := strings.Replace(page, "status: planted", "status: done", 1) + "\n## Outcome\n\nFixed.\n"
-	move := Request{Kind: Task, Summary: "finish Fix the dialog", Writes: []Write{
-		{Path: planted.Path, Mode: Delete},
-		{Path: vault.TaskArchiveDir + "/Fix the dialog.md", Mode: Create, Content: []byte(done)},
-	}}
-	plan3, err := Prepare(v, move, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Apply(v, plan3, now); err != nil {
-		t.Fatal(err)
-	}
-	led, _ = tasks.LoadLedger(v)
-	rec := led.Find(planted.ID)
-	if rec == nil || rec.Status != "done" || rec.Path != vault.TaskArchiveDir+"/Fix the dialog.md" || len(rec.History) != 2 {
-		t.Fatalf("after finish %+v", rec)
-	}
-	if index := read(t, v, vault.TasksIndex); !strings.Contains(index, "## Archive\n\n| Task") || !strings.Contains(index, "[[Fix the dialog (2)\\|Fix the dialog]] | planted") {
-		t.Fatalf("index:\n%s", index)
-	}
-	// Undo restores the page, the ledger, and the index together.
-	ops, _ := History(v, 1, false)
-	if _, err := UndoOperation(v, ops[0].ID, now); err != nil {
-		t.Fatal(err)
-	}
-	led, _ = tasks.LoadLedger(v)
-	if rec := led.Find(planted.ID); rec == nil || rec.Status != "planted" {
-		t.Fatalf("after undo %+v", rec)
-	}
-}
-
-func TestTaskOperationRemovesTheTaskIndexAtItsOldPath(t *testing.T) {
-	v := newVault(t)
-	repo := v.Repo()
-	os.Rename(v.Path(vault.TasksIndex), v.Path(vault.LegacyTasksIndex))
-	repo.AddAll()
-	repo.Commit(vault.CommitMessage("setup", "an older layout", vault.NewOperationID("setup", now)))
-	if _, err := Prepare(v, Request{Kind: Task, Summary: "x", Writes: []Write{{Path: vault.LegacyTasksIndex, Mode: Replace, Content: []byte("x")}}}, now); err == nil || !strings.Contains(err.Error(), "old path") {
-		t.Fatalf("the old index path is reserved: %v", err)
-	}
-	req, _, err := PlantRequest(v, tasks.Plant{Title: "Fix the dialog"}, "", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := Prepare(v, req, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := Apply(v, plan, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !contains(res.ChangedPaths, vault.LegacyTasksIndex) {
-		t.Errorf("changed paths lack the old index: %v", res.ChangedPaths)
-	}
-	if _, err := os.Stat(v.Path(vault.LegacyTasksIndex)); err == nil {
-		t.Fatal("apply should remove the index at its old path")
-	}
-	if index := read(t, v, vault.TasksIndex); !strings.Contains(index, "[[Fix the dialog]] | planted") {
-		t.Fatalf("index:\n%s", index)
-	}
-	if dirty, _ := repo.Dirty(); dirty {
-		t.Fatal("the removal belongs to the operation's commit")
-	}
-}
-
 func TestCanvasKindWritesTheCanvasIndex(t *testing.T) {
 	v := newVault(t)
 	page := mkpage("Canvases", "# Canvases\n")
@@ -760,95 +389,15 @@ func TestCanvasKindWritesTheCanvasIndex(t *testing.T) {
 	}
 }
 
-func TestTaskKindBoundsWrites(t *testing.T) {
+func TestAnInboxDeleteNeedsACapture(t *testing.T) {
 	v := newVault(t)
-	p, text := taskPage("Done wrong", "done", "task-20260912-aaaa", vault.TasksDir, "")
-	if _, err := Prepare(v, Request{Kind: Task, Summary: "x", Writes: []Write{{Path: p, Mode: Create, Content: text}}}, now); err == nil || !strings.Contains(err.Error(), "moves to wiki/tasks/archive/") {
-		t.Fatalf("done outside the archive: %v", err)
-	}
-	p, text = taskPage("Good", "planted", "task-20260912-aaaa", vault.TasksDir, "")
-	if _, err := Prepare(v, Request{Kind: Save, Summary: "x", Writes: []Write{{Path: p, Mode: Create, Content: text}}}, now); err == nil || !strings.Contains(err.Error(), "task operation") {
-		t.Fatalf("save may not write task pages: %v", err)
-	}
-	if _, err := Prepare(v, Request{Kind: Task, Summary: "x", Writes: []Write{{Path: "wiki/concepts/x.md", Mode: Create, Content: mkpage("x", "")}}}, now); err == nil {
-		t.Fatal("a task operation may not write concepts")
-	}
-	if _, err := Prepare(v, Request{Kind: Task, Summary: "x", Writes: []Write{{Path: vault.TasksIndex, Mode: Replace, Content: text}}}, now); err == nil || !strings.Contains(err.Error(), "written by the core") {
-		t.Fatalf("index is reserved: %v", err)
-	}
-	plan, err := Prepare(v, Request{Kind: Task, Summary: "plant", Writes: []Write{{Path: p, Mode: Create, Content: text}}}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Apply(v, plan, now); err != nil {
-		t.Fatal(err)
-	}
-	q, qtext := taskPage("Other", "planted", "task-20260912-aaaa", vault.TasksDir, "")
-	if _, err := Prepare(v, Request{Kind: Task, Summary: "dup", Writes: []Write{{Path: q, Mode: Create, Content: qtext}}}, now); err == nil || !strings.Contains(err.Error(), "reuses task_id") {
-		t.Fatalf("duplicate id: %v", err)
-	}
-	// A repair may touch a task page, and the hot cache may ride along in a task plan.
-	hot := read(t, v, vault.HotPage)
-	plan, err = Prepare(v, Request{Kind: Task, Summary: "note", Writes: []Write{{Path: vault.HotPage, Mode: Replace, Content: []byte(hot + "\n- Working on Good.\n")}}}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Apply(v, plan, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Prepare(v, Request{Kind: Repair, Summary: "fix", Writes: []Write{{Path: p, Mode: Replace, Content: text}}}, now); err != nil {
-		t.Fatalf("repair: %v", err)
-	}
-}
-
-func TestKnowledgeBaseBoundsWrites(t *testing.T) {
-	v := newKnowledge(t)
-	cases := []struct {
-		name string
-		req  Request
-		want string
-	}{
-		{"task kind", Request{Kind: Task, Summary: "x", Writes: []Write{{Path: "wiki/tasks/A.md", Mode: Create, Content: mkpage("A", "")}}}, "no tasks"},
-		{"question", Request{Kind: Save, Summary: "x", Writes: []Write{{Path: "wiki/questions/Q.md", Mode: Create, Content: mkpage("Q", "")}}}, "belongs to a project"},
-		{"session", Request{Kind: Save, Summary: "x", Writes: []Write{{Path: "wiki/sessions/S.md", Mode: Create, Content: mkpage("S", "")}}}, "belongs to a project"},
-		{"inbox", Request{Kind: Ingest, Summary: "x", Writes: []Write{{Path: "inbox/a.md", Mode: Delete}}}, "belongs to a project"},
-		{"ideas", Request{Kind: Repair, Summary: "x", Writes: []Write{{Path: "ideas/a.md", Mode: Create, Content: []byte("x")}}}, "belongs to a project"},
-	}
-	for _, c := range cases {
-		if _, err := Prepare(v, c.req, now); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("%s: got %v, want %q", c.name, err, c.want)
-		}
-	}
-	req, _, err := PlantRequest(v, tasks.Plant{Title: "T", Text: "t"}, "", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Prepare(v, req, now); err == nil || !strings.Contains(err.Error(), "no tasks") {
-		t.Fatalf("plant in a knowledge base: %v", err)
-	}
-	plan, err := Prepare(v, Request{Kind: Save, Summary: "add A", Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: mkpage("A", "text\n")}}}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Apply(v, plan, now); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A plan reads a mount's ledger only to remove a captured file from the inbox. Every mount
-// here points into a directory that does not exist, so a plan that reads one would find
-// nothing; only the inbox delete is refused.
-func TestOnlyAnInboxDeleteAsksTheMounts(t *testing.T) {
-	v := newVault(t)
-	gone := map[string]string{"kb": filepath.Join(t.TempDir(), "absent", "wiki")}
-
 	ok := []struct {
 		name string
 		req  Request
 	}{
-		{"a page", Request{Kind: Ingest, Summary: "add A", Mounts: gone,
+		{"a page", Request{Kind: Ingest, Summary: "add A",
 			Writes: []Write{{Path: "wiki/concepts/A.md", Mode: Create, Content: mkpage("A", "# A\n\ntext\n")}}}},
-		{"another kind", Request{Kind: Save, Summary: "save A", Mounts: gone,
+		{"another kind", Request{Kind: Save, Summary: "save A",
 			Writes: []Write{{Path: "wiki/concepts/B.md", Mode: Create, Content: mkpage("B", "# B\n\ntext\n")}}}},
 	}
 	for _, c := range ok {
@@ -856,10 +405,12 @@ func TestOnlyAnInboxDeleteAsksTheMounts(t *testing.T) {
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}
-
-	del := Request{Kind: Ingest, Summary: "clear the inbox", Mounts: gone,
-		Writes: []Write{{Path: "inbox/.gitkeep", Mode: Delete}}}
+	del := Request{Kind: Ingest, Summary: "clear the inbox", Writes: []Write{{Path: "inbox/.gitkeep", Mode: Delete}}}
 	if _, err := Prepare(v, del, now); err == nil || !strings.Contains(err.Error(), "has not been captured") {
-		t.Errorf("an inbox delete asks the mounts, and none holds the file: %v", err)
+		t.Errorf("an inbox delete needs the ledger to hold the file: %v", err)
+	}
+	// Task pages under wiki/ are ordinary pages now; nothing reserves the folder.
+	if _, err := Prepare(v, Request{Kind: Save, Summary: "x", Writes: []Write{{Path: "wiki/tasks/A.md", Mode: Create, Content: mkpage("A", "")}}}, now); err != nil {
+		t.Fatalf("wiki/tasks is not reserved: %v", err)
 	}
 }

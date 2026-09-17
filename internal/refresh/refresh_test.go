@@ -9,8 +9,9 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -18,7 +19,7 @@ func fakeVault(t *testing.T, log, hot string, pages map[string]string) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "vault")
 	os.MkdirAll(filepath.Join(root, "wiki"), 0o755)
-	os.WriteFile(filepath.Join(root, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v2","id":"00000000-0000-4000-8000-000000000001","kind":"project","name":"v","mode":"generic"}`), 0o644)
+	os.WriteFile(filepath.Join(root, ".claude-atlas.json"), []byte(`{"schema":"claude-atlas.vault.v3","id":"00000000-0000-4000-8000-000000000001","kind":"knowledge","name":"v","mode":"generic"}`), 0o644)
 	os.WriteFile(filepath.Join(root, "wiki", "log.md"), []byte(log), 0o644)
 	os.WriteFile(filepath.Join(root, "wiki", "hot.md"), []byte(hot), 0o644)
 	for name, text := range pages {
@@ -89,42 +90,11 @@ func TestPlainTextStripsWikilinks(t *testing.T) {
 	}
 }
 
-func TestDeriveFindsThePageThatDescribesARepository(t *testing.T) {
-	if !gitx.Available() {
-		t.Skip("git is not installed")
-	}
-	root := fakeVault(t, "## 2026-08-01 — old\n", "", nil)
-	code := filepath.Join(t.TempDir(), "code")
-	os.MkdirAll(code, 0o755)
-	r := gitx.Repo{Dir: code}
-	if err := r.Init(); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(code, "a.txt"), []byte("a"), 0o644)
-	r.AddAll()
-	head, err := r.Commit("one")
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := registry.Entry{Kind: vault.Project, Name: "p", Path: root, Repos: []registry.Repo{{Name: "code", Path: code}}}
-	if state := Derive(e, time.Now(), "t", 7); state.RepoDescriptions != nil {
-		t.Fatalf("no page yet: %+v", state.RepoDescriptions)
-	}
-	os.MkdirAll(filepath.Join(root, "wiki/entities"), 0o755)
-	os.WriteFile(filepath.Join(root, "wiki/entities/code.md"), []byte("---\ntitle: code\ntype: entity\nentity_type: repository\nrepo: code\ncommit: "+head+"\n---\n"), 0o644)
-	os.WriteFile(filepath.Join(code, "a.txt"), []byte("b"), 0o644)
-	r.AddAll()
-	r.Commit("two")
-	state := Derive(e, time.Now(), "t", 7)
-	d, ok := state.RepoDescriptions["code"]
-	if !ok || d.Page != "wiki/entities/code.md" || d.In != "p" || d.Behind != 1 || d.Summary() != "described in p (wiki/entities/code.md) at "+head[:7]+", 1 commit behind" {
-		t.Fatalf("got %+v", d)
-	}
-}
-
 func TestDeriveTakesLaterOfLogAndMtime(t *testing.T) {
 	root := fakeVault(t, "## 2026-08-01 — old\n", "", nil)
-	e := registry.Entry{Kind: vault.Project, Path: root}
+	os.MkdirAll(filepath.Join(root, "inbox"), 0o755)
+	os.WriteFile(filepath.Join(root, "inbox", "paper.md"), []byte("x"), 0o644)
+	e := registry.Entry{Kind: registry.Knowledge, Path: root}
 	state := Derive(e, time.Now(), "t", 7)
 	if state.LastOperation != "2026-08-01" || state.LastTouched != time.Now().Format("2006-01-02") {
 		t.Fatalf("got %+v", state)
@@ -132,28 +102,114 @@ func TestDeriveTakesLaterOfLogAndMtime(t *testing.T) {
 	if state.DaysIdle == nil || *state.DaysIdle != 0 || state.Heat != "hot" {
 		t.Fatalf("idle %v heat %s", state.DaysIdle, state.Heat)
 	}
-	if !state.VaultOK || state.Pages == nil || *state.Pages != 2 {
+	if !state.OK || state.Pages == nil || *state.Pages != 2 || state.Inbox == nil || *state.Inbox != 1 || state.Tasks != nil {
 		t.Fatalf("got %+v", state)
+	}
+	if got := Derive(registry.Entry{Path: root, Error: "v1 vault"}, time.Now(), "t", 7); got.OK || got.Error != "v1 vault" {
+		t.Fatalf("an error entry: %+v", got)
 	}
 }
 
-func TestRegistryDerivesEveryEntry(t *testing.T) {
+// projectFixture makes a knowledge base and a project on it, the work a git repository,
+// and returns the config and the project's scanned entry.
+func projectFixture(t *testing.T, now time.Time) (*home.Config, registry.Entry, *project.Project) {
+	t.Helper()
 	if !gitx.Available() {
 		t.Skip("git is not installed")
 	}
 	root := t.TempDir()
-	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults"), Heat: &home.HeatConfig{NewDays: 7}}
-	kb := filepath.Join(cfg.VaultsDir, "knowledge", "ai-ml")
-	p := filepath.Join(cfg.VaultsDir, "projects", "cs566")
-	for path, opts := range map[string]vault.Options{kb: {Kind: vault.Knowledge, Name: "ai-ml"}, p: {Kind: vault.Project, Name: "cs566"}} {
-		if _, err := vault.Init(path, opts, time.Now()); err != nil {
-			t.Fatal(err)
+	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults"), Heat: &home.HeatConfig{NewDays: 7}}
+	kb := filepath.Join(cfg.VaultsDir, "ai-ml")
+	if _, err := vault.Init(kb, vault.Options{Name: "ai-ml"}, now); err != nil {
+		t.Fatal(err)
+	}
+	kbv, _ := vault.Open(kb)
+	code := filepath.Join(root, "code")
+	os.MkdirAll(code, 0o755)
+	r := gitx.Repo{Dir: code}
+	if err := r.Init(); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(code, "a.txt"), []byte("a"), 0o644)
+	r.AddAll()
+	if _, err := r.Commit("one"); err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := project.Init(code, project.Options{Knowledge: &project.Knowledge{ID: kbv.Config.ID, Name: "ai-ml"}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AddProject(code)
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ix.ByPath(code)
+	if e == nil {
+		t.Fatal("the project was not scanned")
+	}
+	return cfg, *e, p
+}
+
+func TestDeriveAProject(t *testing.T) {
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.Local)
+	cfg, e, p := projectFixture(t, now)
+	state := Derive(e, now, "t", 7)
+	if !state.OK || state.Git == nil || !state.Git.OK || state.Tasks == nil || state.Tasks.Counts.Open != 0 || state.Described != nil || state.Pages != nil {
+		t.Fatalf("fresh project: %+v", state)
+	}
+	if state.Heat != "new" || state.LastTouched == "" {
+		t.Fatalf("the last commit touches the project: %+v", state)
+	}
+	if _, err := tasks.CreatePhase(p, "Alpha", "", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tasks.PlantTask(p, tasks.Plant{Title: "Blocked one", Phase: "Alpha"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tasks.PlantTask(p, tasks.Plant{Title: "Stale one", Plan: "1. Go.", Start: true}, now.AddDate(0, 0, -20)); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(p.Path("inbox/note.md"), []byte("later"), 0o644)
+	head, _ := (gitx.Repo{Dir: e.Path}).Head()
+	os.MkdirAll(filepath.Join(e.KnowledgePath(), "wiki", "entities"), 0o755)
+	os.WriteFile(filepath.Join(e.KnowledgePath(), "wiki", "entities", "code.md"), []byte("---\ntitle: code\ntype: entity\nentity_type: project\nproject: "+e.ID+"\ncommit: "+head+"\n---\n"), 0o644)
+	os.WriteFile(filepath.Join(e.Path, "a.txt"), []byte("b"), 0o644)
+	r := gitx.Repo{Dir: e.Path}
+	r.AddAll()
+	r.Commit("two")
+	ix, _ := registry.Scan(cfg)
+	e = *ix.ByPath(e.Path)
+	state = Derive(e, now, "t", 7)
+	if state.Tasks == nil || state.Tasks.Counts.Open != 2 || state.Tasks.Counts.Stale != 1 || state.Tasks.Counts.Notes != 1 || len(state.Tasks.Open) != 2 {
+		t.Fatalf("tasks %+v", state.Tasks)
+	}
+	if strings.Join(state.Tasks.Phases, ",") != "Alpha" || state.Tasks.Open[0].Title != "Stale one" || !state.Tasks.Open[0].Stale || state.Tasks.Open[1].Phase != "Alpha" || !filepath.IsAbs(state.Tasks.Open[1].Path) {
+		t.Fatalf("open %+v phases %v", state.Tasks.Open, state.Tasks.Phases)
+	}
+	if state.Described == nil || state.Described.Page != "wiki/entities/code.md" || state.Described.Behind != 1 {
+		t.Fatalf("described %+v", state.Described)
+	}
+	e.State = state
+	got := strings.Join(Signals(e, now), "\n")
+	for _, want := range []string{"1 stale task"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
+	if strings.Contains(got, registry.NotDescribed) {
+		t.Errorf("a described project has no describe signal:\n%s", got)
+	}
+}
+
+func TestRegistryDerivesEveryEntry(t *testing.T) {
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.Local)
+	cfg, _, _ := projectFixture(t, now)
 	os.MkdirAll(filepath.Join(cfg.VaultsDir, "old", "wiki"), 0o755)
 	os.WriteFile(filepath.Join(cfg.VaultsDir, "old", vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1"}`), 0o644)
+	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
-	entries, ix, _, err := Registry(home.Home{Root: filepath.Join(root, "home")}, cfg, stateDir, time.Now(), false)
+	entries, ix, err := Registry(home.Home{Root: filepath.Join(root, "home")}, cfg, stateDir, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,19 +217,17 @@ func TestRegistryDerivesEveryEntry(t *testing.T) {
 		t.Fatalf("entries %d problems %+v", len(entries), ix.Problems)
 	}
 	for _, e := range entries {
-		switch e.Name {
-		case "ai-ml", "cs566":
-			if e.State == nil || !e.State.VaultOK || e.State.Heat != "new" || e.State.Pages == nil || *e.State.Pages < 4 {
-				t.Errorf("%s state %+v", e.Name, e.State)
+		switch {
+		case e.Kind == registry.Knowledge && e.Error == "":
+			if e.State == nil || !e.State.OK || e.State.Heat != "new" || e.State.Pages == nil || *e.State.Pages < 4 || e.State.Tasks != nil {
+				t.Errorf("knowledge base state %+v", e.State)
 			}
-			if e.Kind == vault.Project && e.State.Tasks == nil {
-				t.Errorf("project has a task summary: %+v", e.State)
-			}
-			if e.Kind == vault.Knowledge && e.State.Tasks != nil {
-				t.Errorf("knowledge base has no tasks: %+v", e.State)
+		case e.Kind == registry.Project:
+			if e.State == nil || !e.State.OK || e.State.Tasks == nil || e.State.Git == nil {
+				t.Errorf("project state %+v", e.State)
 			}
 		default:
-			if e.State == nil || e.State.VaultOK || !strings.Contains(e.State.VaultError, "v1") {
+			if e.State == nil || e.State.OK || !strings.Contains(e.State.Error, "v1") {
 				t.Errorf("v1 entry %+v", e)
 			}
 		}
@@ -185,111 +239,34 @@ func TestRegistryDerivesEveryEntry(t *testing.T) {
 }
 
 func TestSignalsOverAnEntry(t *testing.T) {
-	e := registry.Entry{Name: "p", Kind: vault.Project, Path: "/v/p",
-		Mounts: []registry.Mount{{Name: "gone", Error: "no knowledge base with id x"}},
-		Repos:  []registry.Repo{{Name: "lost", Error: "no folder; link it with claude-atlas link"}},
-		State:  &registry.State{VaultOK: true, PendingRecovery: true, Tasks: &registry.TaskSummary{Open: []registry.TaskLine{{Title: "A", Status: "blocked"}, {Title: "B", Status: "active", Stale: true}}}},
+	e := registry.Entry{Name: "p", Kind: registry.Project, Path: "/v/p",
+		Knowledge: &registry.Ref{Name: "gone", Error: "no knowledge base with id x on this machine"},
+		State:     &registry.State{OK: true, PendingRecovery: true, Tasks: &registry.TaskSummary{Open: []registry.TaskLine{{Title: "A", Status: "blocked"}, {Title: "B", Status: "active", Stale: true}}}},
 	}
 	got := strings.Join(Signals(e, time.Now()), "\n")
-	for _, want := range []string{"interrupted", "gone", "lost", "1 blocked task: A", "1 stale task"} {
+	for _, want := range []string{"interrupted", "knowledge base gone: no knowledge base", "1 blocked task: A", "1 stale task"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
+	if strings.Contains(got, registry.NotDescribed) {
+		t.Errorf("an unresolved knowledge base asks for no page:\n%s", got)
+	}
+	undescribed := registry.Entry{Name: "p", Kind: registry.Project, Knowledge: &registry.Ref{Name: "kb", Path: "/v/kb"}, State: &registry.State{OK: true}}
+	if got := strings.Join(Signals(undescribed, time.Now()), "\n"); !strings.Contains(got, registry.NotDescribed) || !strings.Contains(got, "describe skill") {
+		t.Fatalf("a project without a page:\n%s", got)
+	}
+	behind := registry.Entry{Name: "p", Kind: registry.Project, Knowledge: &registry.Ref{Name: "kb", Path: "/v/kb"}, State: &registry.State{OK: true, Described: &registry.Description{Page: "wiki/entities/p.md", Commit: "abc", Behind: 40}}}
+	if got := strings.Join(Signals(behind, time.Now()), "\n"); !strings.Contains(got, "40 commits behind") {
+		t.Fatalf("a page far behind:\n%s", got)
+	}
 	if got := Signals(registry.Entry{Name: "k", Error: "v1 vault"}, time.Now()); len(got) != 1 || !strings.Contains(got[0], "v1 vault") {
 		t.Fatalf("error entry %v", got)
 	}
-}
-
-// A mount the atlas resolved is only reachable through its symlink. Signals names the
-// symlink that is gone or points somewhere else, and says nothing when it is right.
-func TestSignalsNameAMissingSymlink(t *testing.T) {
-	root := t.TempDir()
-	wiki := filepath.Join(root, "ai-ml", "wiki")
-	e := registry.Entry{Name: "p", Kind: vault.Project, Path: filepath.Join(root, "p"),
-		Mounts: []registry.Mount{{ID: "k1", Name: "ai-ml", Access: vault.AccessWrite, Effective: vault.AccessWrite, Path: wiki}},
-		State:  &registry.State{VaultOK: true},
+	if got := Signals(registry.Entry{Name: "k", Kind: registry.Knowledge}, time.Now()); len(got) != 1 || got[0] != "not refreshed" {
+		t.Fatalf("no state %v", got)
 	}
-	link := e.KbDir("ai-ml")
-	if got := strings.Join(Signals(e, time.Now()), "\n"); !strings.Contains(got, "symlink missing") {
-		t.Fatalf("no symlink:\n%s", got)
-	}
-	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(root, "elsewhere"), link); err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(Signals(e, time.Now()), "\n"); !strings.Contains(got, "points elsewhere") {
-		t.Fatalf("a symlink to another folder:\n%s", got)
-	}
-	if err := os.Remove(link); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(wiki, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(wiki, link); err != nil {
-		t.Fatal(err)
-	}
-	if got := Signals(e, time.Now()); len(got) != 0 {
-		t.Fatalf("a symlink that is right needs no signal: %v", got)
-	}
-}
-
-func TestSignalsNameAStaleGrant(t *testing.T) {
-	e := registry.Entry{
-		Kind:   vault.Knowledge,
-		Name:   "ai-ml",
-		Grants: []registry.Grant{{ID: "gone-0000", Name: "x", Access: "write", Error: "no project with id gone-0000"}},
-		State:  &registry.State{VaultOK: true},
-	}
-	got := strings.Join(Signals(e, time.Now()), "\n")
-	if !strings.Contains(got, "no project with id gone-0000") || !strings.Contains(got, "revoke") {
-		t.Fatalf("a stale grant:\n%s", got)
-	}
-}
-
-func TestRegistryAdoptsARepositoryDroppedIntoRepos(t *testing.T) {
-	if !gitx.Available() {
-		t.Skip("git is not installed")
-	}
-	root := t.TempDir()
-	h := home.Home{Root: filepath.Join(root, "home")}
-	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults")}
-	p := filepath.Join(cfg.VaultsDir, "projects", "cs566")
-	if _, err := vault.Init(p, vault.Options{Kind: vault.Project, Name: "cs566"}, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	code := filepath.Join(p, "repos", "my_git_project")
-	os.MkdirAll(code, 0o755)
-	os.WriteFile(filepath.Join(code, "main.go"), []byte("package main\n"), 0o644)
-	if err := links.InitRepo(code, "my_git_project"); err != nil {
-		t.Fatal(err)
-	}
-	stateDir := filepath.Join(root, "state")
-	entries, _, changes, err := Registry(h, cfg, stateDir, time.Now(), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(changes) != 1 || len(changes[0].Adopted) != 1 || changes[0].Adopted[0] != "my_git_project" {
-		t.Fatalf("refresh reports the adoption: %+v", changes)
-	}
-	var project registry.Entry
-	for _, e := range entries {
-		if e.Name == "cs566" {
-			project = e
-		}
-	}
-	if len(project.Repos) != 1 || project.Repos[0].Path != code || project.Repos[0].Changes != "commit" {
-		t.Fatalf("the adopted repository resolves in the same run: %+v", project.Repos)
-	}
-	// A second refresh adopts nothing.
-	_, _, changes, err = Registry(h, cfg, stateDir, time.Now(), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(changes) != 0 {
-		t.Fatalf("a second refresh is quiet: %+v", changes)
+	if got := Signals(registry.Entry{Name: "k", Kind: registry.Knowledge, State: &registry.State{Error: "boom"}}, time.Now()); len(got) != 1 || !strings.Contains(got[0], "unreachable: boom") {
+		t.Fatalf("a state that failed %v", got)
 	}
 }

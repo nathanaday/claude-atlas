@@ -23,8 +23,7 @@ import (
 // Relocating moves the whole vaults directory to another folder. It is the one atlas
 // action that moves a vault's bytes without touching a vault's contents: an identity
 // file holds no path, so nothing inside a vault has to change. What changes is the
-// atlas config, and what follows is a refresh, which rewrites the registry and
-// recreates each project's kb/ symlinks at the new root.
+// atlas config, and what follows is a refresh, which rewrites the registry.
 
 // Rewrite is one recorded path the move changes in the atlas config.
 type Rewrite struct {
@@ -182,7 +181,7 @@ func countVaults(cfg *home.Config, from string, p *RelocatePlan) error {
 			continue
 		}
 		p.Vaults++
-		if e.Error != "" {
+		if e.Error != "" || e.Kind != registry.Knowledge {
 			continue
 		}
 		v, err := vault.Open(e.Path)
@@ -233,8 +232,9 @@ func walkTree(from string, p *RelocatePlan) error {
 }
 
 // rewritesFor lists the config settings the move changes: the vaults directory, and
-// every recorded vault or repository path that sat under the old root. A path outside
-// the old root does not move, so it keeps its entry.
+// every recorded knowledge base path that sat under the old root. A path outside the
+// old root does not move, so it keeps its entry. Projects live in the user's work, never
+// under the vaults directory, so their entries stand.
 func rewritesFor(cfg *home.Config, from, target string) []Rewrite {
 	swap := func(what, path string) (Rewrite, bool) {
 		rel, ok := under(from, path)
@@ -244,18 +244,13 @@ func rewritesFor(cfg *home.Config, from, target string) []Rewrite {
 		return Rewrite{What: what, From: path, To: filepath.Join(target, rel)}, true
 	}
 	out := []Rewrite{{What: "vaults dir", From: from, To: target}}
-	for _, v := range cfg.Vaults {
+	for _, v := range cfg.Knowledge {
 		if r, ok := swap("vault "+filepath.Base(v), v); ok {
 			out = append(out, r)
 		}
 	}
-	keys := make([]string, 0, len(cfg.Repos))
-	for key := range cfg.Repos {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if r, ok := swap("repo "+key, cfg.Repos[key]); ok {
+	for _, w := range cfg.Projects {
+		if r, ok := swap("project "+filepath.Base(w), w); ok {
 			out = append(out, r)
 		}
 	}
@@ -316,7 +311,7 @@ var renameTree = os.Rename
 // volumes the tree is copied and verified, the config is saved, and only then is the
 // old tree removed, so a failure never leaves the vaults in one place only.
 //
-// The caller runs a refresh afterwards: the registry and every project's kb/ symlinks
+// The caller runs a refresh afterwards: the registry
 // hold the old paths until it does.
 func ApplyRelocate(h home.Home, cfg *home.Config, p *RelocatePlan) error {
 	if p == nil {
@@ -366,20 +361,18 @@ func ApplyRelocate(h home.Home, cfg *home.Config, p *RelocatePlan) error {
 // leaves the config as it was, so a caller can put the tree back.
 func saveRewrites(h home.Home, cfg *home.Config, p *RelocatePlan) error {
 	before := *cfg
-	before.Vaults = append([]string(nil), cfg.Vaults...)
-	before.Repos = map[string]string{}
-	for k, v := range cfg.Repos {
-		before.Repos[k] = v
-	}
+	before.Knowledge = append([]string(nil), cfg.Knowledge...)
+	before.Projects = append([]string(nil), cfg.Projects...)
 	cfg.VaultsDir = p.To
 	for _, r := range p.Rewrites {
 		switch {
 		case r.What == "vaults dir":
 		case strings.HasPrefix(r.What, "vault "):
-			cfg.RemoveVault(r.From)
-			cfg.AddVault(r.To)
-		case strings.HasPrefix(r.What, "repo "):
-			cfg.Repos[strings.TrimPrefix(r.What, "repo ")] = r.To
+			cfg.RemoveKnowledge(r.From)
+			cfg.AddKnowledge(r.To)
+		case strings.HasPrefix(r.What, "project "):
+			cfg.RemoveProject(r.From)
+			cfg.AddProject(r.To)
 		}
 	}
 	if err := h.Save(cfg); err != nil {
@@ -390,8 +383,8 @@ func saveRewrites(h home.Home, cfg *home.Config, p *RelocatePlan) error {
 }
 
 // copyTree copies src to dst whole: folders with their permissions, regular files with
-// their contents and mode, and symlinks as symlinks, so a project's kb/ links and a
-// repository's own links survive as they were.
+// their contents and mode, and symlinks as symlinks, so any links inside a vault survive
+// as they were.
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

@@ -10,15 +10,16 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 var identityNow = time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 
-// fixtureEntries makes a project and a knowledge base under a temp vaults directory and
-// returns the config, the home, and their scanned entries.
+// fixtureEntries makes two knowledge bases under a temp vaults directory and one
+// project in a work folder outside it, and returns the config, the home, and the
+// scanned entries of ai-ml and the project.
 func fixtureEntries(t *testing.T) (*home.Config, home.Home, registry.Entry, registry.Entry) {
 	t.Helper()
 	if !gitx.Available() {
@@ -27,84 +28,34 @@ func fixtureEntries(t *testing.T) (*home.Config, home.Home, registry.Entry, regi
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
 	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults")}
-	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "projects", "cs566"), vault.Options{Kind: vault.Project, Name: "cs566"}, identityNow); err != nil {
+	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "ai-ml"), vault.Options{Name: "ai-ml"}, identityNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "knowledge", "ai-ml"), vault.Options{Kind: vault.Knowledge, Name: "ai-ml"}, identityNow); err != nil {
+	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "robotics"), vault.Options{Name: "robotics"}, identityNow); err != nil {
 		t.Fatal(err)
 	}
+	work := filepath.Join(root, "Code", "webapp")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := project.Init(work, project.Options{}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	cfg.AddProject(work)
 	ix, err := registry.Scan(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var project, kb registry.Entry
-	for _, e := range ix.Entries {
-		switch e.Kind {
-		case vault.Project:
-			project = e
-		case vault.Knowledge:
-			kb = e
-		}
-	}
-	if project.ID == "" || kb.ID == "" {
+	kb := ix.ByPath(filepath.Join(cfg.VaultsDir, "ai-ml"))
+	proj := ix.ByPath(work)
+	if kb == nil || proj == nil {
 		t.Fatalf("fixture missing entries: %+v", ix.Entries)
 	}
-	return cfg, h, project, kb
-}
-
-// initRepo makes a git repository at dir with one commit, the way a code repository a
-// project moves into looks.
-func initRepo(t *testing.T, dir string) string {
-	t.Helper()
-	if !gitx.Available() {
-		t.Skip("git is not installed")
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	repo := gitx.Repo{Dir: dir}
-	if err := repo.Init(); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.AddAll(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.Commit("initial"); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
-// fixtureInRepo makes a code repository of that folder name with a project at REPO/atlas
-// and returns the config, the home, the repository's path, and the project's scanned
-// entry.
-func fixtureInRepo(t *testing.T, folder string) (*home.Config, home.Home, string, registry.Entry) {
-	t.Helper()
-	root := t.TempDir()
-	h := home.Home{Root: filepath.Join(root, "home")}
-	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults")}
-	code := initRepo(t, filepath.Join(root, folder))
-	res, err := vault.InitIn(code, vault.Options{Kind: vault.Project, Name: "Notes"}, identityNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.AddVault(res.Root)
-	ix, err := registry.Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := ix.ByPath(res.Root)
-	if e == nil || e.Error != "" {
-		t.Fatalf("the project was not scanned: %+v", e)
-	}
-	return cfg, h, code, *e
+	return cfg, h, *kb, *proj
 }
 
 // refreshEntry re-scans and returns the entry named id, so a test sees what the last
-// mutation wrote to the identity file.
+// mutation wrote.
 func refreshEntry(t *testing.T, cfg *home.Config, id string) registry.Entry {
 	t.Helper()
 	ix, err := registry.Scan(cfg)
@@ -131,20 +82,20 @@ func strPtr(s string) *string { return &s }
 
 func TestPathForAndResolvePath(t *testing.T) {
 	dir := filepath.FromSlash("/vaults")
-	if got := PathFor(dir, vault.Knowledge, "ai-ml"); !strings.HasSuffix(got, filepath.Join("knowledge", "ai-ml")) {
-		t.Fatalf("PathFor knowledge: %s", got)
+	if got := PathFor(dir, "ai-ml"); got != filepath.Join(dir, "ai-ml") {
+		t.Fatalf("PathFor: %s", got)
 	}
-	if got, err := ResolvePath("cs566", dir, vault.Project); err != nil || !strings.HasSuffix(got, filepath.Join("projects", "cs566")) {
+	if got, err := ResolvePath("ai-ml", dir); err != nil || got != filepath.Join(dir, "ai-ml") {
 		t.Fatalf("ResolvePath bare name: %s, %v", got, err)
 	}
-	rel, err := ResolvePath("./x", dir, vault.Project)
+	rel, err := ResolvePath("./x", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if filepath.Base(rel) != "x" || strings.HasPrefix(rel, dir) {
 		t.Fatalf("ResolvePath relative: %s", rel)
 	}
-	tilde, err := ResolvePath("~/x", dir, vault.Project)
+	tilde, err := ResolvePath("~/x", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,19 +105,22 @@ func TestPathForAndResolvePath(t *testing.T) {
 }
 
 func TestRegisterAndUnregister(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
+	cfg, h, kb, _ := fixtureEntries(t)
 
 	// A vault under VaultsDir needs no entry.
-	changed, err := Register(h, cfg, project.Path)
+	changed, err := Register(h, cfg, kb.Path)
 	if err != nil || changed {
 		t.Fatalf("register inside: changed=%v err=%v", changed, err)
 	}
-	if len(cfg.Vaults) != 0 {
-		t.Fatalf("cfg.Vaults should stay empty: %v", cfg.Vaults)
+	if len(cfg.Knowledge) != 0 {
+		t.Fatalf("cfg.Knowledge should stay empty: %v", cfg.Knowledge)
+	}
+	if _, err := Register(h, cfg, t.TempDir()); err == nil {
+		t.Fatal("a folder that is not a vault cannot be registered")
 	}
 
 	outside := t.TempDir()
-	if _, err := vault.Init(outside, vault.Options{Kind: vault.Project, Name: "outside"}, identityNow); err != nil {
+	if _, err := vault.Init(outside, vault.Options{Name: "outside"}, identityNow); err != nil {
 		t.Fatal(err)
 	}
 	changed, err = Register(h, cfg, outside)
@@ -174,522 +128,60 @@ func TestRegisterAndUnregister(t *testing.T) {
 		t.Fatalf("register outside: changed=%v err=%v", changed, err)
 	}
 	reloaded, err := h.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, v := range reloaded.Vaults {
-		if v == outside {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("outside vault not saved: %v", reloaded.Vaults)
+	if err != nil || len(reloaded.Knowledge) != 1 || reloaded.Knowledge[0] != outside {
+		t.Fatalf("outside vault not saved: %+v %v", reloaded, err)
 	}
 	changed, err = Register(h, cfg, outside)
 	if err != nil || changed {
 		t.Fatalf("register again: changed=%v err=%v", changed, err)
 	}
-
 	if err := Unregister(h, cfg, outside); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err = h.Load()
-	if err != nil {
-		t.Fatal(err)
+	if reloaded, _ := h.Load(); len(reloaded.Knowledge) != 0 {
+		t.Fatalf("outside vault still registered: %v", reloaded.Knowledge)
 	}
-	for _, v := range reloaded.Vaults {
-		if v == outside {
-			t.Fatalf("outside vault still registered: %v", reloaded.Vaults)
-		}
+	if err := Unregister(h, cfg, outside); err == nil {
+		t.Fatal("unregistering twice is an error")
 	}
-
-	if err := Unregister(h, cfg, project.Path); err == nil || !strings.Contains(err.Error(), "vaults directory") {
+	if err := Unregister(h, cfg, kb.Path); err == nil || !strings.Contains(err.Error(), "vaults directory") {
 		t.Fatalf("unregister inside: %v", err)
 	}
 }
 
-func TestEditIdentityByKind(t *testing.T) {
-	cfg, h, project, kb := fixtureEntries(t)
-
-	tags := []string{" usc ", "", "fall"}
-	if _, err := EditIdentity(h, cfg, project, Edit{Tags: &tags}, identityNow); err != nil {
+func TestEditIdentity(t *testing.T) {
+	cfg, h, kb, _ := fixtureEntries(t)
+	scope := " machine learning "
+	if _, err := EditIdentity(h, cfg, kb, Edit{Scope: &scope}, identityNow); err != nil {
 		t.Fatal(err)
 	}
-	v, err := vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
+	v, err := vault.Open(kb.Path)
+	if err != nil || v.Config.Scope != "machine learning" {
+		t.Fatalf("scope: %+v %v", v, err)
 	}
-	if strings.Join(v.Config.Tags, ",") != "usc,fall" {
-		t.Fatalf("tags: %v", v.Config.Tags)
-	}
-	if subject := lastCommitSubject(t, project.Path); subject != "setup: edit tags" {
+	if subject := lastCommitSubject(t, kb.Path); subject != "setup: edit scope" {
 		t.Fatalf("commit subject: %q", subject)
 	}
-
-	if _, err := EditIdentity(h, cfg, project, Edit{Scope: strPtr("s")}, identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
-		t.Fatalf("scope on a project: %v", err)
+	if path, err := EditIdentity(h, cfg, kb, Edit{}, identityNow); err != nil || path != kb.Path {
+		t.Fatalf("an empty edit changes nothing: %q %v", path, err)
 	}
-
-	if _, err := EditIdentity(h, cfg, kb, Edit{Access: strPtr("sometimes")}, identityNow); err == nil {
-		t.Fatal("expected an error for an invalid access value")
+	if subject := lastCommitSubject(t, kb.Path); subject != "setup: edit scope" {
+		t.Fatalf("an empty edit makes no commit: %q", subject)
 	}
-
-	kbScope := "machine learning"
-	kbAccess := vault.AccessGuarded
-	if _, err := EditIdentity(h, cfg, kb, Edit{Scope: &kbScope, Access: &kbAccess}, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	v, err = vault.Open(kb.Path)
+	// A rename and a scope in one edit is one operation that names both fields.
+	empty := ""
+	path, err := EditIdentity(h, cfg, kb, Edit{Name: "ai-ml-renamed", Scope: &empty}, identityNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Config.Scope != kbScope || v.Config.Access != kbAccess {
-		t.Fatalf("scope/access: %+v", v.Config)
+	v, err = vault.Open(path)
+	if err != nil || v.Config.Name != "ai-ml-renamed" || v.Config.Scope != "" {
+		t.Fatalf("renamed: %+v %v", v, err)
 	}
-	// One edit is one operation, whatever it changes, and its summary names the fields.
-	if subject := lastCommitSubject(t, kb.Path); subject != "setup: edit scope, access" {
+	if subject := lastCommitSubject(t, path); subject != "setup: edit name, scope" {
 		t.Fatalf("commit subject: %q", subject)
 	}
-
-	// A rename takes the folder with it; rename_test.go holds the move itself.
-	projectPath, err := EditIdentity(h, cfg, project, Edit{Name: "cs566-renamed"}, identityNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kbPath, err := EditIdentity(h, cfg, kb, Edit{Name: "ai-ml-renamed"}, identityNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, err = vault.Open(projectPath)
-	if err != nil || v.Config.Name != "cs566-renamed" {
-		t.Fatalf("project name: %+v %v", v, err)
-	}
-	v, err = vault.Open(kbPath)
-	if err != nil || v.Config.Name != "ai-ml-renamed" {
-		t.Fatalf("kb name: %+v %v", v, err)
-	}
-}
-
-// TestAddRepoRefusesADuplicateFromAStaleEntry proves the identity file decides: the entry
-// a caller holds may be older than the file it describes.
-func TestAddRepoRefusesADuplicateFromAStaleEntry(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
-	first := filepath.Join(t.TempDir(), "docs")
-	second := filepath.Join(t.TempDir(), "docs")
-	for _, dir := range []string{first, second} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, _, err := AddRepo(h, cfg, project, first, true, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	// The same entry value again: its snapshot has no repositories, the file has one.
-	if _, _, err := AddRepo(h, cfg, project, second, true, identityNow); err == nil || !strings.Contains(err.Error(), "already") {
-		t.Fatalf("stale entry: %v", err)
-	}
-	v, err := vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(v.Config.Repos) != 1 {
-		t.Fatalf("the file should hold one repository: %+v", v.Config.Repos)
-	}
-	if cfg.RepoPath(project.ID, "docs") != first {
-		t.Fatalf("the config should still point at the first folder: %q", cfg.RepoPath(project.ID, "docs"))
-	}
-}
-
-// TestEditRepoRemoteAndPath covers the two edits beyond the change policy: the remote, and
-// the folder the project reaches under that name.
-func TestEditRepoRemoteAndPath(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
-	if _, _, err := CreateRepo(h, cfg, project, "hw", "", identityNow); err != nil {
-		t.Fatal(err)
-	}
-	project = refreshEntry(t, cfg, project.ID)
-
-	url := "git@github.com:me/hw.git"
-	updated, err := EditRepo(h, cfg, project, "hw", RepoEdit{Remote: &url}, identityNow)
-	if err != nil || updated.Remote != url {
-		t.Fatalf("set remote: %+v %v", updated, err)
-	}
-	updated, err = EditRepo(h, cfg, project, "hw", RepoEdit{Remote: strPtr("")}, identityNow)
-	if err != nil || updated.Remote != "" {
-		t.Fatalf("clear remote: %+v %v", updated, err)
-	}
-	v, err := vault.Open(project.Path)
-	if err != nil || len(v.Config.Repos) != 1 || v.Config.Repos[0].Remote != "" {
-		t.Fatalf("identity file: %+v %v", v.Config.Repos, err)
-	}
-
-	// Point the entry at a folder outside the vault: the config records the mapping.
-	outside := filepath.Join(t.TempDir(), "hw")
-	if err := os.MkdirAll(outside, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("git", "init", "-q", outside).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %s", out)
-	}
-	if _, err := EditRepo(h, cfg, project, "hw", RepoEdit{Path: outside}, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.RepoPath(project.ID, "hw") != outside {
-		t.Fatalf("mapping: %q", cfg.RepoPath(project.ID, "hw"))
-	}
-	reloaded, err := h.Load()
-	if err != nil || reloaded.RepoPath(project.ID, "hw") != outside {
-		t.Fatalf("mapping not saved: %+v %v", reloaded.Repos, err)
-	}
-
-	// Point it back at repos/<name>: the mapping goes away, since that is the default.
-	if _, err := EditRepo(h, cfg, project, "hw", RepoEdit{Path: project.RepoDir("hw")}, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.RepoPath(project.ID, "hw") != "" {
-		t.Fatalf("mapping should be cleared: %q", cfg.RepoPath(project.ID, "hw"))
-	}
-	reloaded, err = h.Load()
-	if err != nil || reloaded.RepoPath(project.ID, "hw") != "" {
-		t.Fatalf("cleared mapping not saved: %+v %v", reloaded.Repos, err)
-	}
-}
-
-func TestAddCreateCloneRemoveAndEditRepos(t *testing.T) {
-	cfg, h, project, kb := fixtureEntries(t)
-
-	// CreateRepo(e, "hw", "") makes <project>/repos/hw/.git, identity gains
-	// {Name: "hw", Changes: "commit"} from the atlas default, no config entry.
-	hw, hwPath, err := CreateRepo(h, cfg, project, "hw", "", identityNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(project.Path, "repos", "hw"); hwPath != want {
-		t.Fatalf("create path: %s, want %s", hwPath, want)
-	}
-	if _, err := os.Stat(filepath.Join(hwPath, ".git")); err != nil {
-		t.Fatalf("no .git: %v", err)
-	}
-	if hw.Name != "hw" || hw.Changes != cfg.DefaultChanges() || hw.Remote != "" {
-		t.Fatalf("repo: %+v", hw)
-	}
-	v, err := vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(v.Config.Repos) != 1 || v.Config.Repos[0].Name != "hw" {
-		t.Fatalf("identity repos: %+v", v.Config.Repos)
-	}
-	if cfg.RepoPath(project.ID, "hw") != "" {
-		t.Fatalf("hw should need no config entry: %q", cfg.RepoPath(project.ID, "hw"))
-	}
-	project = refreshEntry(t, cfg, project.ID)
-
-	// AddRepo on a plain folder outside → NotRepoError.
-	outsideParent := t.TempDir()
-	outside := filepath.Join(outsideParent, "extern")
-	if err := os.Mkdir(outside, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := AddRepo(h, cfg, project, outside, false, identityNow); err == nil {
-		t.Fatal("expected an error")
-	} else if _, ok := err.(*NotRepoError); !ok {
-		t.Fatalf("expected NotRepoError, got %T: %v", err, err)
-	}
-
-	// with initGit → mounted, cfg.Repos[id/name] set and saved.
-	extern, externPath, err := AddRepo(h, cfg, project, outside, true, identityNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if extern.Name != "extern" || externPath != outside {
-		t.Fatalf("add: %+v %s", extern, externPath)
-	}
-	if cfg.RepoPath(project.ID, "extern") != outside {
-		t.Fatalf("config path not recorded: %q", cfg.RepoPath(project.ID, "extern"))
-	}
-	reloaded, err := h.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reloaded.RepoPath(project.ID, "extern") != outside {
-		t.Fatalf("config not saved: %q", reloaded.RepoPath(project.ID, "extern"))
-	}
-	project = refreshEntry(t, cfg, project.ID)
-
-	// AddRepo of the same folder again → error "already".
-	if _, _, err := AddRepo(h, cfg, project, outside, true, identityNow); err == nil || !strings.Contains(err.Error(), "already") {
-		t.Fatalf("re-add: %v", err)
-	}
-
-	// A folder inside the vault root not under repos/ → error "under repos/".
-	insideNotRepos := filepath.Join(project.Path, "elsewhere")
-	if err := os.Mkdir(insideNotRepos, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := AddRepo(h, cfg, project, insideNotRepos, false, identityNow); err == nil || !strings.Contains(err.Error(), "under repos/") {
-		t.Fatalf("inside not repos/: %v", err)
-	}
-
-	// CloneRepo from a local bare repository into repos/ → remote recorded.
-	bare := filepath.Join(t.TempDir(), "paper.git")
-	if out, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
-		t.Fatalf("git init --bare: %s", out)
-	}
-	paper, paperPath, err := CloneRepo(h, cfg, project, bare, "", identityNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if paper.Name != "paper" || paper.Remote != bare {
-		t.Fatalf("clone: %+v", paper)
-	}
-	if want := filepath.Join(project.Path, "repos", "paper"); paperPath != want {
-		t.Fatalf("clone path: %s, want %s", paperPath, want)
-	}
-	project = refreshEntry(t, cfg, project.ID)
-
-	// EditRepo Changes: "commit" → written.
-	updated, err := EditRepo(h, cfg, project, "hw", RepoEdit{Changes: strPtr("commit")}, identityNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.Changes != "commit" {
-		t.Fatalf("edit changes: %+v", updated)
-	}
-
-	// Changes: "later" → error.
-	if _, err := EditRepo(h, cfg, project, "hw", RepoEdit{Changes: strPtr("later")}, identityNow); err == nil {
-		t.Fatal("expected an error for an invalid changes policy")
-	}
-
-	// A Path inside the vault but not under repos/ → error "under repos/", config
-	// mapping unchanged.
-	insideWiki := filepath.Join(project.Path, "wiki", "x")
-	if err := os.MkdirAll(insideWiki, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("git", "init", "-q", insideWiki).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %s", out)
-	}
-	hwPathBefore := cfg.RepoPath(project.ID, "hw")
-	if _, err := EditRepo(h, cfg, project, "hw", RepoEdit{Path: insideWiki}, identityNow); err == nil || !strings.Contains(err.Error(), "under repos/") {
-		t.Fatalf("edit path under wiki: %v", err)
-	}
-	if cfg.RepoPath(project.ID, "hw") != hwPathBefore {
-		t.Fatalf("config mapping changed: %q, want %q", cfg.RepoPath(project.ID, "hw"), hwPathBefore)
-	}
-
-	// RemoveRepo("hw") is refused while its folder sits under repos/, since the next
-	// refresh would link it again. Moved out, it unlinks and the folder stays.
-	if err := RemoveRepo(h, cfg, project, "hw", identityNow); err == nil || !strings.Contains(err.Error(), "still under repos/") {
-		t.Fatalf("remove under repos/: %v", err)
-	}
-	hwMoved := filepath.Join(t.TempDir(), "hw")
-	if err := os.Rename(filepath.Join(project.Path, "repos", "hw"), hwMoved); err != nil {
-		t.Fatal(err)
-	}
-	if err := RemoveRepo(h, cfg, project, "hw", identityNow); err != nil {
-		t.Fatal(err)
-	}
-	v, err = vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range v.Config.Repos {
-		if r.Name == "hw" {
-			t.Fatalf("hw should be gone: %+v", v.Config.Repos)
-		}
-	}
-	if _, err := os.Stat(hwMoved); err != nil {
-		t.Fatalf("hw folder should still exist: %v", err)
-	}
-
-	// RemoveRepo also clears a repository's config mapping: "extern" was added from
-	// outside the vault, so it has one.
-	if cfg.RepoPath(project.ID, "extern") == "" {
-		t.Fatal("extern should have a config mapping before removal")
-	}
-	if err := RemoveRepo(h, cfg, project, "extern", identityNow); err != nil {
-		t.Fatal(err)
-	}
-	v, err = vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range v.Config.Repos {
-		if r.Name == "extern" {
-			t.Fatalf("extern should be gone: %+v", v.Config.Repos)
-		}
-	}
-	reloaded, err = h.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reloaded.RepoPath(project.ID, "extern") != "" {
-		t.Fatalf("extern config mapping should be cleared: %q", reloaded.RepoPath(project.ID, "extern"))
-	}
-	if _, err := os.Stat(outside); err != nil {
-		t.Fatalf("extern folder should still exist: %v", err)
-	}
-
-	// On the knowledge base entry every function errors with "knowledge base".
-	if _, _, err := AddRepo(h, cfg, kb, outside, false, identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
-		t.Fatalf("add on kb: %v", err)
-	}
-	if _, _, err := CreateRepo(h, cfg, kb, "x", "", identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
-		t.Fatalf("create on kb: %v", err)
-	}
-	if _, _, err := CloneRepo(h, cfg, kb, bare, "", identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
-		t.Fatalf("clone on kb: %v", err)
-	}
-	if err := RemoveRepo(h, cfg, kb, "x", identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
-		t.Fatalf("remove on kb: %v", err)
-	}
-	if _, err := EditRepo(h, cfg, kb, "x", RepoEdit{}, identityNow); err == nil || !strings.Contains(err.Error(), "knowledge base") {
-		t.Fatalf("edit on kb: %v", err)
-	}
-}
-
-// TestTheHostRepositoryCannotBeLinkedOrRemoved covers the repository a project lives in:
-// the scan derives it, so nothing may link it again or drop it, and an edit of its change
-// policy writes the identity entry the file does not have yet.
-func TestTheHostRepositoryCannotBeLinkedOrRemoved(t *testing.T) {
-	cfg, h, code, project := fixtureInRepo(t, "code")
-	if len(project.Repos) != 1 || project.Repos[0].Name != "code" {
-		t.Fatalf("the host repository should be listed: %+v", project.Repos)
-	}
-
-	if _, _, err := AddRepo(h, cfg, project, code, false, identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
-		t.Fatalf("link the host: %v", err)
-	}
-	if _, _, err := CreateRepo(h, cfg, project, "code", "", identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
-		t.Fatalf("create a repository named after the host: %v", err)
-	}
-	bare := filepath.Join(t.TempDir(), "code.git")
-	if out, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
-		t.Fatalf("git init --bare: %s", out)
-	}
-	if _, _, err := CloneRepo(h, cfg, project, bare, "", identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
-		t.Fatalf("clone into the host's name: %v", err)
-	}
-	if err := RemoveRepo(h, cfg, project, "code", identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
-		t.Fatalf("unlink the host: %v", err)
-	}
-
-	// The identity file names the host only when something about it is recorded, so an
-	// edit that records nothing writes no entry and makes no commit.
-	if _, err := EditRepo(h, cfg, project, "code", RepoEdit{Remote: strPtr("")}, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	v, err := vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(v.Config.Repos) != 0 {
-		t.Fatalf("the identity file should name no repository yet: %+v", v.Config.Repos)
-	}
-	if subject := lastCommitSubject(t, project.Path); !strings.Contains(subject, "initialize") {
-		t.Fatalf("an edit that records nothing commits: %q", subject)
-	}
-	updated, err := EditRepo(h, cfg, project, "code", RepoEdit{Changes: strPtr(links.ChangesPR)}, identityNow)
-	if err != nil || updated.Name != "code" || updated.Changes != links.ChangesPR {
-		t.Fatalf("edit the host's change policy: %+v %v", updated, err)
-	}
-	v, err = vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(v.Config.Repos) != 1 || v.Config.Repos[0] != (vault.Repo{Name: "code", Changes: links.ChangesPR}) {
-		t.Fatalf("identity repos: %+v", v.Config.Repos)
-	}
-
-	// A second edit changes that entry; it does not add another.
-	project = refreshEntry(t, cfg, project.ID)
-	url := "git@example.com:me/code.git"
-	if _, err := EditRepo(h, cfg, project, "code", RepoEdit{Remote: &url}, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	v, err = vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(v.Config.Repos) != 1 || v.Config.Repos[0].Remote != url || v.Config.Repos[0].Changes != links.ChangesPR {
-		t.Fatalf("identity repos after a second edit: %+v", v.Config.Repos)
-	}
-
-	// The host's folder is the repository's; there is no separate one to point at.
-	if _, err := EditRepo(h, cfg, project, "code", RepoEdit{Path: t.TempDir()}, identityNow); err == nil || !strings.Contains(err.Error(), "no separate path") {
-		t.Fatalf("edit the host's path: %v", err)
-	}
-}
-
-// TestAHostNameIsCleanedBeforeItIsCompared covers a repository folder whose name
-// CleanName rewrites: without cleaning, a link of the same folder takes another name and
-// the project ends up with two rows for one folder.
-func TestAHostNameIsCleanedBeforeItIsCompared(t *testing.T) {
-	cfg, h, code, project := fixtureInRepo(t, "code#1")
-	if len(project.Repos) != 1 || project.Repos[0].Name != "code-1" || project.Repos[0].Path != code {
-		t.Fatalf("the host repository: %+v", project.Repos)
-	}
-	if _, _, err := AddRepo(h, cfg, project, code, false, identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
-		t.Fatalf("link the host folder: %v", err)
-	}
-	if err := RemoveRepo(h, cfg, project, "code-1", identityNow); err == nil || !strings.Contains(err.Error(), "lives in") {
-		t.Fatalf("unlink the host by its cleaned name: %v", err)
-	}
-
-	// An edit takes the derived name, whatever the caller typed, so the entry folds back
-	// into the host's row instead of adding a second one.
-	if _, err := EditRepo(h, cfg, project, "code#1", RepoEdit{Changes: strPtr(links.ChangesPR)}, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	v, err := vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(v.Config.Repos) != 1 || v.Config.Repos[0].Name != "code-1" {
-		t.Fatalf("identity repos: %+v", v.Config.Repos)
-	}
-	project = refreshEntry(t, cfg, project.ID)
-	if len(project.Repos) != 1 || project.Repos[0].Changes != links.ChangesPR || project.Repos[0].Path != code {
-		t.Fatalf("one row after the edit: %+v", project.Repos)
-	}
-
-	// Another folder whose name cleans to the host's name would take the host's row, so
-	// the refusal says so rather than calling that folder the host.
-	other := initRepo(t, filepath.Join(t.TempDir(), "code^1"))
-	if _, _, err := AddRepo(h, cfg, project, other, false, identityNow); err == nil || !strings.Contains(err.Error(), "use another name") {
-		t.Fatalf("a name that takes the host's row: %v", err)
-	}
-}
-
-// TestAnIdentityEntryUnderTheHostsOwnNameIsEdited covers an identity file that names the
-// host folder as the user typed it: an edit changes that entry instead of adding a second
-// one, which would leave two entries for one folder.
-func TestAnIdentityEntryUnderTheHostsOwnNameIsEdited(t *testing.T) {
-	cfg, h, code, project := fixtureInRepo(t, "code#1")
-	if err := vault.UpdateConfig(project.Path, "name the host", identityNow, func(c *vault.Config) error {
-		c.Repos = []vault.Repo{{Name: "code#1", Changes: links.ChangesCommit}}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	project = refreshEntry(t, cfg, project.ID)
-	if len(project.Repos) != 1 || project.Repos[0].Name != "code-1" || project.Repos[0].Path != code {
-		t.Fatalf("the raw entry must fold into the host's row: %+v", project.Repos)
-	}
-	if _, err := EditRepo(h, cfg, project, "code-1", RepoEdit{Changes: strPtr(links.ChangesPR)}, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	v, err := vault.Open(project.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(v.Config.Repos) != 1 || v.Config.Repos[0].Changes != links.ChangesPR {
-		t.Fatalf("identity repos: %+v", v.Config.Repos)
-	}
-	if project = refreshEntry(t, cfg, project.ID); len(project.Repos) != 1 || project.Repos[0].Changes != links.ChangesPR {
-		t.Fatalf("one row after the edit: %+v", project.Repos)
+	if e := refreshEntry(t, cfg, kb.ID); e.Path != path || e.Name != "ai-ml-renamed" {
+		t.Fatalf("the scan follows the rename: %+v", e)
 	}
 }

@@ -1,51 +1,58 @@
 ---
 name: task-finish
-description: "Finish a task: done with an outcome, or cancelled with a reason; move its page to the archive, refresh the hot cache, and bring the pages describing the repositories it changed up to date. Use for finish, done with the task, close, cancel, kill, abandon, drop this task."
+description: "Finish a task: done with an outcome, or cancelled with a reason; archive its page, then offer the knowledge base what the work taught. Use for finish, done with the task, close, cancel, kill, abandon, drop this task."
 ---
 
 # Finish a task
 
-Read [tasks.md](../wiki/references/tasks.md). Tools: `tasks`, `repos`,
-`plan`, `apply`, and `plant` for what is left over.
+Read [tasks.md](../wiki/references/tasks.md). Tools: `tasks`, `task`,
+`plant` for what is left over, and `stage`, `route`, `plan`, `apply` for the
+knowledge base.
 
-Tasks live in a project. In a knowledge base session this skill does not
-apply; the hook's first line names the projects that mount it.
+Tasks live in a project. In a knowledge base session, pass `project` to the
+task tools and read the page by the absolute path `tasks` returns.
 
 ## Close it
 
 1. Call `tasks` and take the task the user means. Read its page.
 2. Decide the status with the user: `done` when the plan's definition of done
    holds; `cancelled` when the work stops for good. Ask when it is unclear.
-3. Write the `## Outcome` section: what changed and where (repository,
-   pages, files); what was learned that belongs in the wiki; what was left
-   undone. For a cancelled task, the reason.
-4. One plan of kind `task`: delete the page at its open path, and create it
-   under `wiki/tasks/archive/` with the same name, the new status, `updated`
-   today, and the Outcome section. If `wiki/hot.md` names the task, replace
-   it in the same plan. Show the preview and apply.
+3. With Edit, write the `## Outcome` section: what changed and where (files,
+   commits, pages); what was learned that belongs in the knowledge base;
+   what was left undone. For a cancelled task, the reason.
+4. Call `task` with `id` and the status. The tool moves the page to
+   `tasks/archive/`, sets `updated`, and regenerates the index. Report the
+   new path. A phase whose every task is now finished shows as finished in
+   the index; say so.
 
-## The repository pages
+Never rewrite the Idea, Plan, or Progress sections when finishing; they are
+the record of how the task went.
 
-A change that landed makes the knowledge base older. After the Outcome is
-applied, call `repos` and take each repository the task's `repos` names:
+## The knowledge base learns from finished work
 
-- `described` with `behind` above zero: offer to bring the page up to date,
-  and on a yes run the `repo-map` skill's update for it. It stages the
-  snapshot, which carries the log since the page's commit, captures it, and
-  replaces the repository page with the new `commit`, what changed, and the
-  concepts the task added. One offer per repository; the user's no is final
-  for this task.
-- no `described`: say the repository has no page and offer `repo-map`.
-- `behind` at zero: nothing to do; say so in one line.
+A planted task never reaches the knowledge base. A finished one may. After
+the status is set, and only for a `done` task whose project has a knowledge
+base, offer one operation there. Say what it would hold, and wait for a yes:
 
-A task that changed no repository skips this section.
+- **The project's page.** `status` says whether a page describes the project
+  and how far behind it is. When one exists, an update: what the project now
+  delivers, in the page's own words, with the task's outcome as the source of
+  the change. When none exists, offer `describe` instead, which writes it
+  from a snapshot.
+- **A durable fact.** When the Outcome holds knowledge about the ecosystem,
+  not the project alone (a cause found, a mitigation that works, a
+  measurement), a concept page or an update to one. `route` says whether a
+  page exists. A fact about how this one project works stays on the
+  project's page.
+
+On yes: read the pages, build one plan of kind `save` with the page writes,
+`wiki/index.md` when a page is new, and `wiki/hot.md` under 500 words. Show
+the preview and apply. Read [operations.md](../wiki/references/operations.md)
+first. Declining costs nothing; say so in one line and stop.
 
 ## What is left
 
 - Work left undone is a new task: offer to `plant` each item, and do so when
-  the user agrees.
-- A lesson or a decision that belongs in the wiki is a `save`, offered, not
-  assumed.
-
-Never rewrite the Idea, Plan, or Progress sections when finishing; they are
-the record of how the task went.
+  the user agrees, in the same phase.
+- A lesson that belongs in the knowledge base but is not the project's page
+  or a concept is a `save`, offered, not assumed.

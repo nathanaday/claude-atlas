@@ -17,13 +17,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nathanaday/claude-atlas/internal/capture"
-	"github.com/nathanaday/claude-atlas/internal/discover"
+	"github.com/nathanaday/claude-atlas/internal/describe"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
+	"github.com/nathanaday/claude-atlas/internal/place"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -38,7 +39,7 @@ type Options struct {
 	Version string
 	// PluginRoot is ${CLAUDE_PLUGIN_ROOT}; used to read the plugin's version.
 	PluginRoot string
-	// ProjectDir is where the session started; vault discovery walks up from it.
+	// ProjectDir is where the session started; the place is found by walking up from it.
 	ProjectDir string
 	// Env resolves environment variables. nil means os.Getenv.
 	Env func(string) string
@@ -64,200 +65,69 @@ func New(opts Options) *Server {
 	return &Server{opts: opts, plans: map[string]*txn.Plan{}}
 }
 
-// resolve picks the vault: an explicit path, the environment, the nearest identity file,
-// and last the atlas: a session started in a folder one project links uses that
-// project's vault.
-func (s *Server) resolve(explicit string) (*vault.Vault, error) {
-	v, err := vault.Resolve(explicit, s.opts.Env(vault.EnvVault), s.opts.ProjectDir)
-	if err == nil || explicit != "" || !errors.Is(err, vault.ErrNotVault) {
-		return v, err
-	}
-	match, candidates, derr := discover.Vault(home.Resolve(s.opts.Env(home.EnvHome)), s.opts.ProjectDir)
-	switch {
-	case derr != nil:
-		return nil, err
-	case match != nil:
-		return vault.Open(match.Project.Path)
-	case len(candidates) > 1:
-		return nil, fmt.Errorf("%s is linked by several atlas projects: %s; pass vault", s.opts.ProjectDir, discover.Describe(candidates))
-	}
-	return nil, err
-}
-
 // home is the atlas home the session reads.
 func (s *Server) home() home.Home { return home.Resolve(s.opts.Env(home.EnvHome)) }
 
-// session is what the server knows about one tool call's vaults: the vault the call
-// acts on, the session's own project (nil in a knowledge base session or with no atlas),
-// and, when the target is a knowledge base mounted by that project, the mount's
-// effective access.
-type session struct {
-	target *vault.Vault
-	// project is whose mounts this call answers for: the target itself when it is a
-	// project, otherwise the session's own project from the working directory or
-	// CLAUDE_ATLAS_VAULT.
-	project *registry.Entry
-	mount   *registry.Mount // the project's mount of target, when target is a knowledge base
-	// entry is the target's own registry entry, and ix the scan both come from. Both are
-	// nil with no atlas or a failed scan. No read-only tool depends on them.
-	entry *registry.Entry
-	ix    *registry.Index
-	// mountPaths is what mounts returns.
-	mountPaths map[string]string
+// where finds the session's place once per call: a project, anywhere inside its work,
+// or a knowledge base. Nothing is registered here; the session-start hook heals the
+// config.
+func (s *Server) where() (*place.Place, error) {
+	return place.Resolve(s.home(), "", s.opts.Env(place.EnvPlace), s.opts.ProjectDir, false)
 }
 
-// open resolves the target (explicit, env, nearest identity file, then discovery) and
-// the session's project (the same resolution with no explicit vault), then the mount.
-func (s *Server) open(explicit string) (*session, error) {
-	target, err := s.resolve(explicit)
+// knowledge is the knowledge base a call acts on: the session's own, or the project's.
+// A project without one is refused with the reason.
+func (s *Server) knowledge() (*place.Place, *vault.Vault, error) {
+	pl, err := s.where()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	sess := &session{target: target}
-	cfg, err := s.home().Load()
+	if pl.Vault != nil {
+		return pl, pl.Vault, nil
+	}
+	if pl.KnowledgeError != "" {
+		return nil, nil, fmt.Errorf("%s: %s", pl.Project.Name(), pl.KnowledgeError)
+	}
+	return nil, nil, fmt.Errorf("%s uses no knowledge base; link one with `claude-atlas link KB`", pl.Project.Name())
+}
+
+// via names the project a knowledge base write came through, or nil in a knowledge
+// base session.
+func via(pl *place.Place) *ledger.Via {
+	if pl == nil || pl.Project == nil {
+		return nil
+	}
+	return &ledger.Via{ID: pl.Project.Config.ID, Name: pl.Project.Name()}
+}
+
+// projectOf resolves the project a task tool acts on: the session's own when arg is
+// empty, else one the atlas knows by name, id, or path. In a knowledge base session the
+// project must use that knowledge base.
+func (s *Server) projectOf(pl *place.Place, arg string) (*project.Project, *registry.Entry, error) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		if pl.Project == nil {
+			return nil, nil, errors.New("name the project: this is a knowledge base session, so pass project (a name, id, or path of one that uses it)")
+		}
+		return pl.Project, pl.Entry, nil
+	}
+	if pl.Index == nil {
+		return nil, nil, errors.New("no atlas config on this machine; run claude-atlas setup")
+	}
+	e, err := pl.Index.Find(arg, registry.Project)
 	if err != nil {
-		return sess, nil
+		return nil, nil, err
 	}
-	ix, err := registry.Scan(cfg)
+	if pl.Project == nil && pl.Vault != nil {
+		if e.Knowledge == nil || e.Knowledge.ID != pl.Vault.Config.ID {
+			return nil, nil, fmt.Errorf("%s does not use the knowledge base %s", e.Name, pl.Vault.Name())
+		}
+	}
+	p, err := project.Open(e.Path)
 	if err != nil {
-		return sess, nil
+		return nil, nil, err
 	}
-	sess.ix = ix
-	sess.entry = dropUnreadable(ix.ByPath(target.Root))
-	if target.Config.Kind == vault.Project {
-		sess.project = sess.entry
-		sess.mountPaths = mountPaths(sess.project)
-		return sess, nil
-	}
-	sess.project = s.sessionProject(ix)
-	if sess.project == nil {
-		return sess, nil
-	}
-	for i := range sess.project.Mounts {
-		if sess.project.Mounts[i].ID == target.Config.ID {
-			sess.mount = &sess.project.Mounts[i]
-			break
-		}
-	}
-	return sess, nil
-}
-
-// sessionProject is the project the session started in: the vault the environment or the
-// working directory names, or the project whose repository holds that directory.
-func (s *Server) sessionProject(ix *registry.Index) *registry.Entry {
-	if v, err := vault.Resolve("", s.opts.Env(vault.EnvVault), s.opts.ProjectDir); err == nil {
-		if v.Config.Kind != vault.Project {
-			return nil
-		}
-		return dropUnreadable(ix.ByPath(v.Root))
-	}
-	match, _, err := discover.Vault(s.home(), s.opts.ProjectDir)
-	if err != nil || match == nil {
-		return nil
-	}
-	return dropUnreadable(ix.ByPath(match.Project.Path))
-}
-
-// dropUnreadable returns nil for an entry the scan found but could not read.
-func dropUnreadable(e *registry.Entry) *registry.Entry {
-	if e == nil || e.Error != "" {
-		return nil
-	}
-	return e
-}
-
-// mountPaths maps each resolved mount's name to the knowledge base wiki it leads to.
-func mountPaths(project *registry.Entry) map[string]string {
-	if project == nil {
-		return nil
-	}
-	paths := map[string]string{}
-	for _, m := range project.Mounts {
-		if m.Error == "" && m.Path != "" {
-			paths[m.Name] = m.Path
-		}
-	}
-	return paths
-}
-
-// mounts is what lint reads instead of the symlinks under kb/, so a project whose links
-// refresh has not made yet still resolves into its knowledge bases. It is nil unless the
-// target is the project the mounts belong to; a knowledge base has none.
-func (sess *session) mounts() map[string]string { return sess.mountPaths }
-
-// writable says whether a page-writing kind may run: in a project, always; in a
-// knowledge base, only through a project session whose mount is effectively write.
-// It returns the refusal to show the model.
-func (sess *session) writable(kind txn.Kind) error {
-	if sess.target.Config.Kind != vault.Knowledge {
-		return nil
-	}
-	kb := sess.target.Name()
-	if sess.project == nil {
-		if entersThroughAProject(kind) {
-			return fmt.Errorf("knowledge enters through a project: %s is a knowledge base; run this in a project that mounts it (%s)", kb, sess.mountedBy())
-		}
-		return nil
-	}
-	switch {
-	case sess.mount == nil && sess.entry == nil:
-		// mount takes a name or a path, and the scan does not hold this knowledge base.
-		return fmt.Errorf("the atlas does not know %s; run `claude-atlas adopt %s`, then `claude-atlas mount %s %s`", kb, sess.target.Root, sess.project.Path, sess.target.Root)
-	case sess.mount == nil:
-		return fmt.Errorf("%s does not mount %s; run `claude-atlas mount %s %s`", sess.project.Name, kb, sess.project.Path, sess.target.Root)
-	case sess.mount.Error != "":
-		return fmt.Errorf("mount %s: %s", sess.mount.Name, sess.mount.Error)
-	case sess.mount.Effective != vault.AccessWrite:
-		return fmt.Errorf("%s mounts %s read-only", sess.project.Name, kb)
-	}
-	return nil
-}
-
-// entersThroughAProject names the kinds that bring knowledge in. They need a project
-// session even when there is no mount to check.
-func entersThroughAProject(kind txn.Kind) bool {
-	return kind == txn.Ingest || kind == txn.Save || kind == txn.Capture
-}
-
-// mountedBy names the projects that mount the target: "mounted by: a, b", or the phrase
-// for a knowledge base nobody mounts.
-func (sess *session) mountedBy() string {
-	var names []string
-	if sess.entry != nil {
-		for _, ref := range sess.entry.MountedBy {
-			names = append(names, ref.Name)
-		}
-	}
-	if len(names) == 0 {
-		return "nothing mounts it yet"
-	}
-	return "mounted by: " + strings.Join(names, ", ")
-}
-
-// unknownVault says the scan does not hold the target, so its mounts cannot resolve.
-func (sess *session) unknownVault() error {
-	return fmt.Errorf("the atlas does not know %s, so its mounts do not resolve; run `claude-atlas adopt %s`", sess.target.Name(), sess.target.Root)
-}
-
-// mountNamed finds the session project's mount by name and refuses one it may not write.
-func (sess *session) mountNamed(name string) (*registry.Mount, error) {
-	if sess.project == nil {
-		return nil, sess.unknownVault()
-	}
-	for i := range sess.project.Mounts {
-		m := &sess.project.Mounts[i]
-		if !strings.EqualFold(m.Name, name) {
-			continue
-		}
-		switch {
-		case m.Error != "":
-			return nil, fmt.Errorf("mount %s: %s", m.Name, m.Error)
-		case m.Effective != vault.AccessWrite:
-			return nil, fmt.Errorf("%s mounts %s read-only", sess.project.Name, m.Name)
-		}
-		return m, nil
-	}
-	return nil, fmt.Errorf("no mount named %q; the mounts tool lists them", name)
+	return p, e, nil
 }
 
 func (s *Server) pluginVersion() string {
@@ -275,256 +145,96 @@ func (s *Server) pluginVersion() string {
 	return m.Version
 }
 
-// requireProject refuses what only a project has.
-func requireProject(v *vault.Vault, what string) error {
-	if v.Config.Kind == vault.Project {
-		return nil
-	}
-	return fmt.Errorf("%s is a knowledge base and has no %s; sources, tasks, and repositories belong to a project that mounts it", v.Name(), what)
+// Empty is the argument of a tool that takes none.
+type Empty struct{}
+
+// GitInfo is what git says about a project's work folder.
+type GitInfo struct {
+	Branch string `json:"branch,omitempty"`
+	Dirty  int    `json:"dirty"`
 }
 
-// VaultArg is the argument every tool shares.
-type VaultArg struct {
-	Vault string `json:"vault,omitempty" jsonschema:"absolute path of the vault; omit to use the session's vault"`
+// KnowledgeRef names the knowledge base a project uses.
+type KnowledgeRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Path string `json:"path"`
 }
 
-// Status is the status tool's output.
-type Status struct {
-	Vault         string         `json:"vault"`
-	Name          string         `json:"name"`
-	Kind          string         `json:"kind"`
-	ID            string         `json:"id"`
-	Mode          string         `json:"mode"`
-	Pages         int            `json:"pages"`
-	InboxWaiting  int            `json:"inbox_waiting"`
-	Git           txn.Status     `json:"git"`
-	LastOperation *txn.Operation `json:"last_operation,omitempty"`
-	Tasks         tasks.Counts   `json:"tasks"`
-	// Mounts are a project's knowledge bases; Access and MountedBy are a knowledge base's
-	// own access and the projects that mount it.
-	Mounts    []MountInfo `json:"mounts,omitempty"`
-	Access    string      `json:"access,omitempty"`
-	MountedBy []MountedBy `json:"mounted_by,omitempty"`
-	// Repository is set when the session runs inside a repository the project mounts.
-	Repository *RepoInfo `json:"repository,omitempty"`
-	Versions   Versions  `json:"versions"`
-	Warnings   []string  `json:"warnings"`
+// DescribedInfo is the page that describes a project, and how current it is.
+type DescribedInfo struct {
+	registry.Description
+	Summary string `json:"summary"`
 }
 
-// MountInfo is one knowledge base a project mounts.
-type MountInfo struct {
+// ProjectTasks is a project's task counts and its phases in order.
+type ProjectTasks struct {
+	Counts tasks.Counts `json:"counts"`
+	Phases []string     `json:"phases"`
+}
+
+// ProjectInfo is one project as a knowledge base sees it.
+type ProjectInfo struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Path      string `json:"path,omitempty"`
-	Link      string `json:"link"`
-	Access    string `json:"access"`
-	Effective string `json:"effective,omitempty"`
-	Scope     string `json:"scope,omitempty"`
-	Pages     *int   `json:"pages,omitempty"`
-	Error     string `json:"error,omitempty"`
-	// Through is the cluster this knowledge base came through; empty when the project
-	// mounts it directly. Every member of a cluster is reached the same way as any mount.
-	Through string `json:"through,omitempty"`
+	Path      string `json:"path"`
+	OpenTasks int    `json:"open_tasks"`
+	Described bool   `json:"described"`
 }
 
-// MountedBy is one project that mounts a knowledge base, with its effective access.
-type MountedBy struct {
-	Name   string `json:"name"`
-	Access string `json:"access"`
-}
-
-// MountsOut is the mounts tool's output.
-type MountsOut struct {
-	Mounts []MountInfo `json:"mounts"`
-}
-
-// mountInfo describes one mount. pages counts the knowledge base's pages, which costs a
-// lint run, so status leaves it out.
-func (sess *session) mountInfo(m registry.Mount, pages bool, now time.Time) MountInfo {
-	info := MountInfo{ID: m.ID, Name: m.Name, Path: m.Path, Link: vault.KbDir + "/" + m.Name, Access: m.Access, Effective: m.Effective, Error: m.Error, Through: m.Through}
-	if sess.ix != nil {
-		if kb := sess.ix.ByID(m.ID); kb != nil {
-			info.Scope = kb.Scope
-		}
-	}
-	if pages && m.Path != "" {
-		if report, err := lint.Run(filepath.Dir(m.Path), lint.Options{AsOf: now}); err == nil {
-			n := report.Summary.PagesScanned
-			info.Pages = &n
-		}
-	}
-	return info
-}
-
-// mountList describes every mount of the session's project.
-func (sess *session) mountList(pages bool, now time.Time) []MountInfo {
-	out := []MountInfo{}
-	if sess.project == nil {
-		return out
-	}
-	for _, m := range sess.project.Mounts {
-		out = append(out, sess.mountInfo(m, pages, now))
-	}
-	return out
-}
-
-func (s *Server) mounts(ctx context.Context, req *mcp.CallToolRequest, a VaultArg) (*mcp.CallToolResult, MountsOut, error) {
-	sess, err := s.open(a.Vault)
-	if err != nil {
-		return nil, MountsOut{}, err
-	}
-	if sess.target.Config.Kind != vault.Project {
-		return nil, MountsOut{}, fmt.Errorf("a knowledge base has no mounts; %s", sess.mountedBy())
-	}
-	if sess.project == nil {
-		return nil, MountsOut{}, sess.unknownVault()
-	}
-	return nil, MountsOut{Mounts: sess.mountList(true, s.opts.Now())}, nil
-}
-
-// RepoInfo describes a mounted repository and how changes land in it.
-type RepoInfo struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Remote  string `json:"remote,omitempty"`
-	Changes string `json:"changes"`
-	Policy  string `json:"policy"`
-	Branch  string `json:"branch,omitempty"`
-	Dirty   int    `json:"dirty"`
-	// ClaudeMD is the repository's CLAUDE.md, to read before changing files there; a
-	// session in the vault does not load it on its own unless the repository sits under
-	// the vault.
-	ClaudeMD string `json:"claude_md,omitempty"`
-	// Described is the page that describes the repository, in the project's wiki or a
-	// mounted knowledge base, with the commit it was written from and how far the
-	// repository has moved since. Absent when no page does.
-	Described *registry.RepoDescription `json:"described,omitempty"`
-}
-
-func repoInfo(project *registry.Entry, r registry.Repo) RepoInfo {
-	info := RepoInfo{Name: r.Name, Path: r.Path, Remote: r.Remote, Changes: links.Policy(r.Changes, r.Remote), ClaudeMD: repomap.ClaudeMD(r)}
-	info.Policy = links.PolicyText(info.Changes)
-	if r.Path != "" {
-		if fact := links.Inspect(links.Repo, r.Path); fact.OK {
-			info.Branch = fact.Branch
-			if fact.Dirty != nil {
-				info.Dirty = *fact.Dirty
-			}
-		}
-	}
-	if project != nil {
-		info.Described = repomap.Describe(*project, r)
-	}
-	return info
-}
-
-// repoPageWarnings names the project's repositories no page describes, and those whose
-// page fell more than repomap.BehindThreshold commits behind, so a session sees the
-// knowledge base going stale next to the stale tasks.
-func repoPageWarnings(h home.Home, root string) []string {
-	project, err := discover.Project(h, root)
-	if err != nil || project == nil {
-		return nil
-	}
-	var missing, behind []string
-	for _, r := range project.Repos {
-		if r.Error != "" || r.Path == "" {
-			continue
-		}
-		d := repomap.Describe(*project, r)
-		switch {
-		case d == nil:
-			missing = append(missing, r.Name)
-		case d.Behind > repomap.BehindThreshold:
-			behind = append(behind, fmt.Sprintf("%s (%s, %d commits)", r.Name, d.In, d.Behind))
-		}
-	}
-	var out []string
-	if len(missing) > 0 {
-		out = append(out, fmt.Sprintf("%d repositor%s no page describes: %s; the repo-map skill writes one", len(missing), map[bool]string{true: "y", false: "ies"}[len(missing) == 1], strings.Join(missing, ", ")))
-	}
-	if len(behind) > 0 {
-		out = append(out, fmt.Sprintf("%d repository page%s fell behind the code: %s; the repo-map skill updates them", len(behind), plural(len(behind)), strings.Join(behind, ", ")))
-	}
-	return out
-}
-
+// Versions are the binary's and the plugin's.
 type Versions struct {
 	Binary string `json:"binary"`
 	Plugin string `json:"plugin,omitempty"`
 }
 
-func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultArg) (*mcp.CallToolResult, Status, error) {
-	sess, err := s.open(a.Vault)
+// Status is the status tool's output: a project's facts or a knowledge base's.
+type Status struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+	// A project's fields.
+	Description    string         `json:"description,omitempty"`
+	Git            *GitInfo       `json:"git,omitempty"`
+	Knowledge      *KnowledgeRef  `json:"knowledge,omitempty"`
+	KnowledgeError string         `json:"knowledge_error,omitempty"`
+	Described      *DescribedInfo `json:"described,omitempty"`
+	Tasks          *ProjectTasks  `json:"tasks,omitempty"`
+	Notes          int            `json:"notes"`
+	// A knowledge base's fields.
+	Mode          string         `json:"mode,omitempty"`
+	Scope         string         `json:"scope,omitempty"`
+	Pages         int            `json:"pages"`
+	InboxWaiting  int            `json:"inbox_waiting"`
+	Projects      []ProjectInfo  `json:"projects,omitempty"`
+	VaultGit      *txn.Status    `json:"vault_git,omitempty"`
+	LastOperation *txn.Operation `json:"last_operation,omitempty"`
+	Stubs         int            `json:"stubs"`
+	WantedPages   int            `json:"wanted_pages"`
+	// Both.
+	PendingRecovery bool     `json:"pending_recovery"`
+	Versions        Versions `json:"versions"`
+	Warnings        []string `json:"warnings"`
+}
+
+func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a Empty) (*mcp.CallToolResult, Status, error) {
+	pl, err := s.where()
 	if err != nil {
 		return nil, Status{}, err
 	}
-	v := sess.target
-	out := Status{Vault: v.Root, Name: v.Name(), Kind: string(v.Config.Kind), ID: v.Config.ID, Mode: string(v.Config.Mode), Warnings: []string{}, Versions: Versions{Binary: s.opts.Version, Plugin: s.pluginVersion()}}
-	st, err := txn.Inspect(v)
-	if err != nil {
-		return nil, Status{}, err
-	}
-	out.Git = *st
-	if !st.HasHistory {
-		out.Warnings = append(out.Warnings, "the vault has no git history; run `claude-atlas adopt "+v.Root+"`")
-	}
-	if st.Pending {
-		out.Warnings = append(out.Warnings, "an operation was interrupted; run `claude-atlas recover "+v.Root+"` before changing the vault")
-	}
-	if report, err := lint.Run(v.Root, lint.Options{AsOf: s.opts.Now(), Mounts: sess.mounts()}); err == nil {
-		out.Pages = report.Summary.PagesScanned
-	}
-	if v.Config.Kind == vault.Project {
-		if files, err := capture.ListInbox(v, sess.mounts(), s.opts.Now()); err == nil {
-			for _, f := range files {
-				if !f.Captured {
-					out.InboxWaiting++
-				}
-			}
-		}
-	}
-	if ops, err := txn.History(v, 1, false); err == nil && len(ops) > 0 {
-		out.LastOperation = &ops[0]
-	}
-	if v.Config.Kind == vault.Project {
-		if led, err := tasks.Current(v, s.opts.Now()); err == nil {
-			out.Tasks = led.Counts(s.opts.Now())
-			out.Tasks.Notes = len(tasks.Notes(v))
-			var stale []string
-			for _, r := range led.Open() {
-				if tasks.Stale(r, s.opts.Now()) {
-					stale = append(stale, r.Title)
-				}
-			}
-			if len(stale) > 0 {
-				out.Warnings = append(out.Warnings, fmt.Sprintf("%d active task%s untouched for %d days: %s", len(stale), plural(len(stale)), tasks.StaleDays, strings.Join(stale, "; ")))
-			}
-			for _, p := range led.Problems {
-				out.Warnings = append(out.Warnings, "task page "+p.Path+": "+p.Reason)
-			}
-			if out.Tasks.Notes > 0 {
-				out.Warnings = append(out.Warnings, fmt.Sprintf("%d task note%s wait in %s/; the task-plant skill turns them into tasks", out.Tasks.Notes, plural(out.Tasks.Notes), vault.InboxTasksDir))
-			}
-		}
-	}
-	if v.Config.Kind == vault.Project {
-		out.Mounts = sess.mountList(false, s.opts.Now())
+	now := s.opts.Now()
+	out := Status{Warnings: []string{}, Versions: Versions{Binary: s.opts.Version, Plugin: s.pluginVersion()}}
+	if pl.InProject() {
+		s.projectStatus(pl, &out, now)
 	} else {
-		out.Access = v.Config.Access
-		out.MountedBy = []MountedBy{}
-		if sess.entry != nil {
-			for _, ref := range sess.entry.MountedBy {
-				out.MountedBy = append(out.MountedBy, MountedBy{Name: ref.Name, Access: ref.Access})
-			}
+		s.knowledgeStatus(pl, &out, now)
+	}
+	if pl.Vault != nil {
+		if pending, _ := txn.Pending(pl.Vault); pending != nil {
+			out.PendingRecovery = true
+			out.Warnings = append(out.Warnings, "an operation was interrupted in "+pl.Vault.Name()+"; run `claude-atlas recover "+pl.Vault.Root+"` before changing it")
 		}
-	}
-	if match, _, err := discover.Vault(s.home(), s.opts.ProjectDir); err == nil && match != nil && match.Project.Path == v.Root {
-		info := repoInfo(&match.Project, match.Repo)
-		out.Repository = &info
-	}
-	if v.Config.Kind == vault.Project {
-		out.Warnings = append(out.Warnings, repoPageWarnings(s.home(), v.Root)...)
 	}
 	if out.Versions.Plugin != "" && out.Versions.Binary != "dev" && out.Versions.Plugin != out.Versions.Binary {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("plugin %s and binary %s differ; update one of them", out.Versions.Plugin, out.Versions.Binary))
@@ -532,52 +242,143 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 	return nil, out, nil
 }
 
-type InboxOut struct {
-	Files []capture.InboxFile `json:"files"`
+func (s *Server) projectStatus(pl *place.Place, out *Status, now time.Time) {
+	p := pl.Project
+	out.Kind, out.ID, out.Name, out.Path, out.Description = "project", p.Config.ID, p.Name(), p.Root, p.Config.Description
+	if fact := links.Inspect(links.Repo, p.Root); fact.OK {
+		git := &GitInfo{Branch: fact.Branch}
+		if fact.Dirty != nil {
+			git.Dirty = *fact.Dirty
+		}
+		out.Git = git
+	}
+	switch {
+	case pl.Vault != nil:
+		out.Knowledge = &KnowledgeRef{ID: pl.Vault.Config.ID, Name: pl.Vault.Name(), Path: pl.Vault.Root}
+		if pl.Entry != nil {
+			if d := describe.Page(*pl.Entry); d != nil {
+				out.Described = &DescribedInfo{Description: *d, Summary: d.Summary()}
+				if d.Behind > describe.BehindThreshold {
+					out.Warnings = append(out.Warnings, fmt.Sprintf("the page describing this project is %d commits behind; the describe skill brings it up to date", d.Behind))
+				}
+			} else {
+				out.Warnings = append(out.Warnings, registry.NotDescribed+"; the describe skill writes the page")
+			}
+		}
+	case pl.KnowledgeError != "":
+		out.KnowledgeError = pl.KnowledgeError
+		out.Warnings = append(out.Warnings, pl.KnowledgeError)
+	default:
+		out.Warnings = append(out.Warnings, "this project uses no knowledge base; link one with `claude-atlas link KB`")
+	}
+	out.Notes = len(tasks.Notes(p))
+	if board, err := tasks.Load(p); err == nil {
+		pt := &ProjectTasks{Counts: board.Counts(now), Phases: []string{}}
+		pt.Counts.Notes = out.Notes
+		for _, ph := range board.Phases {
+			pt.Phases = append(pt.Phases, ph.Title)
+		}
+		out.Tasks = pt
+		var stale []string
+		for _, t := range board.Open() {
+			if tasks.Stale(t, now) {
+				stale = append(stale, t.Title)
+			}
+		}
+		if len(stale) > 0 {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("%d active task%s untouched for %d days: %s", len(stale), plural(len(stale)), tasks.StaleDays, strings.Join(stale, "; ")))
+		}
+		for _, pr := range board.Problems {
+			out.Warnings = append(out.Warnings, "task page "+pr.Path+": "+pr.Reason)
+		}
+	}
+	if out.Notes > 0 {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("%d task note%s wait in %s/%s/; the task-plant skill turns them into tasks", out.Notes, plural(out.Notes), project.Dir, project.InboxDir))
+	}
 }
 
-func (s *Server) inbox(ctx context.Context, req *mcp.CallToolRequest, a VaultArg) (*mcp.CallToolResult, InboxOut, error) {
-	sess, err := s.open(a.Vault)
+func (s *Server) knowledgeStatus(pl *place.Place, out *Status, now time.Time) {
+	v := pl.Vault
+	out.Kind, out.ID, out.Name, out.Path, out.Mode, out.Scope = "knowledge", v.Config.ID, v.Name(), v.Root, string(v.Config.Mode), v.Config.Scope
+	out.Projects = []ProjectInfo{}
+	if st, err := txn.Inspect(v); err == nil {
+		out.VaultGit = st
+		if !st.HasHistory {
+			out.Warnings = append(out.Warnings, "the knowledge base has no git history; run `claude-atlas adopt "+v.Root+"`")
+		}
+	}
+	if report, err := lint.Run(v.Root, lint.Options{AsOf: now}); err == nil {
+		out.Pages = report.Summary.PagesScanned
+		out.Stubs = len(report.Stubs)
+		out.WantedPages = len(report.WantedPages)
+	}
+	if files, err := capture.ListInbox(v, now); err == nil {
+		for _, f := range files {
+			if !f.Captured {
+				out.InboxWaiting++
+			}
+		}
+	}
+	if ops, err := txn.History(v, 1, false); err == nil && len(ops) > 0 {
+		out.LastOperation = &ops[0]
+	}
+	if pl.Index != nil && pl.Entry != nil {
+		for _, e := range pl.Index.ProjectsOf(pl.Entry.ID) {
+			info := ProjectInfo{ID: e.ID, Name: e.Name, Path: e.Path, Described: describe.Page(e) != nil}
+			if p, err := project.Open(e.Path); err == nil {
+				if board, err := tasks.Load(p); err == nil {
+					info.OpenTasks = board.Counts(now).Open
+				}
+			}
+			out.Projects = append(out.Projects, info)
+			if !info.Described {
+				out.Warnings = append(out.Warnings, "project "+e.Name+" is "+registry.NotDescribed+"; the describe skill writes the page")
+			}
+		}
+	}
+}
+
+// InboxOut is the knowledge base's inbox, and in a project session the task notes too.
+type InboxOut struct {
+	Vault string              `json:"vault"`
+	Files []capture.InboxFile `json:"files"`
+	Notes []string            `json:"notes,omitempty"`
+}
+
+func (s *Server) inbox(ctx context.Context, req *mcp.CallToolRequest, a Empty) (*mcp.CallToolResult, InboxOut, error) {
+	pl, err := s.where()
 	if err != nil {
 		return nil, InboxOut{}, err
 	}
-	v := sess.target
-	if err := requireProject(v, "inbox"); err != nil {
-		return nil, InboxOut{}, err
+	out := InboxOut{Files: []capture.InboxFile{}}
+	if pl.Vault != nil {
+		files, err := capture.ListInbox(pl.Vault, s.opts.Now())
+		if err != nil {
+			return nil, InboxOut{}, err
+		}
+		out.Vault, out.Files = pl.Vault.Root, files
 	}
-	files, err := capture.ListInbox(v, sess.mounts(), s.opts.Now())
-	if err != nil {
-		return nil, InboxOut{}, err
+	if pl.InProject() {
+		out.Notes = tasks.Notes(pl.Project)
+		if out.Notes == nil {
+			out.Notes = []string{}
+		}
+	} else if pl.Vault == nil {
+		return nil, InboxOut{}, place.ErrNoPlace
 	}
-	return nil, InboxOut{Files: files}, nil
+	return nil, out, nil
 }
 
 type CaptureArgs struct {
-	VaultArg
-	Paths []string `json:"paths" jsonschema:"files in the project's inbox/ to capture, as inbox-relative or vault-relative paths"`
+	Paths []string `json:"paths" jsonschema:"files in the knowledge base's inbox/ to capture, as inbox-relative or vault-relative paths"`
 }
 
 func (s *Server) capture(ctx context.Context, req *mcp.CallToolRequest, a CaptureArgs) (*mcp.CallToolResult, capture.Result, error) {
-	sess, err := s.open(a.Vault)
+	pl, v, err := s.knowledge()
 	if err != nil {
 		return nil, capture.Result{}, err
 	}
-	now := s.opts.Now()
-	if sess.target.Config.Kind == vault.Project {
-		res, err := capture.Capture(sess.target, a.Paths, now)
-		if err != nil {
-			return nil, capture.Result{}, err
-		}
-		return nil, *res, nil
-	}
-	if err := sess.writable(txn.Capture); err != nil {
-		return nil, capture.Result{}, err
-	}
-	project, err := vault.Open(sess.project.Path)
-	if err != nil {
-		return nil, capture.Result{}, err
-	}
-	res, err := capture.CaptureFrom(sess.target, project, a.Paths, ledger.Via{ID: sess.project.ID, Name: sess.project.Name}, now)
+	res, err := capture.Capture(v, a.Paths, via(pl), s.opts.Now())
 	if err != nil {
 		return nil, capture.Result{}, err
 	}
@@ -585,51 +386,25 @@ func (s *Server) capture(ctx context.Context, req *mcp.CallToolRequest, a Captur
 }
 
 type RouteArgs struct {
-	VaultArg
-	Type  string `json:"type" jsonschema:"page type: source, entity, concept; in a project also question, session; in lyt mode also note or moc"`
+	Type  string `json:"type" jsonschema:"page type: source, entity, concept; in lyt mode also note or moc"`
 	Title string `json:"title" jsonschema:"the page title; it becomes the file name"`
 }
 
 // routeNext tells the model what a match means: a reason to link, not to duplicate.
-const routeNext = "A match anywhere means link to it instead of creating a page."
+const routeNext = "A match means link to it instead of creating a page."
 
-// RouteOut is where a page belongs and whether one by that title or alias already
-// exists, in the target vault and, for a project, in every mount.
+// RouteOut is where a page belongs and whether one by that title or alias already exists.
 type RouteOut struct {
 	vault.Route
-	Vault  string       `json:"vault"`
-	Match  *vault.Match `json:"match,omitempty"`
-	Mounts []MountRoute `json:"mounts,omitempty"`
-	Next   string       `json:"next"`
-}
-
-// MountRoute is one mount's answer to the same route question.
-type MountRoute struct {
-	Name      string       `json:"name"`
-	Vault     string       `json:"vault,omitempty"`
-	Effective string       `json:"effective,omitempty"`
-	Path      string       `json:"path,omitempty"`
-	Match     *vault.Match `json:"match,omitempty"`
-	Error     string       `json:"error,omitempty"`
+	Vault string       `json:"vault"`
+	Match *vault.Match `json:"match,omitempty"`
+	Next  string       `json:"next"`
 }
 
 func (s *Server) route(ctx context.Context, req *mcp.CallToolRequest, a RouteArgs) (*mcp.CallToolResult, RouteOut, error) {
-	sess, err := s.open(a.Vault)
+	_, v, err := s.knowledge()
 	if err != nil {
 		return nil, RouteOut{}, err
-	}
-	v := sess.target
-	if a.Type == "task" {
-		if err := requireProject(v, "tasks"); err != nil {
-			return nil, RouteOut{}, err
-		}
-		now := s.opts.Now()
-		plain := vault.TasksDir + "/" + vault.SanitizeTitle(a.Title) + ".md"
-		r := vault.Route{Path: plain, Type: "task", Mode: v.Config.Mode, Skeleton: tasks.Skeleton(tasks.Plant{Title: a.Title}, tasks.NewID(now), now)}
-		if _, err := os.Stat(v.Path(plain)); err == nil {
-			r.Exists = true
-		}
-		return nil, RouteOut{Route: r, Vault: v.Root, Next: routeNext}, nil
 	}
 	r, err := v.RouteFor(a.Type, a.Title, s.opts.Now())
 	if err != nil {
@@ -639,305 +414,234 @@ func (s *Server) route(ctx context.Context, req *mcp.CallToolRequest, a RouteArg
 	if err != nil {
 		return nil, RouteOut{}, err
 	}
-	out := RouteOut{Route: *r, Vault: v.Root, Match: match, Next: routeNext}
-	if sess.project != nil && v.Config.Kind == vault.Project {
-		now := s.opts.Now()
-		for _, m := range sess.project.Mounts {
-			out.Mounts = append(out.Mounts, mountRoute(m, a.Type, a.Title, now))
-		}
-	}
-	return nil, out, nil
-}
-
-// mountRoute answers the route question against one mount: an unresolved mount carries
-// its error; a resolved one reports whether the title or an alias already exists there,
-// and where a new page would go when the mount is writable and the type is filed there.
-func mountRoute(m registry.Mount, pageType, title string, now time.Time) MountRoute {
-	mr := MountRoute{Name: m.Name, Effective: m.Effective}
-	if m.Error != "" {
-		mr.Error = m.Error
-		return mr
-	}
-	kb, err := vault.Open(filepath.Dir(m.Path))
-	if err != nil {
-		mr.Error = err.Error()
-		return mr
-	}
-	mr.Vault = kb.Root
-	filed := false
-	for _, t := range vault.RoutableTypes(vault.Knowledge, kb.Config.Mode) {
-		if t == pageType {
-			filed = true
-			break
-		}
-	}
-	if !filed {
-		return mr
-	}
-	match, err := vault.FindPage(kb.Root, title)
-	if err != nil {
-		mr.Error = err.Error()
-		return mr
-	}
-	mr.Match = match
-	if m.Effective != vault.AccessWrite {
-		return mr
-	}
-	if r, err := kb.RouteFor(pageType, title, now); err == nil {
-		mr.Path = r.Path
-	}
-	return mr
-}
-
-type PlantArgs struct {
-	VaultArg
-	Title    string   `json:"title,omitempty" jsonschema:"the task's title; taken from the text when omitted"`
-	Text     string   `json:"text,omitempty" jsonschema:"the idea in the user's words; kept verbatim on the page"`
-	Priority string   `json:"priority,omitempty" jsonschema:"high, normal, low, or someday; default normal"`
-	Workdir  string   `json:"workdir,omitempty" jsonschema:"the folder the work happens in, usually a linked repository"`
-	Due      string   `json:"due,omitempty" jsonschema:"YYYY-MM-DD"`
-	From     string   `json:"from,omitempty" jsonschema:"the note under inbox/tasks/ this task comes from; it is removed in the same commit"`
-	Repos    []string `json:"repos,omitempty" jsonschema:"the project's repositories the task changes, by name as the repos tool lists them"`
-	Plan     string   `json:"plan,omitempty" jsonschema:"the Plan section's text: the approach, the steps with the repository each lands in, what done looks like; with it the task is planned"`
-	Start    bool     `json:"start,omitempty" jsonschema:"with plan: make the task active now, with a first Progress line; the work skill uses it"`
-}
-
-type PlantOut struct {
-	txn.Planted
-	OperationID string `json:"operation_id"`
-	Commit      string `json:"commit"`
-}
-
-func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArgs) (*mcp.CallToolResult, PlantOut, error) {
-	v, err := s.resolve(a.Vault)
-	if err != nil {
-		return nil, PlantOut{}, err
-	}
-	if err := requireProject(v, "tasks"); err != nil {
-		return nil, PlantOut{}, err
-	}
-	now := s.opts.Now()
-	request, planted, err := txn.PlantRequest(v, tasks.Plant{Title: a.Title, Text: a.Text, Priority: a.Priority, Workdir: a.Workdir, Due: a.Due, Repos: a.Repos, Plan: a.Plan, Start: a.Start}, a.From, now)
-	if err != nil {
-		return nil, PlantOut{}, err
-	}
-	plan, err := txn.Prepare(v, request, now)
-	if err != nil {
-		return nil, PlantOut{}, err
-	}
-	res, err := txn.Apply(v, plan, now)
-	if err != nil {
-		return nil, PlantOut{}, err
-	}
-	return nil, PlantOut{Planted: planted, OperationID: res.OperationID, Commit: res.Commit}, nil
+	return nil, RouteOut{Route: *r, Vault: v.Root, Match: match, Next: routeNext}, nil
 }
 
 type StubArgs struct {
-	VaultArg
 	Titles []txn.StubTitle `json:"titles,omitempty" jsonschema:"the pages to stub; omit to stub every wanted page and every empty page a link points to"`
-	Type   string          `json:"type,omitempty" jsonschema:"the type for titles that name none: concept or entity; in a project also question or session; in lyt mode note or moc as well; the default is concept, or note in lyt mode"`
+	Type   string          `json:"type,omitempty" jsonschema:"the type for titles that name none: concept or entity; in lyt mode note or moc as well; the default is concept, or note in lyt mode"`
 }
 
-// StubOp is one operation a stub call made, in the vault it was committed in.
-type StubOp struct {
-	Vault       string `json:"vault"`
-	OperationID string `json:"operation_id"`
-	Commit      string `json:"commit"`
-}
-
-// StubOut lists the stubs and the operations that wrote them. A stub that landed in a
-// mounted knowledge base carries its path through the mount (kb/<name>/concepts/X.md)
-// and was committed in that knowledge base, which operations names with its root. The
-// top-level operation_id and commit name the operation in the session's own vault, and
-// stay empty when nothing committed there; operations carries the rest.
-type StubOut struct {
-	txn.StubResult
-	Operations []StubOp `json:"operations,omitempty"`
-}
-
-// stubGroup is the titles one mounted knowledge base takes.
-type stubGroup struct {
-	mount  *registry.Mount
-	kb     *vault.Vault
-	titles []txn.StubTitle
-}
-
-func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs) (*mcp.CallToolResult, StubOut, error) {
-	sess, err := s.open(a.Vault)
+func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs) (*mcp.CallToolResult, txn.StubResult, error) {
+	pl, v, err := s.knowledge()
 	if err != nil {
-		return nil, StubOut{}, err
+		return nil, txn.StubResult{}, err
+	}
+	for _, t := range a.Titles {
+		if strings.TrimSpace(t.Target) != "" {
+			return nil, txn.StubResult{}, errors.New("target is gone: a session has one knowledge base, and every stub lands there")
+		}
 	}
 	now := s.opts.Now()
-	// Every mount a title names is resolved and checked before the first write, so no
-	// operation lands in one vault while another is still refused.
-	own, groups, err := sess.groupStubs(a.Titles)
+	var res txn.StubResult
+	if pl.InProject() {
+		res, err = txn.StubVia(v, a.Titles, a.Type, pl.Project.Name(), now)
+	} else {
+		res, err = txn.StubPages(v, a.Titles, a.Type, now)
+	}
 	if err != nil {
-		return nil, StubOut{}, err
+		return nil, txn.StubResult{}, err
 	}
-	out := StubOut{StubResult: txn.StubResult{Stubs: []txn.Stubbed{}}}
-	if len(a.Titles) == 0 || len(own) > 0 {
-		if err := sess.writable(txn.Stub); err != nil {
-			return nil, StubOut{}, err
-		}
-		res, err := sess.stubHere(own, a.Type, now)
-		if err != nil {
-			return nil, StubOut{}, err
-		}
-		out.Stubs = append(out.Stubs, res.Stubs...)
-		out.Skipped = append(out.Skipped, res.Skipped...)
-		out.add(sess.target.Root, res)
-		out.OperationID, out.Commit = res.OperationID, res.Commit
+	if res.Stubs == nil {
+		res.Stubs = []txn.Stubbed{}
 	}
-	for _, g := range groups {
-		res, err := txn.StubInto(sess.target, g.kb, g.titles, a.Type, sess.project.Name, sess.mounts(), now)
-		if err != nil {
-			return nil, out, out.receipt(err)
-		}
-		for _, stubbed := range res.Stubs {
-			stubbed.Path = mountPath(g.mount.Name, stubbed.Path)
-			out.Stubs = append(out.Stubs, stubbed)
-		}
-		out.add(g.kb.Root, res)
-	}
-	return nil, out, nil
+	return nil, res, nil
 }
 
-// stubHere stubs the target vault's own wanted pages. A project session that reaches a
-// mounted knowledge base records the project it came through, as capture does; the pages
-// are still the knowledge base's own. A title that only the project links goes to a
-// mount through its target, not here.
-func (sess *session) stubHere(titles []txn.StubTitle, defaultType string, now time.Time) (txn.StubResult, error) {
-	if sess.target.Config.Kind == vault.Knowledge && sess.project != nil {
-		return txn.StubInto(sess.target, sess.target, titles, defaultType, sess.project.Name, sess.mounts(), now)
+// ProjectArg names the project a task tool acts on.
+type ProjectArg struct {
+	Project string `json:"project,omitempty" jsonschema:"the project, by name, id, or path; omit in a project session. In a knowledge base session it must be one of the projects that use it"`
+}
+
+type PlantArgs struct {
+	ProjectArg
+	Title    string `json:"title,omitempty" jsonschema:"the task's title; taken from the text when omitted"`
+	Text     string `json:"text,omitempty" jsonschema:"the idea in the user's words; kept verbatim on the page"`
+	Priority string `json:"priority,omitempty" jsonschema:"high, normal, low, or someday; default normal"`
+	Phase    string `json:"phase,omitempty" jsonschema:"the phase the task belongs to, by title; it must exist"`
+	Due      string `json:"due,omitempty" jsonschema:"YYYY-MM-DD"`
+	From     string `json:"from,omitempty" jsonschema:"the note under atlas/inbox/ this task comes from, atlas-relative; it is removed once the page exists"`
+	Plan     string `json:"plan,omitempty" jsonschema:"the Plan section's text: the approach, the steps, what done looks like; with it the task is planned"`
+	Start    bool   `json:"start,omitempty" jsonschema:"with plan: make the task active now, with a first Progress line; the work skill uses it"`
+}
+
+// PlantOut is the task planted and where its page is.
+type PlantOut struct {
+	tasks.Task
+	Project string `json:"project"`
+	// File is the page's absolute path.
+	File string `json:"file"`
+}
+
+func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArgs) (*mcp.CallToolResult, PlantOut, error) {
+	pl, err := s.where()
+	if err != nil {
+		return nil, PlantOut{}, err
 	}
-	return txn.StubPages(sess.target, titles, defaultType, sess.mounts(), now)
-}
-
-// add records one operation.
-func (out *StubOut) add(root string, res txn.StubResult) {
-	if res.OperationID == "" {
-		return
+	p, _, err := s.projectOf(pl, a.Project)
+	if err != nil {
+		return nil, PlantOut{}, err
 	}
-	out.Operations = append(out.Operations, StubOp{Vault: root, OperationID: res.OperationID, Commit: res.Commit})
-}
-
-// receipt names the operations that already committed, so a failure halfway through says
-// what the model can still undo.
-func (out *StubOut) receipt(err error) error {
-	if len(out.Operations) == 0 {
-		return err
+	t, err := tasks.PlantTask(p, tasks.Plant{Title: a.Title, Text: a.Text, Priority: a.Priority, Phase: a.Phase, Due: a.Due, Plan: a.Plan, Start: a.Start, From: a.From}, s.opts.Now())
+	if err != nil {
+		return nil, PlantOut{}, err
 	}
-	var parts []string
-	for _, op := range out.Operations {
-		parts = append(parts, fmt.Sprintf("operation %s in %s (commit %s)", op.OperationID, op.Vault, op.Commit))
-	}
-	return fmt.Errorf("%w; already committed: %s", err, strings.Join(parts, "; "))
+	return nil, PlantOut{Task: *t, Project: p.Name(), File: p.Path(t.Path)}, nil
 }
 
-// groupStubs splits titles into the session vault's own and those a mount takes, resolving
-// each mount name to the mount it belongs to. Two spellings of one mount name make one
-// group, so one knowledge base gets one operation.
-func (sess *session) groupStubs(titles []txn.StubTitle) (own []txn.StubTitle, groups []*stubGroup, err error) {
-	byMount := map[string]*stubGroup{}
-	for _, t := range titles {
-		name := strings.TrimSpace(t.Target)
-		if name == "" {
-			own = append(own, t)
-			continue
-		}
-		if sess.target.Config.Kind != vault.Project {
-			return nil, nil, fmt.Errorf("only a project's stub names a mount; %s is a knowledge base", sess.target.Name())
-		}
-		m, err := sess.mountNamed(name)
-		if err != nil {
-			return nil, nil, err
-		}
-		g := byMount[strings.ToLower(m.Name)]
-		if g == nil {
-			kb, err := vault.Open(filepath.Dir(m.Path))
-			if err != nil {
-				return nil, nil, err
-			}
-			g = &stubGroup{mount: m, kb: kb}
-			byMount[strings.ToLower(m.Name)] = g
-			groups = append(groups, g)
-		}
-		g.titles = append(g.titles, t)
-	}
-	return own, groups, nil
+// PhaseInfo is one phase as the tasks tool lists it.
+type PhaseInfo struct {
+	Title    string `json:"title"`
+	Order    int    `json:"order"`
+	Finished bool   `json:"finished"`
+	Open     int    `json:"open"`
+	Path     string `json:"path"`
 }
 
-// mountPath is where the project reads a knowledge base page: through the mount's link.
-func mountPath(name, kbPath string) string {
-	return vault.KbDir + "/" + name + "/" + strings.TrimPrefix(kbPath, vault.WikiDir+"/")
-}
-
-type TasksArgs struct {
-	VaultArg
-	Status string `json:"status,omitempty" jsonschema:"only tasks with this status"`
-	All    bool   `json:"all,omitempty" jsonschema:"include done and cancelled tasks"`
-}
-
-type TasksOut struct {
+// ProjectBoard is one project's tasks.
+type ProjectBoard struct {
+	Name     string          `json:"name"`
+	Path     string          `json:"path"`
+	Atlas    string          `json:"atlas"`
 	Counts   tasks.Counts    `json:"counts"`
-	Tasks    []tasks.Record  `json:"tasks"`
-	Notes    []string        `json:"notes"`
+	Phases   []PhaseInfo     `json:"phases"`
+	Open     []tasks.Task    `json:"open"`
+	Archived []tasks.Task    `json:"archived"`
 	Problems []tasks.Problem `json:"problems,omitempty"`
+	Notes    []string        `json:"notes"`
 }
 
-func (s *Server) tasks(ctx context.Context, req *mcp.CallToolRequest, a TasksArgs) (*mcp.CallToolResult, TasksOut, error) {
-	v, err := s.resolve(a.Vault)
+// TasksOut is one board per project.
+type TasksOut struct {
+	Projects []ProjectBoard `json:"projects"`
+}
+
+func (s *Server) tasks(ctx context.Context, req *mcp.CallToolRequest, a ProjectArg) (*mcp.CallToolResult, TasksOut, error) {
+	pl, err := s.where()
 	if err != nil {
 		return nil, TasksOut{}, err
 	}
-	if err := requireProject(v, "tasks"); err != nil {
-		return nil, TasksOut{}, err
+	out := TasksOut{Projects: []ProjectBoard{}}
+	var projects []*project.Project
+	switch {
+	case a.Project != "" || pl.InProject():
+		p, _, err := s.projectOf(pl, a.Project)
+		if err != nil {
+			return nil, TasksOut{}, err
+		}
+		projects = append(projects, p)
+	case pl.Index != nil && pl.Entry != nil:
+		for _, e := range pl.Index.ProjectsOf(pl.Entry.ID) {
+			p, err := project.Open(e.Path)
+			if err != nil {
+				continue
+			}
+			projects = append(projects, p)
+		}
 	}
 	now := s.opts.Now()
-	led, err := tasks.Current(v, now)
-	if err != nil {
-		return nil, TasksOut{}, err
-	}
-	out := TasksOut{Counts: led.Counts(now), Tasks: []tasks.Record{}, Notes: tasks.Notes(v), Problems: led.Problems}
-	out.Counts.Notes = len(out.Notes)
-	list := led.Open()
-	if a.All {
-		list = append(list, led.Archived()...)
-	}
-	for _, r := range list {
-		if a.Status == "" || r.Status == a.Status {
-			out.Tasks = append(out.Tasks, r)
+	for _, p := range projects {
+		board, err := tasks.Load(p)
+		if err != nil {
+			return nil, TasksOut{}, err
 		}
-	}
-	if out.Notes == nil {
-		out.Notes = []string{}
+		pb := ProjectBoard{Name: p.Name(), Path: p.Root, Atlas: p.Atlas(), Counts: board.Counts(now), Phases: []PhaseInfo{}, Open: board.Open(), Archived: board.Archived(), Problems: board.Problems, Notes: tasks.Notes(p)}
+		pb.Counts.Notes = len(pb.Notes)
+		for _, ph := range board.Phases {
+			pb.Phases = append(pb.Phases, PhaseInfo{Title: ph.Title, Order: ph.Order, Finished: board.Finished(ph.Title), Open: len(board.In(ph.Title)), Path: ph.Path})
+		}
+		if pb.Open == nil {
+			pb.Open = []tasks.Task{}
+		}
+		if pb.Archived == nil {
+			pb.Archived = []tasks.Task{}
+		}
+		if pb.Notes == nil {
+			pb.Notes = []string{}
+		}
+		out.Projects = append(out.Projects, pb)
 	}
 	return nil, out, nil
 }
 
-type ReposOut struct {
-	Repos []RepoInfo `json:"repos"`
+type TaskArgs struct {
+	ProjectArg
+	ID       string  `json:"id" jsonschema:"the task's id, or its title"`
+	Status   *string `json:"status,omitempty" jsonschema:"planted, planned, active, blocked, done, or cancelled; done and cancelled move the page to tasks/archive/"`
+	Priority *string `json:"priority,omitempty" jsonschema:"high, normal, low, or someday"`
+	Phase    *string `json:"phase,omitempty" jsonschema:"a phase title; an empty string clears it"`
+	Due      *string `json:"due,omitempty" jsonschema:"YYYY-MM-DD; an empty string clears it"`
 }
 
-func (s *Server) repos(ctx context.Context, req *mcp.CallToolRequest, a VaultArg) (*mcp.CallToolResult, ReposOut, error) {
-	v, err := s.resolve(a.Vault)
+func (s *Server) task(ctx context.Context, req *mcp.CallToolRequest, a TaskArgs) (*mcp.CallToolResult, PlantOut, error) {
+	pl, err := s.where()
 	if err != nil {
-		return nil, ReposOut{}, err
+		return nil, PlantOut{}, err
 	}
-	if err := requireProject(v, "repositories"); err != nil {
-		return nil, ReposOut{}, err
-	}
-	project, err := discover.Project(home.Resolve(s.opts.Env(home.EnvHome)), v.Root)
+	p, _, err := s.projectOf(pl, a.Project)
 	if err != nil {
-		return nil, ReposOut{}, err
+		return nil, PlantOut{}, err
 	}
-	out := ReposOut{Repos: []RepoInfo{}}
-	if project != nil {
-		for _, r := range project.Repos {
-			out.Repos = append(out.Repos, repoInfo(project, r))
+	if a.Status == nil && a.Priority == nil && a.Phase == nil && a.Due == nil {
+		return nil, PlantOut{}, errors.New("give at least one of status, priority, phase, or due")
+	}
+	t, err := tasks.Set(p, strings.TrimSpace(a.ID), tasks.Changes{Status: a.Status, Priority: a.Priority, Phase: a.Phase, Due: a.Due}, s.opts.Now())
+	if err != nil {
+		return nil, PlantOut{}, err
+	}
+	return nil, PlantOut{Task: *t, Project: p.Name(), File: p.Path(t.Path)}, nil
+}
+
+type PhaseArgs struct {
+	ProjectArg
+	Action   string `json:"action" jsonschema:"create, rename, reorder, or remove"`
+	Title    string `json:"title" jsonschema:"the phase's title; on rename, the current one"`
+	Goal     string `json:"goal,omitempty" jsonschema:"create: what the phase delivers, in the user's words"`
+	Order    *int   `json:"order,omitempty" jsonschema:"create, reorder: its place in the timeline; create takes the next one when omitted"`
+	NewTitle string `json:"new_title,omitempty" jsonschema:"rename: the new title; every task that names the phase follows"`
+}
+
+// PhaseOut is the phase after the change, or what remove dropped.
+type PhaseOut struct {
+	Project string       `json:"project"`
+	Phase   *tasks.Phase `json:"phase,omitempty"`
+	File    string       `json:"file,omitempty"`
+	Removed string       `json:"removed,omitempty"`
+}
+
+func (s *Server) phase(ctx context.Context, req *mcp.CallToolRequest, a PhaseArgs) (*mcp.CallToolResult, PhaseOut, error) {
+	pl, err := s.where()
+	if err != nil {
+		return nil, PhaseOut{}, err
+	}
+	p, _, err := s.projectOf(pl, a.Project)
+	if err != nil {
+		return nil, PhaseOut{}, err
+	}
+	now := s.opts.Now()
+	var ph *tasks.Phase
+	switch a.Action {
+	case "create":
+		ph, err = tasks.CreatePhase(p, a.Title, a.Goal, a.Order, now)
+	case "rename":
+		ph, err = tasks.RenamePhase(p, a.Title, a.NewTitle, now)
+	case "reorder":
+		if a.Order == nil {
+			return nil, PhaseOut{}, errors.New("reorder needs order")
 		}
+		ph, err = tasks.ReorderPhase(p, a.Title, *a.Order, now)
+	case "remove":
+		if err := tasks.RemovePhase(p, a.Title, now); err != nil {
+			return nil, PhaseOut{}, err
+		}
+		return nil, PhaseOut{Project: p.Name(), Removed: a.Title}, nil
+	default:
+		return nil, PhaseOut{}, fmt.Errorf("action must be create, rename, reorder, or remove, not %q", a.Action)
 	}
-	return nil, out, nil
+	if err != nil {
+		return nil, PhaseOut{}, err
+	}
+	return nil, PhaseOut{Project: p.Name(), Phase: ph, File: p.Path(ph.Path)}, nil
 }
 
 func plural(n int) string {
@@ -964,8 +668,7 @@ type PlanSource struct {
 }
 
 type PlanArgs struct {
-	VaultArg
-	Kind    string       `json:"kind" jsonschema:"ingest, save, markdown, repair, fold, canvas, base, or config"`
+	Kind    string       `json:"kind" jsonschema:"ingest, save, markdown, repair, fold, canvas, or base"`
 	Summary string       `json:"summary" jsonschema:"one line saying what the operation does; it becomes the log entry and commit subject"`
 	Writes  []PlanWrite  `json:"writes,omitempty"`
 	Sources []PlanSource `json:"sources,omitempty" jsonschema:"ledger updates for sources this operation ingests"`
@@ -983,11 +686,10 @@ type PlanOut struct {
 }
 
 func (s *Server) plan(ctx context.Context, req *mcp.CallToolRequest, a PlanArgs) (*mcp.CallToolResult, PlanOut, error) {
-	sess, err := s.open(a.Vault)
+	pl, v, err := s.knowledge()
 	if err != nil {
 		return nil, PlanOut{}, err
 	}
-	v := sess.target
 	kind := txn.Kind(a.Kind)
 	allowedKind := false
 	for _, k := range txn.ModelKinds {
@@ -996,15 +698,16 @@ func (s *Server) plan(ctx context.Context, req *mcp.CallToolRequest, a PlanArgs)
 		}
 	}
 	if !allowedKind {
-		return nil, PlanOut{}, fmt.Errorf("kind must be one of ingest, save, markdown, repair, fold, canvas, base, config")
+		return nil, PlanOut{}, fmt.Errorf("kind must be one of ingest, save, markdown, repair, fold, canvas, base")
 	}
 	if kind == txn.Config {
 		return nil, PlanOut{}, errors.New("to change the mode, call the mode tool with set")
 	}
-	if err := sess.writable(kind); err != nil {
-		return nil, PlanOut{}, err
+	summary := a.Summary
+	if pl.InProject() && summary != "" {
+		summary += " (via " + pl.Project.Name() + ")"
 	}
-	r := txn.Request{Kind: kind, Summary: a.Summary, Mounts: sess.mounts()}
+	r := txn.Request{Kind: kind, Summary: summary}
 	for _, w := range a.Writes {
 		r.Writes = append(r.Writes, txn.Write{Path: w.Path, Mode: txn.WriteMode(w.Mode), Content: []byte(w.Content), BaseSHA256: w.BaseSHA256})
 	}
@@ -1050,7 +753,7 @@ func (s *Server) apply(ctx context.Context, req *mcp.CallToolRequest, a ApplyArg
 	}
 	s.mu.Unlock()
 	if !ok {
-		return nil, txn.Result{}, fmt.Errorf("no plan %q is pending; plans are single-use and the newest plan for a vault replaces older ones, so call plan again", a.PlanID)
+		return nil, txn.Result{}, fmt.Errorf("no plan %q is pending; plans are single-use and the newest plan for a knowledge base replaces older ones, so call plan again", a.PlanID)
 	}
 	v, err := vault.Open(plan.Vault)
 	if err != nil {
@@ -1064,20 +767,15 @@ func (s *Server) apply(ctx context.Context, req *mcp.CallToolRequest, a ApplyArg
 }
 
 type UndoArgs struct {
-	VaultArg
 	OperationID string `json:"operation_id" jsonschema:"the operation to revert, from history"`
 }
 
 func (s *Server) undo(ctx context.Context, req *mcp.CallToolRequest, a UndoArgs) (*mcp.CallToolResult, txn.Result, error) {
-	sess, err := s.open(a.Vault)
+	_, v, err := s.knowledge()
 	if err != nil {
 		return nil, txn.Result{}, err
 	}
-	// A revert is a commit, so it needs the same access as the operation it undoes.
-	if err := sess.writable(txn.Undo); err != nil {
-		return nil, txn.Result{}, err
-	}
-	res, err := txn.UndoOperation(sess.target, a.OperationID, s.opts.Now())
+	res, err := txn.UndoOperation(v, a.OperationID, s.opts.Now())
 	if err != nil {
 		return nil, txn.Result{}, err
 	}
@@ -1085,16 +783,16 @@ func (s *Server) undo(ctx context.Context, req *mcp.CallToolRequest, a UndoArgs)
 }
 
 type HistoryArgs struct {
-	VaultArg
 	Limit int `json:"limit,omitempty" jsonschema:"how many operations, newest first (default 10)"`
 }
 
 type HistoryOut struct {
+	Vault      string          `json:"vault"`
 	Operations []txn.Operation `json:"operations"`
 }
 
 func (s *Server) history(ctx context.Context, req *mcp.CallToolRequest, a HistoryArgs) (*mcp.CallToolResult, HistoryOut, error) {
-	v, err := s.resolve(a.Vault)
+	_, v, err := s.knowledge()
 	if err != nil {
 		return nil, HistoryOut{}, err
 	}
@@ -1109,20 +807,19 @@ func (s *Server) history(ctx context.Context, req *mcp.CallToolRequest, a Histor
 	if ops == nil {
 		ops = []txn.Operation{}
 	}
-	return nil, HistoryOut{Operations: ops}, nil
+	return nil, HistoryOut{Vault: v.Root, Operations: ops}, nil
 }
 
 type LintArgs struct {
-	VaultArg
 	Exclude []string `json:"exclude,omitempty" jsonschema:"path globs to leave out, e.g. wiki/scratch/*"`
 }
 
 func (s *Server) lint(ctx context.Context, req *mcp.CallToolRequest, a LintArgs) (*mcp.CallToolResult, lint.Report, error) {
-	sess, err := s.open(a.Vault)
+	_, v, err := s.knowledge()
 	if err != nil {
 		return nil, lint.Report{}, err
 	}
-	report, err := lint.Run(sess.target.Root, lint.Options{Exclude: a.Exclude, AsOf: s.opts.Now(), Mounts: sess.mounts()})
+	report, err := lint.Run(v.Root, lint.Options{Exclude: a.Exclude, AsOf: s.opts.Now()})
 	if err != nil {
 		return nil, lint.Report{}, err
 	}
@@ -1130,7 +827,6 @@ func (s *Server) lint(ctx context.Context, req *mcp.CallToolRequest, a LintArgs)
 }
 
 type ModeArgs struct {
-	VaultArg
 	Set string `json:"set,omitempty" jsonschema:"generic or lyt; omit to read the current mode"`
 }
 
@@ -1142,12 +838,11 @@ type ModeOut struct {
 }
 
 func (s *Server) mode(ctx context.Context, req *mcp.CallToolRequest, a ModeArgs) (*mcp.CallToolResult, ModeOut, error) {
-	sess, err := s.open(a.Vault)
+	_, v, err := s.knowledge()
 	if err != nil {
 		return nil, ModeOut{}, err
 	}
-	v := sess.target
-	out := ModeOut{Mode: string(v.Config.Mode), Types: vault.RoutableTypes(v.Config.Kind, v.Config.Mode)}
+	out := ModeOut{Mode: string(v.Config.Mode), Types: vault.RoutableTypes(v.Config.Mode)}
 	if a.Set == "" {
 		return nil, out, nil
 	}
@@ -1158,10 +853,6 @@ func (s *Server) mode(ctx context.Context, req *mcp.CallToolRequest, a ModeArgs)
 	if mode == v.Config.Mode {
 		return nil, out, nil
 	}
-	// A mode change rewrites the identity file, so it is a write like any other.
-	if err := sess.writable(txn.Config); err != nil {
-		return nil, ModeOut{}, err
-	}
 	plan, err := txn.Prepare(v, txn.ConfigRequest(v, mode), s.opts.Now())
 	if err != nil {
 		return nil, ModeOut{}, err
@@ -1170,7 +861,7 @@ func (s *Server) mode(ctx context.Context, req *mcp.CallToolRequest, a ModeArgs)
 	po := s.planOut(plan)
 	out.Previous = string(v.Config.Mode)
 	out.Mode = string(mode)
-	out.Types = vault.RoutableTypes(v.Config.Kind, mode)
+	out.Types = vault.RoutableTypes(mode)
 	out.Plan = &po
 	return nil, out, nil
 }
@@ -1183,49 +874,45 @@ func ro() *mcp.ToolAnnotations {
 func (s *Server) MCP() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: Name, Title: "claude-atlas", Version: s.opts.Version}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "status", Annotations: ro(),
-		Description: "Describe the current vault: kind (knowledge base or project), path, mode, page count, files waiting in the inbox, git state, last operation, and warnings. Call this first."}, s.status)
+		Description: "Describe where the session is. In a project: its knowledge base, the page that describes it, its task counts and phases, and warnings. In a knowledge base: mode, scope, page count, inbox, the projects that use it, git state, and warnings. Call this first."}, s.status)
 	mcp.AddTool(server, &mcp.Tool{Name: "inbox", Annotations: ro(),
-		Description: "List files waiting in inbox/ with size, kind, hash, and whether each already has a captured copy and source id."}, s.inbox)
+		Description: "List the files waiting in the knowledge base's inbox/ with size, kind, hash, and whether each already has a captured copy; in a project, the task notes waiting in atlas/inbox/ too."}, s.inbox)
 	mcp.AddTool(server, &mcp.Tool{Name: "capture",
-		Description: "Copy files from the project's inbox into the immutable raw store and record them in the source ledger, as one commit. Set vault to a mounted knowledge base to capture into it; the record then names the project the source came through. Returns each file's source id and stored path. Read the stored file afterwards with Read."}, s.capture)
+		Description: "Copy files from the knowledge base's inbox into the immutable raw store and record them in the source ledger, as one commit. From a project the record names the project the source came through. Returns each file's source id and stored path; read the stored file afterwards with Read."}, s.capture)
 	mcp.AddTool(server, &mcp.Tool{Name: "route", Annotations: ro(),
-		Description: "Say where a new page of a type belongs under the vault's mode, whether a page with that title or alias already exists in the vault or, for a project, in any of its mounts, and give a skeleton with the vault's frontmatter conventions."}, s.route)
+		Description: "Say where a new page of a type belongs under the knowledge base's mode, whether a page with that title or alias already exists, and give a skeleton with the frontmatter conventions."}, s.route)
 	mcp.AddTool(server, &mcp.Tool{Name: "plan", Annotations: ro(),
-		Description: "Validate a set of file changes against the vault and hold them as a plan. Returns a plan_id, a preview of creates, replaces, and deletes, and warnings such as links that do not resolve. Nothing is written. Show the preview to the user before apply."}, s.plan)
+		Description: "Validate a set of file changes against the knowledge base and hold them as a plan. Returns a plan_id, a preview of creates, replaces, and deletes, and warnings such as links that do not resolve. Nothing is written. Show the preview to the user before apply."}, s.plan)
 	mcp.AddTool(server, &mcp.Tool{Name: "apply",
 		Description: "Apply a held plan as one git commit and write its log entry. Edits made by hand are committed first, so the operation can always be undone exactly. The plan is consumed."}, s.apply)
 	mcp.AddTool(server, &mcp.Tool{Name: "undo",
-		Description: "Revert one applied operation as a new commit. Fails if later changes overlap it."}, s.undo)
+		Description: "Revert one applied operation in the knowledge base as a new commit. Fails if later changes overlap it."}, s.undo)
 	mcp.AddTool(server, &mcp.Tool{Name: "history", Annotations: ro(),
-		Description: "List recent operations, newest first, with their kind, summary, date, commit, and changed paths."}, s.history)
+		Description: "List the knowledge base's recent operations, newest first, with their kind, summary, date, commit, and changed paths."}, s.history)
 	mcp.AddTool(server, &mcp.Tool{Name: "lint", Annotations: ro(),
-		Description: "Run the deterministic wiki health check: dead and ambiguous links, duplicate basenames, orphans, pages missing from every index, missing frontmatter, empty sections, stale index entries, and ledger problems. Read-only."}, s.lint)
-	mcp.AddTool(server, &mcp.Tool{Name: "plant",
-		Description: "Plant a task: create a task page from a title and the idea's text, as one commit; planted, or planned when plan is given, or active when start is set too. Give from to remove the inbox/tasks/ note it came from. No plan preview is needed; undo covers it."}, s.plant)
+		Description: "Run the deterministic wiki health check on the knowledge base: dead and ambiguous links, duplicate basenames, orphans, pages missing from every index, missing frontmatter, empty sections, stale index entries, and ledger problems. Read-only."}, s.lint)
 	mcp.AddTool(server, &mcp.Tool{Name: "stub",
-		Description: "Create seed pages for the pages the wiki links to but nobody has written (lint's wanted pages). The empty pages a link points to get frontmatter too. It is one commit, with no plan preview, and undo reverts it. Omit titles to stub every one of them with the mode's default type; one the vault cannot file is skipped and reported, while a title you name is refused and says why. Pass a title with a type when the name is a person, product, project, or organization (entity). In a project, give a title a target to file its stub in that mount's knowledge base; the mounts tool names them."}, s.stub)
+		Description: "Create seed pages in the knowledge base for the pages the wiki links to but nobody has written (lint's wanted pages). One commit, no plan preview; undo reverts it. Omit titles to stub every one of them with the mode's default type. Pass a title with a type when the name is a person, product, project, or organization (entity)."}, s.stub)
+	mcp.AddTool(server, &mcp.Tool{Name: "plant",
+		Description: "Plant a task in a project: write its page from a title and the idea's text; planted, or planned when plan is given, or active when start is set too. Give from to remove the atlas/inbox/ note it came from. In a knowledge base session, name the project."}, s.plant)
 	mcp.AddTool(server, &mcp.Tool{Name: "tasks", Annotations: ro(),
-		Description: "List the vault's tasks from the task ledger: open ones by status, priority, and age, with each task's page, workdir, last touch, and history; counts; and the notes waiting in inbox/tasks/. Pass all to include finished tasks."}, s.tasks)
-	mcp.AddTool(server, &mcp.Tool{Name: "repos", Annotations: ro(),
-		Description: "List the repositories mounted on the vault's project: path, remote, branch, uncommitted changes, how changes land there (pr: branch and pull request; commit: on the current branch), the page that describes it with the commit it was written from and how far the branch has moved since, and its CLAUDE.md. Read it before changing files in a repository, and read that CLAUDE.md first."}, s.repos)
-	mcp.AddTool(server, &mcp.Tool{Name: "mounts", Annotations: ro(),
-		Description: "List the knowledge bases the project mounts: id, name, the knowledge base's real wiki path, the mount folder, the requested and effective access, what the knowledge base is for, and its page count. Grep the real path; plan a page under a write mount like the project's own. A mount that names through came from a cluster: the project mounted that cluster, and every member is reached the same way. Read-only."}, s.mounts)
+		Description: "List a project's tasks from its pages: counts, the phases in order, the open tasks by status, priority, and age, the archive, and the notes waiting in atlas/inbox/. In a knowledge base session with no project, every project that uses it."}, s.tasks)
+	mcp.AddTool(server, &mcp.Tool{Name: "task",
+		Description: "Change a task's status, priority, phase, or due date by its id or title; the page's body stays. Done and cancelled move the page to tasks/archive/. Write Plan, Progress, and Outcome on the page with Edit."}, s.task)
+	mcp.AddTool(server, &mcp.Tool{Name: "phase",
+		Description: "Create, rename, reorder, or remove a phase of a project: a named slice of the timeline that tasks belong to. Rename follows every task that names it; remove refuses while one does."}, s.phase)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",
-		Description: "Read the vault's filing mode (generic or lyt) and the page types it files. Pass set to prepare a plan that changes it; apply that plan to make the change."}, s.mode)
+		Description: "Read the knowledge base's filing mode (generic or lyt) and the page types it files. Pass set to prepare a plan that changes it; apply that plan to make the change."}, s.mode)
 	mcp.AddTool(server, &mcp.Tool{Name: "atlas",
-		Description: "Read the whole atlas: every vault with its kind, path, tags or scope, access, mounts with effective access, repositories and their change policy, members, clusters, who mounts it, and state; the folders the atlas cannot read; and the settings. Pass refresh to also rewrite the registry and adopt repositories waiting under repos/."}, s.atlasTool)
+		Description: "Read the whole atlas: every knowledge base with its scope, path, projects, and state; every project with its path, knowledge base, and open tasks; the folders the atlas cannot read; and the settings. Pass refresh to also rewrite the registry."}, s.atlasTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "vault",
-		Description: "Create or adopt a vault, edit its name, tags, scope, or access, or forget one the atlas lists (the folder stays); action is create, adopt, edit, or forget. A create may mount a knowledge base or gather members. State the change and get a yes before calling."}, s.vaultTool)
-	mcp.AddTool(server, &mcp.Tool{Name: "mount",
-		Description: "Change how a project reaches a knowledge base: mount or unmount it, set what the mount asks for (read or write), grant or revoke a project on a guarded knowledge base; action is mount, unmount, access, grant, or revoke. Returns the mount with its effective access, or the grants. State the change and get a yes before calling."}, s.mountTool)
-	mcp.AddTool(server, &mcp.Tool{Name: "cluster",
-		Description: "Add a knowledge base to a cluster or drop a member; action is add or remove. A cluster is a knowledge base with members, and a project that mounts it reaches every member. State the change and get a yes before calling."}, s.clusterTool)
-	mcp.AddTool(server, &mcp.Tool{Name: "repo",
-		Description: "Change a project's repositories: link a folder (init makes a plain folder one), create one, clone a URL, unlink one (the folder stays), or edit its remote, folder, or change policy (pr or commit); action is link, new, clone, unlink, or edit. State the change and get a yes before calling."}, s.repoTool)
+		Description: "Create or adopt a knowledge base, edit its name or scope, or forget one the atlas lists (the folder stays); action is create, adopt, edit, or forget. State the change and get a yes before calling."}, s.vaultTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "project",
+		Description: "Make a folder a project (init), set or clear the knowledge base it uses (link, unlink), change its name or description (edit), or forget it (the folder and its atlas/ stay). State the change and get a yes before calling."}, s.projectTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "settings",
-		Description: "Set an atlas setting and return them all: new_days (how long a vault counts as new) and repo_changes (the change policy a newly linked repository takes, commit or pr). With no arguments it only reads."}, s.settingsTool)
+		Description: "Set an atlas setting and return them all: new_days, how long a knowledge base or project counts as new. With no arguments it only reads."}, s.settingsTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "stage",
-		Description: "Copy files or folders from outside a project into its inbox, skipping what the project already captured or already holds; omit paths to stage what is new in the folders it staged from before. dry_run plans and copies nothing. Then ingest with the wiki-ingest skill. With repo, write a snapshot of one of the project's repositories into the inbox instead, for the repo-map skill."}, s.stageTool)
+		Description: "Copy files or folders from outside the knowledge base into its inbox, skipping what it already captured or holds; omit paths to stage what is new in the folders it staged from before. Or, with project (or in a project session with no arguments), write a snapshot of that project into the inbox for the describe skill. dry_run plans and copies nothing."}, s.stageTool)
 	return server
 }
 
@@ -1236,7 +923,7 @@ func Run(ctx context.Context, opts Options) error {
 
 // ToolNames lists every tool MCP registers, sorted, for docs and tests.
 func ToolNames() []string {
-	names := []string{"apply", "atlas", "capture", "cluster", "history", "inbox", "lint", "mode", "mount", "mounts", "plan", "plant", "repo", "repos", "route", "settings", "stage", "status", "stub", "tasks", "undo", "vault"}
+	names := []string{"apply", "atlas", "capture", "history", "inbox", "lint", "mode", "phase", "plan", "plant", "project", "route", "settings", "stage", "status", "stub", "task", "tasks", "undo", "vault"}
 	sort.Strings(names)
 	return names
 }

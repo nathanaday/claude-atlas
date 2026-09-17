@@ -11,11 +11,12 @@ import (
 )
 
 const (
-	ConfigSchema   = "claude-atlas.config.v2"
+	ConfigSchema   = "claude-atlas.config.v3"
+	ConfigSchemaV2 = "claude-atlas.config.v2"
 	ConfigSchemaV1 = "claude-atlas.config.v1"
 	EnvHome        = "CLAUDE_ATLAS_HOME"
 	defaultHome    = "~/.claude-atlas"
-	DefaultVaults  = "~/Documents/Vaults"
+	DefaultVaults  = "~/Vaults"
 
 	// DefaultPluginID is the claude-atlas plugin as Claude Code names it.
 	DefaultPluginID = "claude-atlas@nathanaday-claude-atlas"
@@ -23,14 +24,6 @@ const (
 	DefaultPluginSource = "nathanaday/claude-atlas"
 	// DefaultNewDays is how many days after its creation a vault counts as new.
 	DefaultNewDays = 7
-
-	// The change policies a repository may carry. They mirror links.ChangesCommit and
-	// links.ChangesPR; home cannot import that package.
-	changesCommit = "commit"
-	changesPR     = "pr"
-	// DefaultRepoChanges is the policy a newly linked repository takes when the config
-	// names none.
-	DefaultRepoChanges = changesCommit
 )
 
 // HeatConfig tunes how the overview reads a vault's activity. NewDays is the age, in
@@ -64,75 +57,68 @@ type Config struct {
 	ClaudeCode LaunchConfig `json:"claude_code"`
 	// Heat is nil in a config written before the section existed; NewDays reads it.
 	Heat *HeatConfig `json:"heat,omitempty"`
-	// Vaults holds vault roots outside VaultsDir; the registry cannot discover them by scanning.
-	Vaults []string `json:"vaults,omitempty"`
-	// Repos holds repository paths outside their project's folder, keyed by RepoKey.
-	Repos map[string]string `json:"repos,omitempty"`
-	// DefaultRepoChanges is the change policy every newly linked repository takes,
-	// "commit" or "pr". Empty in a config written before the setting existed.
-	DefaultRepoChanges string `json:"default_repo_changes,omitempty"`
+	// Knowledge holds knowledge base roots outside VaultsDir; the scan cannot find them
+	// there.
+	Knowledge []string `json:"knowledge,omitempty"`
+	// Projects holds every project's work folder, the parent of its atlas/ folder. The
+	// atlas never scans for projects: they live where the user's work lives.
+	Projects []string `json:"projects,omitempty"`
 }
 
-// DefaultChanges is the configured change policy for a new repository, or the default.
-func (c *Config) DefaultChanges() string {
-	if c.DefaultRepoChanges == "" {
-		return DefaultRepoChanges
-	}
-	return c.DefaultRepoChanges
-}
-
-// SetDefaultChanges records the policy; it must be "commit" or "pr".
-func (c *Config) SetDefaultChanges(changes string) error {
-	if changes != changesCommit && changes != changesPR {
-		return fmt.Errorf("the change policy is %s or %s, got %q", changesCommit, changesPR, changes)
-	}
-	c.DefaultRepoChanges = changes
-	return nil
-}
-
-// RepoKey is the Repos map key for a repository named name under project projectID.
-func RepoKey(projectID, name string) string { return projectID + "/" + name }
-
-// RepoPath is the recorded path for a project's repository, or "" if none is recorded.
-func (c *Config) RepoPath(projectID, name string) string {
-	return c.Repos[RepoKey(projectID, name)]
-}
-
-// SetRepoPath records path for a project's repository; an empty path deletes the entry.
-func (c *Config) SetRepoPath(projectID, name, path string) {
-	key := RepoKey(projectID, name)
-	if path == "" {
-		delete(c.Repos, key)
-		return
-	}
-	if c.Repos == nil {
-		c.Repos = map[string]string{}
-	}
-	c.Repos[key] = Expand(path)
-}
-
-// AddVault records root as a vault outside VaultsDir; it reports whether root was added.
-func (c *Config) AddVault(root string) bool {
+// AddKnowledge records root as a knowledge base outside VaultsDir; it reports whether
+// root was added.
+func (c *Config) AddKnowledge(root string) bool {
 	root = Expand(root)
-	for _, v := range c.Vaults {
-		if v == root {
-			return false
-		}
+	if contains(c.Knowledge, root) {
+		return false
 	}
-	c.Vaults = append(c.Vaults, root)
+	c.Knowledge = append(c.Knowledge, root)
 	return true
 }
 
-// RemoveVault drops root from Vaults; it reports whether root was present.
-func (c *Config) RemoveVault(root string) bool {
-	root = Expand(root)
-	for i, v := range c.Vaults {
-		if v == root {
-			c.Vaults = append(c.Vaults[:i], c.Vaults[i+1:]...)
+// RemoveKnowledge drops root from Knowledge; it reports whether root was present.
+func (c *Config) RemoveKnowledge(root string) bool {
+	var ok bool
+	c.Knowledge, ok = remove(c.Knowledge, Expand(root))
+	return ok
+}
+
+// AddProject records a project's work folder; it reports whether it was added.
+func (c *Config) AddProject(work string) bool {
+	work = Expand(work)
+	if contains(c.Projects, work) {
+		return false
+	}
+	c.Projects = append(c.Projects, work)
+	return true
+}
+
+// RemoveProject drops a project's work folder; it reports whether it was present.
+func (c *Config) RemoveProject(work string) bool {
+	var ok bool
+	c.Projects, ok = remove(c.Projects, Expand(work))
+	return ok
+}
+
+// HasProject reports whether the config lists work.
+func (c *Config) HasProject(work string) bool { return contains(c.Projects, Expand(work)) }
+
+func contains(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
 			return true
 		}
 	}
 	return false
+}
+
+func remove(list []string, s string) ([]string, bool) {
+	for i, item := range list {
+		if item == s {
+			return append(list[:i], list[i+1:]...), true
+		}
+	}
+	return list, false
 }
 
 // Inside reports whether root is VaultsDir or a descendant of it.
@@ -230,17 +216,27 @@ func (h Home) Load() (*Config, error) {
 	}
 	switch cfg.Schema {
 	case ConfigSchema:
+	case ConfigSchemaV2:
+		// A v2 config listed vaults of both kinds outside the vaults directory; the
+		// knowledge bases among them still resolve, and a v2 project vault reports itself
+		// as one when the scan reads it. Repositories and their policies are gone.
+		var v2 struct {
+			Vaults []string `json:"vaults"`
+		}
+		json.Unmarshal(data, &v2)
+		cfg.Knowledge = append(cfg.Knowledge, v2.Vaults...)
+		cfg.Schema = ConfigSchema
 	case ConfigSchemaV1:
 		cfg.Schema = ConfigSchema
 	default:
 		return nil, fmt.Errorf("%s: unsupported schema %q", h.ConfigPath(), cfg.Schema)
 	}
 	cfg.VaultsDir = Expand(cfg.VaultsDir)
-	for i, v := range cfg.Vaults {
-		cfg.Vaults[i] = Expand(v)
+	for i, v := range cfg.Knowledge {
+		cfg.Knowledge[i] = Expand(v)
 	}
-	for k, v := range cfg.Repos {
-		cfg.Repos[k] = Expand(v)
+	for i, v := range cfg.Projects {
+		cfg.Projects[i] = Expand(v)
 	}
 	// Configs written before these sections existed keep working with the defaults.
 	if cfg.Plugin.ID == "" {
@@ -252,9 +248,6 @@ func (h Home) Load() (*Config, error) {
 	}
 	if cfg.Heat != nil && cfg.Heat.NewDays < 0 {
 		return nil, fmt.Errorf("%s: heat.new_days must be 0 or more", h.ConfigPath())
-	}
-	if c := cfg.DefaultRepoChanges; c != "" && c != changesCommit && c != changesPR {
-		return nil, fmt.Errorf("%s: default_repo_changes is %s or %s, got %q", h.ConfigPath(), changesCommit, changesPR, c)
 	}
 	return &cfg, nil
 }

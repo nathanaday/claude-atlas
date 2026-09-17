@@ -1,96 +1,106 @@
-# Tasks
+# Tasks and phases
 
-A task is a page under `wiki/tasks/`. Its status is the truth; the core keeps
-the ledger and the index. Read this before any task skill changes a page.
+A task is a page under a project's `atlas/tasks/`. Its status is the truth;
+the core renders `atlas/tasks/tasks.md` from the pages. There is no engine on
+the project side: the frontmatter changes through the `plant`, `task`, and
+`phase` tools, and the prose changes with Edit. Read this before any task
+skill changes a page.
 
-Tasks exist only in a project. A knowledge base has no `wiki/tasks/`; the
-`plant`, `tasks`, and `route` tools, and a `task` plan, all refuse it there.
-
-## The page
+## The task page
 
 ```yaml
 ---
 type: task
-title: "Ingest skips the trust dialog"
+title: "Filter vehicle false alarms"
 status: planted          # planted, planned, active, blocked, done, cancelled
 priority: normal         # high, normal, low, someday
-created: 2026-09-13
-updated: 2026-09-13      # bump on every change to the page
-tags:
-  - task
-task_id: task-20260913-3f2a
+phase: "Alarm quality"   # the title of a phase page, or ""
 due: ""                  # optional date
-workdir: ""              # optional: the folder a session opens in, usually a repository
-repos: []                # every repository of the project the task changes, by name
+created: 2026-09-17
+updated: 2026-09-17      # the tools set it on every change
+task_id: task-20260917-3f2a
 ---
 
-# Ingest skips the trust dialog
+# Filter vehicle false alarms
 
 ## Idea
 The note as planted, verbatim. Never rewrite it.
 
 ## Plan
-Written by task-plan.
+Written by task-plan, with Edit.
 
 ## Progress
-- 2026-09-14 · what was done, decided, or found; what is next.
+- 2026-09-18 · what was done, decided, or found; what is next.
 
 ## Outcome
-Written by task-finish.
+Written by task-finish, with Edit.
 ```
 
-Open tasks (planted, planned, active, blocked) sit in `wiki/tasks/`. Finished
-tasks (done, cancelled) sit in `wiki/tasks/archive/`. The core refuses a page
-whose folder disagrees with its status, a status or priority outside the
-lists, a missing or reused `task_id`, or a malformed date. Add sections as
-the task advances; an empty section is a lint finding.
+Open tasks (planted, planned, active, blocked) sit in `tasks/`. Finished
+tasks (done, cancelled) sit in `tasks/archive/`. The `task` tool moves the
+page when the status crosses that line. `tasks` reports a page whose folder
+disagrees with its status, a status or priority outside the lists, a missing
+or reused `task_id`, a malformed date, or a phase with no page; setting the
+status again with `task` repairs the folder.
+
+## The phase page
+
+```yaml
+---
+type: phase
+title: "Alarm quality"
+order: 1
+created: 2026-09-17
+updated: 2026-09-17
+---
+
+# Alarm quality
+
+## Goal
+False alarms from vehicles and sun reflection under 1 per camera-day, without
+losing the true-positive rate measured in the July field test.
+```
+
+A phase holds prose and an order, nothing generated. Which tasks it holds is
+derived from the tasks' `phase` fields and shown in `tasks.md`; a phase never
+lists its tasks. A phase has no status: it is finished when every task in it
+is finished and it holds at least one. A task's `phase` must name a phase
+page that exists.
 
 ## Changing a task
 
-Every change is one plan of kind `task`, previewed and applied like any other
-operation. A `task` plan may write:
-
-| Path | Allowed |
+| Change | How |
 |---|---|
-| `wiki/tasks/*.md`, `wiki/tasks/archive/*.md` | create, replace, delete |
-| `wiki/hot.md` | replace, when active threads should name the task |
-| `inbox/tasks/*` | delete, once planted |
+| Plant | `plant` with `title`, `text`, and optionally `priority`, `phase`, `due`, `from` (an inbox note to remove), `plan`, `start` |
+| Status, priority, phase, due | `task` with `id` and the fields; `id` is the task id or its title |
+| Plan, Progress, Outcome | Edit on the page; then `task` with `id` alone to set `updated` |
+| Finish | `task` with `status: done` or `cancelled`; the page moves to `tasks/archive/` |
+| A phase | `phase` with `action` create, rename, reorder, or remove |
 
-Never `wiki/tasks/tasks.md` or the task ledger: the core rewrites both from
-the pages in the same commit.
+`plant` with `plan` writes the Plan section and the task is `planned`; with
+`start` as well it is `active` with a first Progress line, which is how
+`work` records a change in one call. `start` without `plan` is refused.
 
-To change a status, replace the whole page with the new frontmatter and
-`updated` set to today. To finish, delete the page at its open path and
-create it under `wiki/tasks/archive/` in the same plan; links by title keep
-resolving. To plant, call the `plant` tool; no plan is needed. `plant` with
-`plan` writes the Plan section and the task is `planned`; with `start` as
-well it is `active` with a first Progress line, which is how `work` records
-a change in one commit. `start` without `plan` is refused.
+Never write `atlas/tasks/tasks.md`; the hook refuses it, and the tools
+regenerate it after every change. The user may edit any page by hand in any
+editor.
 
-## Reading tasks
+## From a knowledge base session
 
-`tasks` lists them from the ledger: open ones first in board order (active,
-blocked, planned, planted; then priority; then age), each with its page,
-workdir, last touch, and history. `tasks` with `all` includes the archive.
-`status` reports counts, stale tasks, and notes waiting in `inbox/tasks/`.
-
-## Working in a repository
-
-A task's `repos` names every repository it changes; `workdir` is the one a
-session opens in. Before changing files in a repository, call `repos` (or
-read `status`, which names the repository when the session runs inside one)
-and read the repository's CLAUDE.md by the path it gives. Each repository
-says how changes land:
-
-- `pr`: work on a branch, commit there, and open a pull request; never push
-  to the default branch.
-- `commit`: commit on the current branch.
-
-The policy is the user's choice, kept on the repository's page in the atlas.
-Do not change it from a session; say when it gets in the way.
+`plant`, `tasks`, `task`, and `phase` take `project`, the name of a project
+that uses the knowledge base. `tasks` with no `project` boards every one.
+The page's absolute path in the result is how a session reads it from there.
 
 ## Freshness
 
 A task lives across sessions. The page is the only memory: write progress
 before a session ends, name what is next, and say what blocks. An active task
-with no operation for 14 days is stale; `status`, lint, and the atlas say so.
+whose `updated` is 14 days old is stale; `status`, the hook, and the atlas say
+so.
+
+## The knowledge base
+
+A planted task never reaches the knowledge base. A finished one may:
+`task-finish` offers one operation there, an update to the project's page or
+a concept page, as a plan the user sees. The knowledge base is evidence for
+planning and review; the task pages are the project's own state.

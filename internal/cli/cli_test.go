@@ -3,19 +3,16 @@ package cli
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/console"
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
-	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
 type harness struct {
@@ -32,13 +29,13 @@ func (h *harness) run(args ...string) int {
 	return run(append([]string{"--home", h.home}, args...), strings.NewReader(""), &h.out, &h.err, c)
 }
 
+// setup makes an atlas with one knowledge base, welcome, and runs from a folder that is
+// inside nothing.
 func setup(t *testing.T) (*harness, string) {
 	if !gitx.Available() {
 		t.Skip("git is not installed")
 	}
 	root := t.TempDir()
-	// Commands with no vault argument read the working directory. The checkout may sit
-	// inside a real vault, so every test runs from a directory that is inside none.
 	t.Chdir(root)
 	h := &harness{t: t, home: filepath.Join(root, "home")}
 	vaults := filepath.Join(root, "Vaults")
@@ -49,9 +46,6 @@ func setup(t *testing.T) (*harness, string) {
 	return h, vaults
 }
 
-// project is where a project vault of that name goes by default.
-func project(vaults, name string) string { return filepath.Join(vaults, "projects", name) }
-
 func (h *harness) config(t *testing.T) *home.Config {
 	t.Helper()
 	cfg, err := home.Home{Root: h.home}.Load()
@@ -61,14 +55,42 @@ func (h *harness) config(t *testing.T) *home.Config {
 	return cfg
 }
 
-func TestSetupCreatesHomeAndFirstProject(t *testing.T) {
+// work makes a folder to become a project, as a git repository when asked.
+func work(t *testing.T, name string, git bool) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# "+name+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if git {
+		repo := gitx.Repo{Dir: dir}
+		if err := repo.Init(); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.AddAll(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.Commit("initial"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestSetupCreatesHomeAndFirstKnowledgeBase(t *testing.T) {
 	h, vaults := setup(t)
 	if !strings.Contains(h.out.String(), "Setup complete.") {
 		t.Fatalf("output:\n%s", h.out.String())
 	}
+	welcome := filepath.Join(vaults, "welcome")
 	for _, path := range []string{
-		filepath.Join(project(vaults, "welcome"), ".claude-atlas.json"),
-		filepath.Join(project(vaults, "welcome"), ".git", "HEAD"),
+		filepath.Join(welcome, vault.Marker),
+		filepath.Join(welcome, ".git", "HEAD"),
+		filepath.Join(welcome, "inbox"),
+		filepath.Join(welcome, "ideas"),
 		filepath.Join(h.home, "config.json"),
 		filepath.Join(h.home, "state", "registry.json"),
 	} {
@@ -76,747 +98,418 @@ func TestSetupCreatesHomeAndFirstProject(t *testing.T) {
 			t.Errorf("missing %s", path)
 		}
 	}
-	identity, _ := os.ReadFile(filepath.Join(project(vaults, "welcome"), ".claude-atlas.json"))
-	if !strings.Contains(string(identity), `"kind": "project"`) {
+	identity, _ := os.ReadFile(filepath.Join(welcome, vault.Marker))
+	if !strings.Contains(string(identity), `"kind": "knowledge"`) || !strings.Contains(string(identity), vault.Schema) {
 		t.Fatalf("identity file:\n%s", identity)
 	}
 	cfg, _ := os.ReadFile(filepath.Join(h.home, "config.json"))
-	if !strings.Contains(string(cfg), `"schema": "claude-atlas.config.v2"`) || strings.Contains(string(cfg), "atlas_vault") {
+	if !strings.Contains(string(cfg), `"schema": "claude-atlas.config.v3"`) {
 		t.Fatalf("config.json:\n%s", cfg)
-	}
-	reg, _ := os.ReadFile(registry.File(filepath.Join(h.home, "state")))
-	if !strings.Contains(string(reg), `"name": "welcome"`) {
-		t.Fatalf("registry.json:\n%s", reg)
-	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(h.home), "Atlas")); err == nil {
-		t.Fatal("setup must not create an atlas vault")
 	}
 	if code := h.run("setup", "--no-plugin"); code != 0 || !strings.Contains(h.out.String(), "keep       1 found") {
 		t.Fatalf("rerun exit %d:\n%s", code, h.out.String())
 	}
 }
 
-// setup names a vault it cannot read instead of counting it as one that works.
-func TestSetupNamesAV1Vault(t *testing.T) {
-	h, vaults := setup(t)
-	legacy := project(vaults, "legacy")
-	os.MkdirAll(legacy, 0o755)
-	os.WriteFile(filepath.Join(legacy, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
-	code := h.run("setup", "--no-plugin")
-	out := h.out.String()
-	if code != 0 || !strings.Contains(out, "keep       1 found, 1 need adopting") {
-		t.Fatalf("setup exit %d:\n%s%s", code, out, h.err.String())
+func TestInitLinkUnlinkForget(t *testing.T) {
+	h, _ := setup(t)
+	dir := work(t, "webapp", true)
+	if code := h.run("init", dir, "--description", "The web app.", "--knowledge", "welcome"); code != 0 {
+		t.Fatalf("init exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if !strings.Contains(out, "✗ vault") || !strings.Contains(out, legacy) || !strings.Contains(out, "v1 vault") {
-		t.Fatalf("setup should name the v1 vault:\n%s", out)
+	p, err := project.Open(dir)
+	if err != nil || p.Name() != "webapp" || p.Config.Description != "The web app." || p.Config.Knowledge == nil || p.Config.Knowledge.Name != "welcome" {
+		t.Fatalf("project: %+v %v", p, err)
 	}
-	if !strings.Contains(out, "refreshed        1 vault\n") {
-		t.Fatalf("the count is of the vaults that work:\n%s", out)
+	for _, rel := range []string{project.Marker, project.TasksDir, project.ArchiveDir, project.PhasesDir, project.InboxDir} {
+		if _, err := os.Stat(p.Path(rel)); err != nil {
+			t.Errorf("missing atlas/%s", rel)
+		}
 	}
-}
-
-func TestNewProjectNewKnowledgeAndAdoptAs(t *testing.T) {
-	h, vaults := setup(t)
-	if code := h.run("new-project", "cs566", "--tags", "usc,fall"); code != 0 {
-		t.Fatalf("new-project exit %d\n%s%s", code, h.out.String(), h.err.String())
+	if cfg := h.config(t); len(cfg.Projects) != 1 || cfg.Projects[0] != dir {
+		t.Fatalf("config should list the project: %+v", cfg.Projects)
 	}
-	v, err := vault.Open(project(vaults, "cs566"))
-	if err != nil || v.Config.Kind != vault.Project || strings.Join(v.Config.Tags, ",") != "usc,fall" {
-		t.Fatalf("cs566: %+v %v", v, err)
-	}
-	if code := h.run("new-knowledge", "ai-ml", "--scope", "ML."); code != 0 {
-		t.Fatalf("new-knowledge exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	kb, err := vault.Open(filepath.Join(vaults, "knowledge", "ai-ml"))
-	if err != nil || kb.Config.Kind != vault.Knowledge || kb.Config.Scope != "ML." || kb.Config.Access != vault.AccessOpen {
-		t.Fatalf("ai-ml: %+v %v", kb, err)
-	}
-	if code := h.run("new-knowledge", "x", "--access", "sometimes"); code != 2 {
-		t.Fatalf("bad access exit %d %s", code, h.err.String())
-	}
-	if code := h.run("repos", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "a knowledge base has no repositories; mount it in a project instead") || strings.Contains(h.out.String(), "claude-atlas link") {
-		t.Fatalf("repos on a knowledge base: exit %d\n%s", code, h.out.String())
-	}
-	outside := filepath.Join(t.TempDir(), "scratch")
-	if code := h.run("new-project", outside); code != 0 {
-		t.Fatalf("new-project PATH exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if cfg := h.config(t); len(cfg.Vaults) != 1 || cfg.Vaults[0] != outside {
-		t.Fatalf("a vault outside the vaults directory is registered: %+v", cfg.Vaults)
-	}
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "scratch") {
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "project") || !strings.Contains(h.out.String(), "webapp") {
 		t.Fatalf("list exit %d:\n%s", code, h.out.String())
 	}
-	old := filepath.Join(t.TempDir(), "old")
-	os.MkdirAll(filepath.Join(old, "wiki"), 0o755)
-	os.WriteFile(filepath.Join(old, "wiki", "index.md"), []byte("---\ntitle: I\n---\n# I\n"), 0o644)
-	if code := h.run("adopt", old, "--as", "knowledge"); code != 0 || !strings.Contains(h.out.String(), "as knowledge base") {
-		t.Fatalf("adopt exit %d\n%s%s", code, h.out.String(), h.err.String())
+	if code := h.run("show", "webapp"); code != 0 {
+		t.Fatalf("show exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	adopted, err := vault.Open(old)
-	if err != nil || adopted.Config.Kind != vault.Knowledge {
-		t.Fatalf("adopted %+v %v", adopted, err)
+	for _, want := range []string{"Kind             project", "Description      The web app.", "Knowledge        welcome", registry.NotDescribed, "Git"} {
+		if !strings.Contains(h.out.String(), want) {
+			t.Errorf("show missing %q:\n%s", want, h.out.String())
+		}
 	}
-	if cfg := h.config(t); len(cfg.Vaults) != 2 {
-		t.Fatalf("adopt should register the vault: %+v", cfg.Vaults)
+	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(h.out.String(), "Project          webapp") {
+		t.Fatalf("the knowledge base lists its projects:\n%s", h.out.String())
 	}
-	if code := h.run("adopt", old, "--as", "project"); code != 1 || !strings.Contains(h.err.String(), "does not change") {
-		t.Fatalf("kind is fixed: exit %d %s", code, h.err.String())
+	if code := h.run("edit", "webapp", "--description", "Changed."); code != 0 {
+		t.Fatalf("edit exit %d %s", code, h.err.String())
+	}
+	if p, _ := project.Open(dir); p.Config.Description != "Changed." {
+		t.Fatalf("description not saved: %+v", p.Config)
+	}
+	if code := h.run("edit", "webapp", "--scope", "x"); code != 2 {
+		t.Fatalf("scope on a project is a usage error, got %d", code)
+	}
+	if code := h.run("unlink", "--project", "webapp"); code != 0 || !strings.Contains(h.out.String(), "no longer uses welcome") {
+		t.Fatalf("unlink exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if p, _ := project.Open(dir); p.Config.Knowledge != nil {
+		t.Fatal("unlink should clear the knowledge base")
+	}
+	if code := h.run("unlink", "--project", "webapp"); code != 1 {
+		t.Fatalf("unlink twice exit %d", code)
+	}
+	// From inside the work, the project is implied.
+	t.Chdir(filepath.Join(dir))
+	if code := h.run("link", "welcome"); code != 0 || !strings.Contains(h.out.String(), "webapp uses welcome") {
+		t.Fatalf("link exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("link", "nope"); code != 1 || !strings.Contains(h.err.String(), "no knowledge base named") {
+		t.Fatalf("link to nothing exit %d %s", code, h.err.String())
+	}
+	if code := h.run("remove", "webapp"); code != 1 || !strings.Contains(h.err.String(), "forget") {
+		t.Fatalf("remove on a project exit %d %s", code, h.err.String())
+	}
+	if code := h.run("forget", "webapp"); code != 0 || !strings.Contains(h.out.String(), "forgot") {
+		t.Fatalf("forget exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if cfg := h.config(t); len(cfg.Projects) != 0 {
+		t.Fatalf("forget should drop the project: %+v", cfg.Projects)
+	}
+	if _, err := os.Stat(p.Path(project.Marker)); err != nil {
+		t.Fatal("forget must leave atlas/ on disk")
+	}
+	if code := h.run("forget", "welcome"); code != 1 || !strings.Contains(h.err.String(), "knowledge base") {
+		t.Fatalf("forget on a knowledge base exit %d %s", code, h.err.String())
 	}
 }
 
-func TestListShowEditRemove(t *testing.T) {
+func TestInitRefusals(t *testing.T) {
 	h, vaults := setup(t)
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "project   new     welcome") {
+	dir := work(t, "plain", false)
+	if code := h.run("init", dir, "--no-knowledge"); code != 0 {
+		t.Fatalf("init exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if !strings.Contains(h.out.String(), "none; `claude-atlas link KB` sets one") {
+		t.Fatalf("init should say there is no knowledge base:\n%s", h.out.String())
+	}
+	if code := h.run("init", dir, "--no-knowledge"); code != 1 || !strings.Contains(h.err.String(), "is a project already") {
+		t.Fatalf("init twice exit %d %s", code, h.err.String())
+	}
+	nested := filepath.Join(dir, "sub")
+	os.MkdirAll(nested, 0o755)
+	if code := h.run("init", nested, "--no-knowledge"); code != 1 || !strings.Contains(h.err.String(), "inside the project") {
+		t.Fatalf("init inside a project exit %d %s", code, h.err.String())
+	}
+	inVault := filepath.Join(vaults, "welcome", "wiki")
+	if code := h.run("init", inVault, "--no-knowledge"); code != 1 || !strings.Contains(h.err.String(), "inside the knowledge base") {
+		t.Fatalf("init inside a knowledge base exit %d %s", code, h.err.String())
+	}
+	if code := h.run("init", dir, "--knowledge", "x", "--no-knowledge"); code != 2 {
+		t.Fatalf("both knowledge flags exit %d", code)
+	}
+	if code := h.run("init", filepath.Join(t.TempDir(), "missing"), "--no-knowledge"); code != 1 {
+		t.Fatalf("a missing folder exit %d", code)
+	}
+}
+
+func TestTaskAndPhaseCommands(t *testing.T) {
+	h, _ := setup(t)
+	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "no open tasks in any project") {
+		t.Fatalf("tasks exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--knowledge", "welcome"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
+	}
+	if code := h.run("plant", "webapp", "Fix", "the", "dialog", "--priority", "high"); code != 0 || !strings.Contains(h.out.String(), "planted") || !strings.Contains(h.out.String(), "tasks/Fix the dialog.md") {
+		t.Fatalf("plant exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	page := filepath.Join(dir, project.Dir, "tasks", "Fix the dialog.md")
+	if _, err := os.Stat(page); err != nil {
+		t.Fatal("page missing")
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, project.Dir, "tasks", "tasks.md")); !strings.Contains(string(data), "Fix the dialog") {
+		t.Fatalf("tasks.md should list the task:\n%s", data)
+	}
+	if code := h.run("tasks", "webapp"); code != 0 || !strings.Contains(h.out.String(), "planted   high     Fix the dialog") {
+		t.Fatalf("tasks webapp exit %d:\n%s", code, h.out.String())
+	}
+	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "webapp\n") || !strings.Contains(h.out.String(), "Fix the dialog") {
+		t.Fatalf("all tasks:\n%s", h.out.String())
+	}
+	if code := h.run("plant", "webapp"); code != 2 {
+		t.Fatalf("plant without text exit %d", code)
+	}
+	if code := h.run("plant", "webapp", "x", "--priority", "urgent"); code != 1 {
+		t.Fatalf("bad priority exit %d %s", code, h.err.String())
+	}
+	if code := h.run("plant", "webapp", "x", "--phase", "Nope"); code != 1 || !strings.Contains(h.err.String(), "no phase named") {
+		t.Fatalf("unknown phase exit %d %s", code, h.err.String())
+	}
+	// Phases: create, plant into, list grouped, rename follows, reorder, remove refused
+	// while a task names it.
+	if code := h.run("phase", "webapp", "create", "Alarm quality", "--goal", "Fewer false alarms."); code != 0 || !strings.Contains(h.out.String(), "phase Alarm quality (order 1)") {
+		t.Fatalf("phase create exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("plant", "webapp", "Filter vehicles", "--phase", "alarm quality"); code != 0 {
+		t.Fatalf("plant into a phase exit %d %s", code, h.err.String())
+	}
+	if code := h.run("tasks", "webapp"); code != 0 || !strings.Contains(h.out.String(), "Alarm quality (1)") || !strings.Contains(h.out.String(), "no phase") {
+		t.Fatalf("tasks grouped by phase:\n%s", h.out.String())
+	}
+	if code := h.run("phase", "webapp", "rename", "Alarm quality", "--to", "Alarms"); code != 0 {
+		t.Fatalf("phase rename exit %d %s", code, h.err.String())
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, project.Dir, "tasks", "Filter vehicles.md")); !strings.Contains(string(data), `phase: "Alarms"`) {
+		t.Fatalf("rename should follow into the task:\n%s", data)
+	}
+	if code := h.run("phase", "webapp", "reorder", "Alarms", "--order", "5"); code != 0 || !strings.Contains(h.out.String(), "order 5") {
+		t.Fatalf("phase reorder exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("phase", "webapp", "remove", "Alarms"); code != 1 || !strings.Contains(h.err.String(), "still name") {
+		t.Fatalf("remove a phase in use exit %d %s", code, h.err.String())
+	}
+	if code := h.run("phase", "webapp", "rename", "Alarms"); code != 2 {
+		t.Fatalf("rename without --to exit %d", code)
+	}
+	// task: status to done moves the page to the archive; a title works as the id.
+	if code := h.run("task", "webapp", "Fix the dialog", "--status", "done"); code != 0 || !strings.Contains(h.out.String(), "done") {
+		t.Fatalf("task done exit %d\n%s%s", code, h.err.String(), h.out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, project.Dir, "tasks", "archive", "Fix the dialog.md")); err != nil {
+		t.Fatal("a done task moves to the archive")
+	}
+	if _, err := os.Stat(page); err == nil {
+		t.Fatal("the open page should be gone")
+	}
+	if code := h.run("tasks", "webapp", "--all"); code != 0 || !strings.Contains(h.out.String(), "archive") || !strings.Contains(h.out.String(), "done") {
+		t.Fatalf("tasks --all:\n%s", h.out.String())
+	}
+	if code := h.run("task", "webapp", "Filter vehicles", "--phase", "", "--due", "2026-10-01"); code != 0 {
+		t.Fatalf("task clear phase exit %d %s", code, h.err.String())
+	}
+	if code := h.run("phase", "webapp", "remove", "Alarms"); code != 0 {
+		t.Fatalf("remove an empty phase exit %d %s", code, h.err.String())
+	}
+	if code := h.run("task", "webapp", "Filter vehicles"); code != 2 {
+		t.Fatalf("task with nothing to change exit %d", code)
+	}
+	if code := h.run("task", "webapp", "nope", "--status", "active"); code != 1 {
+		t.Fatalf("unknown task exit %d", code)
+	}
+	// From inside the work, "." and nothing both mean this project.
+	t.Chdir(filepath.Join(dir))
+	if code := h.run("plant", ".", "From inside"); code != 0 {
+		t.Fatalf("plant with . exit %d %s", code, h.err.String())
+	}
+	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "From inside") || strings.Contains(h.out.String(), "webapp\n") {
+		t.Fatalf("tasks inside the work lists this project alone:\n%s", h.out.String())
+	}
+}
+
+func TestDescribeStagesASnapshot(t *testing.T) {
+	h, vaults := setup(t)
+	dir := work(t, "webapp", true)
+	os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# guide\n"), 0o644)
+	if code := h.run("init", dir, "--knowledge", "welcome"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
+	}
+	if code := h.run("describe", "webapp", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "staged") || !strings.Contains(h.out.String(), "/claude-atlas:describe") {
+		t.Fatalf("describe exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	inbox := filepath.Join(vaults, "welcome", "inbox")
+	entries, _ := os.ReadDir(inbox)
+	var found string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "webapp-") {
+			found = e.Name()
+		}
+	}
+	if found == "" {
+		t.Fatalf("no snapshot in %s", inbox)
+	}
+	data, _ := os.ReadFile(filepath.Join(inbox, found))
+	if !strings.Contains(string(data), "type: project-snapshot") || !strings.Contains(string(data), "## CLAUDE.md") || strings.Contains(string(data), "atlas/project.json") {
+		t.Fatalf("snapshot:\n%s", data)
+	}
+	if code := h.run("describe", "webapp", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "unchanged") {
+		t.Fatalf("describe twice exit %d\n%s", code, h.out.String())
+	}
+	plain := work(t, "docs", false)
+	if code := h.run("init", plain, "--no-knowledge"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
+	}
+	if code := h.run("describe", "docs", "--no-claude"); code != 1 || !strings.Contains(h.err.String(), "uses no knowledge base") {
+		t.Fatalf("describe without a knowledge base exit %d %s", code, h.err.String())
+	}
+}
+
+func TestKnowledgeListShowEditRemove(t *testing.T) {
+	h, vaults := setup(t)
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "knowledge new     welcome") {
 		t.Fatalf("list exit %d:\n%s", code, h.out.String())
 	}
 	if code := h.run("show", "welcome"); code != 0 {
 		t.Fatalf("show exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	for _, want := range []string{"Kind", "Id", "Path", "Heat", project(vaults, "welcome")} {
+	for _, want := range []string{"Kind             knowledge base", "Id", "Path", "Heat", "Mode", filepath.Join(vaults, "welcome")} {
 		if !strings.Contains(h.out.String(), want) {
 			t.Errorf("show missing %q:\n%s", want, h.out.String())
 		}
 	}
-	if code := h.run("edit", "welcome", "--tags", "a,b"); code != 0 {
+	if code := h.run("edit", "welcome", "--scope", "Everything."); code != 0 {
 		t.Fatalf("edit exit %d %s", code, h.err.String())
 	}
-	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(h.out.String(), "a, b") {
-		t.Fatalf("tags: exit %d\n%s", code, h.out.String())
+	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(h.out.String(), "Scope            Everything.") {
+		t.Fatalf("scope: exit %d\n%s", code, h.out.String())
 	}
-	if code := h.run("edit", "welcome", "--scope", "x"); code != 1 || !strings.Contains(h.err.String(), "knowledge base") {
-		t.Fatalf("scope on a project: exit %d %s", code, h.err.String())
+	if code := h.run("edit", "welcome", "--description", "x"); code != 2 {
+		t.Fatalf("description on a knowledge base is a usage error, got %d", code)
 	}
 	if code := h.run("remove", "welcome"); code != 1 || !strings.Contains(h.err.String(), "vaults directory") {
 		t.Fatalf("remove inside the vaults directory: exit %d %s", code, h.err.String())
 	}
 	outside := filepath.Join(t.TempDir(), "scratch")
-	if code := h.run("new-project", outside); code != 0 {
-		t.Fatalf("new-project exit %d %s", code, h.err.String())
+	if code := h.run("new-knowledge", outside, "--scope", "Scratch."); code != 0 {
+		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
+	}
+	if cfg := h.config(t); len(cfg.Knowledge) != 1 {
+		t.Fatalf("a knowledge base outside the vaults directory is listed: %+v", cfg.Knowledge)
 	}
 	if code := h.run("remove", "scratch"); code != 0 || !strings.Contains(h.out.String(), "removed") {
 		t.Fatalf("remove exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if cfg := h.config(t); len(cfg.Vaults) != 0 {
-		t.Fatalf("remove should forget the vault: %+v", cfg.Vaults)
+	if cfg := h.config(t); len(cfg.Knowledge) != 0 {
+		t.Fatalf("remove should forget the vault: %+v", cfg.Knowledge)
 	}
-	if code := h.run("list"); code != 0 || strings.Contains(h.out.String(), "scratch") {
-		t.Fatalf("list still shows it:\n%s", h.out.String())
-	}
-	if _, err := os.Stat(filepath.Join(outside, ".claude-atlas.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(outside, vault.Marker)); err != nil {
 		t.Fatal("remove must leave the vault on disk")
 	}
-}
-
-func TestRepoCommands(t *testing.T) {
-	h, vaults := setup(t)
-	welcome := project(vaults, "welcome")
-	docs := filepath.Join(filepath.Dir(vaults), "docs")
-	os.MkdirAll(docs, 0o755)
-	os.WriteFile(filepath.Join(docs, "a.pdf"), []byte("x"), 0o644)
-	if code := h.run("link", "welcome", docs); code != 1 || !strings.Contains(h.err.String(), "not a git repository") {
-		t.Fatalf("plain folder: %d %s", code, h.err.String())
+	if code := h.run("new-knowledge"); code != 2 {
+		t.Fatalf("new-knowledge with no name and no terminal is a usage error, got %d", code)
 	}
-	if code := h.run("link", "welcome", docs, "--init"); code != 0 || !strings.Contains(h.out.String(), "linked") {
-		t.Fatalf("link --init exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if _, err := os.Stat(filepath.Join(docs, ".git")); err != nil {
-		t.Fatal("--init should make the folder a repository")
-	}
-	id := ""
-	if v, err := vault.Open(welcome); err == nil {
-		id = v.Config.ID
-	}
-	if got := h.config(t).RepoPath(id, "docs"); got != docs {
-		t.Fatalf("the config should record a repository outside the project: %q", got)
-	}
-	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "docs") || !strings.Contains(h.out.String(), "changes: commit") || !strings.Contains(h.out.String(), registry.NotDescribed) {
-		t.Fatalf("repos exit %d:\n%s", code, h.out.String())
-	}
-	if code := h.run("link", "welcome", docs); code != 1 || !strings.Contains(h.err.String(), "already") {
-		t.Fatalf("duplicate: %d %s", code, h.err.String())
-	}
-	if code := h.run("new-repo", "welcome", "paper"); code != 0 {
-		t.Fatalf("new-repo exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("ingest", "welcome", "--repo", "paper", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "staged") || !strings.Contains(h.out.String(), "paper-") || !strings.Contains(h.out.String(), "/claude-atlas:repo-map") {
-		t.Fatalf("ingest --repo exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("ingest", "welcome", "--repo", "paper", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "unchanged") {
-		t.Fatalf("ingest --repo again exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("ingest", "welcome", "--repo", "paper", "x"); code != 2 {
-		t.Fatalf("--repo with a path is a usage error: %d", code)
-	}
-	if _, err := os.Stat(filepath.Join(welcome, "repos", "paper", ".git")); err != nil {
-		t.Fatal("paper should be a repository under repos/")
-	}
-	if got := h.config(t).RepoPath(id, "paper"); got != "" {
-		t.Fatalf("a repository under repos/ needs no config entry, got %q", got)
-	}
-	bare := filepath.Join(t.TempDir(), "upstream.git")
-	if err := exec.Command("git", "init", "--bare", bare).Run(); err != nil {
-		t.Fatal(err)
-	}
-	url := "file://" + bare
-	if code := h.run("link", "welcome", url); code != 0 || !strings.Contains(h.out.String(), "cloning") {
-		t.Fatalf("clone exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if _, err := os.Stat(filepath.Join(welcome, "repos", "upstream")); err != nil {
-		t.Fatal("the clone lands under repos/")
-	}
-	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "changes: commit") || !strings.Contains(h.out.String(), url) {
-		t.Fatalf("a clone records its remote and takes the atlas default:\n%s", h.out.String())
-	}
-	if code := h.run("edit-repo", "welcome", "upstream", "--changes", "pr"); code != 0 {
-		t.Fatalf("edit-repo exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "changes: pr") {
-		t.Fatalf("after edit-repo:\n%s", h.out.String())
-	}
-	if code := h.run("edit-repo", "welcome", "upstream", "--changes", "later"); code != 2 {
-		t.Fatalf("bad policy exit %d", code)
-	}
-	// A repository still under repos/ cannot be unlinked; the folder decides membership.
-	if code := h.run("unlink", "welcome", "paper"); code != 1 || !strings.Contains(h.err.String(), "still under repos/") {
-		t.Fatalf("unlink under repos/: exit %d %s", code, h.err.String())
-	}
-	paperMoved := filepath.Join(t.TempDir(), "paper")
-	if err := os.Rename(filepath.Join(welcome, "repos", "paper"), paperMoved); err != nil {
-		t.Fatal(err)
-	}
-	if code := h.run("unlink", "welcome", "paper"); code != 0 {
-		t.Fatalf("unlink exit %d %s", code, h.err.String())
-	}
-	if code := h.run("repos", "welcome"); code != 0 || strings.Contains(h.out.String(), "paper") {
-		t.Fatalf("paper should be gone:\n%s", h.out.String())
-	}
-	if _, err := os.Stat(filepath.Join(paperMoved, ".git")); err != nil {
-		t.Fatal("unlink must leave the folder")
-	}
-	if code := h.run("repos"); code != 0 || !strings.Contains(h.out.String(), "welcome") || !strings.Contains(h.out.String(), "docs") {
-		t.Fatalf("every project's repositories: exit %d\n%s", code, h.out.String())
-	}
-
-	// --changes settles the policy on the spot; nothing is asked.
-	notes := filepath.Join(filepath.Dir(vaults), "notes")
-	os.MkdirAll(notes, 0o755)
-	os.WriteFile(filepath.Join(notes, "a.md"), []byte("x"), 0o644)
-	if code := h.run("link", "welcome", notes, "--init", "--changes", "commit"); code != 0 || strings.Contains(h.out.String(), "How should claude-atlas land") {
-		t.Fatalf("link --changes exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(repoLineFor(h.out.String(), "notes"), "changes: commit") {
-		t.Fatalf("link --changes records the policy:\n%s", h.out.String())
-	}
-
-	// edit-repo --remote records a remote, and "" clears it.
-	remote := "https://example.com/notes.git"
-	if code := h.run("edit-repo", "welcome", "notes", "--remote", remote); code != 0 {
-		t.Fatalf("edit-repo --remote exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(repoLineFor(h.out.String(), "notes"), "remote "+remote) {
-		t.Fatalf("the remote should show:\n%s", h.out.String())
-	}
-	if code := h.run("edit-repo", "welcome", "notes", "--remote", ""); code != 0 {
-		t.Fatalf("clear remote exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("repos", "welcome"); code != 0 || strings.Contains(h.out.String(), remote) {
-		t.Fatalf("the remote should be gone:\n%s", h.out.String())
-	}
-}
-
-// repoLineFor is the line `repos` printed for one repository.
-func repoLineFor(out, name string) string {
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), name+" ") {
-			return line
-		}
-	}
-	return ""
-}
-
-func TestMountGrantAndRevokeCommands(t *testing.T) {
-	h, vaults := setup(t)
-	welcome := project(vaults, "welcome")
-	link := filepath.Join(welcome, "kb", "ai-ml")
-	wiki := filepath.Join(vaults, "knowledge", "ai-ml", "wiki")
-	if code := h.run("new-knowledge", "ai-ml"); code != 0 {
-		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
-	}
-	if code := h.run("mount", "welcome", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "kb/ai-ml") {
-		t.Fatalf("mount exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if got, err := os.Readlink(link); err != nil || got != wiki {
-		t.Fatalf("symlink %q %v, want %q", got, err, wiki)
-	}
-	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "write") {
-		t.Fatalf("an open knowledge base is mounted for writing: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("mount", "welcome", "ai-ml"); code != 1 || !strings.Contains(h.err.String(), "already") {
-		t.Fatalf("a second mount of the same knowledge base: exit %d %s", code, h.err.String())
-	}
-	if code := h.run("mount", "ai-ml", "welcome"); code != 1 || !strings.Contains(h.err.String(), "ai-ml is not a project") {
-		t.Fatalf("a knowledge base mounts nothing: exit %d %s", code, h.err.String())
-	}
-
-	// A guarded knowledge base grants read until it grants more.
-	if code := h.run("edit", "ai-ml", "--access", "guarded"); code != 0 {
-		t.Fatalf("edit --access exit %d %s", code, h.err.String())
-	}
-	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "read") {
-		t.Fatalf("guarded: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("grant", "ai-ml", "welcome", "--write"); code != 0 || !strings.Contains(h.out.String(), "granted") {
-		t.Fatalf("grant exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "write") {
-		t.Fatalf("after the grant: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("revoke", "ai-ml", "welcome"); code != 0 || !strings.Contains(h.out.String(), "welcome on ai-ml") {
-		t.Fatalf("revoke by project name should name the project: exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "ai-ml"), "read") {
-		t.Fatalf("after the revoke: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("grant", "ai-ml", "welcome", "--sometimes"); code != 2 {
-		t.Fatalf("an unknown access flag: exit %d", code)
-	}
-	if code := h.run("grant", "ai-ml", "welcome"); code != 2 {
-		t.Fatalf("grant asks for one of --read and --write: exit %d", code)
-	}
-
-	// The symlink is local state: doctor names one that is gone, refresh makes it again.
-	if err := os.Remove(link); err != nil {
-		t.Fatal(err)
-	}
-	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "kb/ai-ml") || !strings.Contains(h.out.String(), "refresh") {
-		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
-	}
-	if _, err := os.Lstat(link); err == nil {
-		t.Fatal("doctor must not create the symlink")
-	}
-	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "created") || !strings.Contains(h.out.String(), "kb/ai-ml") {
-		t.Fatalf("refresh exit %d:\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if got, err := os.Readlink(link); err != nil || got != wiki {
-		t.Fatalf("refresh should recreate the symlink: %q %v", got, err)
-	}
-	// The exit code here belongs to the whole installation, which this test does not own;
-	// what the repaired mount owes doctor is silence.
-	h.run("doctor")
-	if strings.Contains(h.out.String(), "kb/ai-ml") {
-		t.Fatalf("a mount that works needs no line:\n%s", h.out.String())
-	}
-
-	if code := h.run("unmount", "welcome", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "unmounted") {
-		t.Fatalf("unmount exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if _, err := os.Lstat(link); err == nil {
-		t.Fatal("unmount removes the symlink")
-	}
-	if code := h.run("show", "welcome"); code != 0 || mountLineFor(h.out.String(), "ai-ml") != "" {
-		t.Fatalf("the mount should be gone: exit %d\n%s", code, h.out.String())
-	}
-	if _, err := os.Stat(wiki); err != nil {
-		t.Fatalf("unmount must leave the knowledge base: %v", err)
-	}
-}
-
-func TestDoctorAndRevokeSeeAStaleGrant(t *testing.T) {
-	h, vaults := setup(t)
-	if code := h.run("new-knowledge", "ai-ml"); code != 0 {
-		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
-	}
-	if code := h.run("edit", "ai-ml", "--access", "guarded"); code != 0 {
-		t.Fatalf("edit --access exit %d %s", code, h.err.String())
-	}
-	err := vault.UpdateConfig(filepath.Join(vaults, "knowledge", "ai-ml"), "grant gone-0000", time.Now(), func(c *vault.Config) error {
-		c.Grants = append(c.Grants, vault.Grant{ID: "gone-0000", Name: "gone", Access: vault.AccessWrite})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	h.run("doctor")
-	if !strings.Contains(h.out.String(), "no project with id gone-0000") || !strings.Contains(h.out.String(), "revoke ai-ml gone-0000") {
-		t.Fatalf("doctor should name the stale grant:\n%s", h.out.String())
-	}
-
-	if code := h.run("show", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "gone-0000") || !strings.Contains(h.out.String(), "no project") {
-		t.Fatalf("show should carry the stale grant: exit %d\n%s", code, h.out.String())
-	}
-
-	if code := h.run("revoke", "ai-ml", "gone-0000"); code != 0 || !strings.Contains(h.out.String(), "gone-0000 on ai-ml") {
-		t.Fatalf("revoke by id should name the id: exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-
-	h.run("doctor")
-	if strings.Contains(h.out.String(), "gone-0000") {
-		t.Fatalf("doctor should not still see the revoked grant:\n%s", h.out.String())
-	}
-
-	// A grant whose id belongs to another knowledge base is also stale: `e.entry`
-	// resolves it, but not to a project, so revoke must try the grant id first.
-	if code := h.run("new-knowledge", "robotics"); code != 0 {
-		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
-	}
-	robotics, err := vault.Open(filepath.Join(vaults, "knowledge", "robotics"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = vault.UpdateConfig(filepath.Join(vaults, "knowledge", "ai-ml"), "grant robotics", time.Now(), func(c *vault.Config) error {
-		c.Grants = append(c.Grants, vault.Grant{ID: robotics.Config.ID, Name: "robotics", Access: vault.AccessWrite})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.run("doctor")
-	if !strings.Contains(h.out.String(), "no project with id "+robotics.Config.ID) {
-		t.Fatalf("doctor should name the grant on a knowledge base id:\n%s", h.out.String())
-	}
-	if code := h.run("revoke", "ai-ml", robotics.Config.ID); code != 0 {
-		t.Fatalf("revoke by a knowledge base's id: exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	h.run("doctor")
-	if strings.Contains(h.out.String(), robotics.Config.ID) {
-		t.Fatalf("doctor should not still see the revoked grant:\n%s", h.out.String())
-	}
-
-	if code := h.run("edit", "ai-ml", "--access", "open"); code != 0 {
-		t.Fatalf("edit --access open: exit %d %s", code, h.err.String())
-	}
-	if code := h.run("grant", "ai-ml", "welcome", "--write"); code != 0 {
-		t.Fatalf("grant exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	h.run("doctor")
-	if !strings.Contains(h.out.String(), "is open; the grant applies when it is guarded") {
-		t.Fatalf("doctor should name a grant on an open knowledge base:\n%s", h.out.String())
-	}
-}
-
-func TestClusterCommands(t *testing.T) {
-	h, vaults := setup(t)
-	welcome := project(vaults, "welcome")
-	if code := h.run("new-cluster", "p3"); code != 0 {
-		t.Fatalf("new-cluster exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	p3, err := vault.Open(filepath.Join(vaults, "knowledge", "p3"))
-	if err != nil || p3.Config.Kind != vault.Knowledge || len(p3.Config.Members) != 0 {
-		t.Fatalf("new-cluster makes a knowledge base: %+v %v", p3, err)
-	}
-	if code := h.run("new-knowledge", "software"); code != 0 {
-		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
-	}
-
-	// With no members it is an ordinary knowledge base, and says how to change that.
-	if code := h.run("cluster", "p3"); code != 0 || !strings.Contains(h.out.String(), "p3 holds no members") {
-		t.Fatalf("cluster with no members: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("cluster", "welcome"); code != 1 || !strings.Contains(h.err.String(), "is a project") {
-		t.Fatalf("cluster on a project: exit %d %s", code, h.err.String())
-	}
-	if code := h.run("cluster", "add", "p3", "welcome"); code != 1 || !strings.Contains(h.err.String(), "not a knowledge base") {
-		t.Fatalf("a project as a member: exit %d %s", code, h.err.String())
-	}
-
-	if code := h.run("cluster", "add", "p3", "software"); code != 0 || !strings.Contains(h.out.String(), "added") {
-		t.Fatalf("cluster add exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("cluster", "p3"); code != 0 || !strings.Contains(h.out.String(), "software") {
-		t.Fatalf("cluster lists its members: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "cluster") {
-		t.Fatalf("list should call it a cluster: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("show", "p3"); code != 0 || !strings.Contains(h.out.String(), "Member") || !strings.Contains(h.out.String(), "software") {
-		t.Fatalf("show a cluster: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("show", "software"); code != 0 || !strings.Contains(h.out.String(), "Cluster") || !strings.Contains(h.out.String(), "p3") {
-		t.Fatalf("show a member: exit %d\n%s", code, h.out.String())
-	}
-
-	// Mounting the cluster reaches every member: one symlink each.
-	if code := h.run("mount", "welcome", "p3"); code != 0 {
-		t.Fatalf("mount exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	for _, name := range []string{"p3", "software"} {
-		want := filepath.Join(vaults, "knowledge", name, "wiki")
-		if got, err := os.Readlink(filepath.Join(welcome, "kb", name)); err != nil || got != want {
-			t.Fatalf("kb/%s: %q %v, want %q", name, got, err, want)
-		}
-	}
-	if code := h.run("show", "welcome"); code != 0 || !strings.Contains(mountLineFor(h.out.String(), "software"), "through p3") {
-		t.Fatalf("show should say where the mount comes from: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("unmount", "welcome", "software"); code != 1 || !strings.Contains(h.err.String(), "through cluster p3") {
-		t.Fatalf("unmount a member: exit %d %s", code, h.err.String())
-	}
-
-	// A hand-edited identity file that names a project as a member: doctor says what it
-	// is, and `cluster remove` drops it.
-	welcomeID := ""
-	if v, err := vault.Open(welcome); err == nil {
-		welcomeID = v.Config.ID
-	}
-	err = vault.UpdateConfig(filepath.Join(vaults, "knowledge", "p3"), "member welcome", time.Now(), func(c *vault.Config) error {
-		c.Members = append(c.Members, vault.Member{ID: welcomeID, Name: "welcome"})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "welcome is a project, not a knowledge base") || !strings.Contains(h.out.String(), "cluster remove p3 "+welcomeID) {
-		t.Fatalf("doctor should name the member that is no knowledge base: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("cluster", "remove", "p3", welcomeID); code != 0 {
-		t.Fatalf("cluster remove a project: exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-
-	// A member the scan lost: doctor names it and names the command that drops it.
-	err = vault.UpdateConfig(filepath.Join(vaults, "knowledge", "p3"), "member gone", time.Now(), func(c *vault.Config) error {
-		c.Members = append(c.Members, vault.Member{ID: "gone-0000", Name: "gone"})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "no knowledge base with id gone-0000") || !strings.Contains(h.out.String(), "cluster remove p3 gone-0000") {
-		t.Fatalf("doctor should name the lost member: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("cluster", "remove", "p3", "gone-0000"); code != 0 || !strings.Contains(h.out.String(), "dropped") {
-		t.Fatalf("cluster remove by id: exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	h.run("doctor")
-	if strings.Contains(h.out.String(), "gone-0000") {
-		t.Fatalf("doctor should not still see the dropped member:\n%s", h.out.String())
-	}
-
-	// Dropping the last member makes it an ordinary knowledge base, and the project loses
-	// the symlink the cluster gave it.
-	if code := h.run("cluster", "remove", "p3", "software"); code != 0 || !strings.Contains(h.out.String(), "dropped") {
-		t.Fatalf("cluster remove exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if _, err := os.Lstat(filepath.Join(welcome, "kb", "software")); err == nil {
-		t.Fatal("the member's symlink should be gone")
-	}
-	if _, err := os.Stat(filepath.Join(vaults, "knowledge", "software", "wiki")); err != nil {
-		t.Fatalf("the knowledge base itself is untouched: %v", err)
-	}
-	if code := h.run("cluster", "remove", "p3", "software"); code != 1 || !strings.Contains(h.err.String(), "no member") {
-		t.Fatalf("remove again: exit %d %s", code, h.err.String())
-	}
-	if code := h.run("cluster", "p3"); code != 0 || !strings.Contains(h.out.String(), "p3 holds no members") {
-		t.Fatalf("the last member gone: exit %d\n%s", code, h.out.String())
-	}
-}
-
-// A project may mount a member of a cluster it already mounts: the explicit mount wins.
-func TestMountAMemberOfACluster(t *testing.T) {
-	h, vaults := setup(t)
-	welcome := project(vaults, "welcome")
-	for _, name := range []string{"p3", "software"} {
-		if code := h.run("new-knowledge", name); code != 0 {
-			t.Fatalf("new-knowledge %s exit %d %s", name, code, h.err.String())
-		}
-	}
-	if code := h.run("cluster", "add", "p3", "software"); code != 0 {
-		t.Fatalf("cluster add exit %d %s", code, h.err.String())
-	}
-	if code := h.run("mount", "welcome", "p3"); code != 0 {
-		t.Fatalf("mount the cluster exit %d %s", code, h.err.String())
-	}
-	if code := h.run("mount", "welcome", "software", "--read"); code != 0 {
-		t.Fatalf("mount a member exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	v, err := vault.Open(welcome)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(v.Config.Mounts) != 2 {
-		t.Fatalf("the identity file should hold both mounts: %+v", v.Config.Mounts)
-	}
-	if code := h.run("show", "welcome"); code != 0 || strings.Contains(mountLineFor(h.out.String(), "software"), "through") {
-		t.Fatalf("the project's own mount wins: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("unmount", "welcome", "software"); code != 0 {
-		t.Fatalf("unmount the project's own mount: exit %d %s", code, h.err.String())
-	}
-}
-
-// mountLineFor is the line `show` printed for one mount.
-func mountLineFor(out, name string) string {
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "kb/"+name) {
-			return line
-		}
-	}
-	return ""
 }
 
 func TestRefreshAndDoctorReportProblems(t *testing.T) {
 	h, vaults := setup(t)
-	legacy := project(vaults, "legacy")
+	legacy := filepath.Join(vaults, "legacy")
 	os.MkdirAll(legacy, 0o755)
 	os.WriteFile(filepath.Join(legacy, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
-	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "✗") || !strings.Contains(h.out.String(), "legacy") {
+	old := filepath.Join(vaults, "oldproject")
+	os.MkdirAll(old, 0o755)
+	os.WriteFile(filepath.Join(old, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v2","id":"11111111-1111-4111-8111-111111111111","kind":"project","name":"old"}`), 0o644)
+	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "✗") || !strings.Contains(h.out.String(), "legacy") || !strings.Contains(h.out.String(), "v2 project vault") {
 		t.Fatalf("refresh exit %d:\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "?         v1      legacy") {
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "?         v1      legacy") || !strings.Contains(h.out.String(), "?         v2      oldproject") {
 		t.Fatalf("list exit %d:\n%s", code, h.out.String())
 	}
-	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "v1      legacy") {
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "v1      ?          legacy") {
 		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
 	}
 	os.RemoveAll(legacy)
-	err := vault.UpdateConfig(project(vaults, "welcome"), "test mount", time.Now(), func(c *vault.Config) error {
-		c.Mounts = append(c.Mounts, vault.Mount{ID: "00000000-0000-4000-8000-000000000000", Name: "ghost", Access: vault.AccessRead})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+	os.RemoveAll(old)
+	// A project whose knowledge base is not on this machine.
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--knowledge", "welcome"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
-	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "ghost") || !strings.Contains(h.out.String(), "no knowledge base with id") {
-		t.Fatalf("an unresolved mount: exit %d\n%s", code, h.out.String())
+	p, _ := project.Open(dir)
+	p.Config.Knowledge.ID = "00000000-0000-4000-8000-000000000000"
+	p.Save()
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "webapp · knowledge") || !strings.Contains(h.out.String(), "no knowledge base with id") {
+		t.Fatalf("an unresolved knowledge base: exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("link", "welcome", "--project", "webapp"); code != 0 {
+		t.Fatalf("link repairs it: exit %d %s", code, h.err.String())
+	}
+	if code := h.run("doctor"); code != 0 {
+		t.Fatalf("doctor after the repair: exit %d\n%s", code, h.out.String())
 	}
 }
 
-// A registered vault whose folder is gone is still something the atlas knows: refresh,
-// list, and doctor all name it, and remove forgets it.
-func TestDoctorAndRemoveSeeAMissingRegisteredVault(t *testing.T) {
+// A registered project whose folder is gone is still something the atlas knows:
+// refresh, list, and doctor all name it, and forget drops it.
+func TestDoctorAndForgetSeeAMissingProject(t *testing.T) {
 	h, _ := setup(t)
-	outside := filepath.Join(t.TempDir(), "scratch")
-	if code := h.run("new-project", outside); code != 0 {
-		t.Fatalf("new-project exit %d %s", code, h.err.String())
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--no-knowledge"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
-	if err := os.RemoveAll(outside); err != nil {
+	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}
-	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "✗") || !strings.Contains(h.out.String(), "scratch") {
+	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "✗") || !strings.Contains(h.out.String(), "webapp") {
 		t.Fatalf("refresh exit %d:\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "?         missing scratch") {
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "?         missing webapp") {
 		t.Fatalf("list exit %d:\n%s", code, h.out.String())
 	}
-	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "missing scratch") {
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "missing ?          webapp") {
 		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
 	}
-	if code := h.run("remove", outside); code != 0 || !strings.Contains(h.out.String(), "removed") {
-		t.Fatalf("remove exit %d\n%s%s", code, h.out.String(), h.err.String())
+	if code := h.run("forget", dir); code != 0 || !strings.Contains(h.out.String(), "forgot") {
+		t.Fatalf("forget exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if cfg := h.config(t); len(cfg.Vaults) != 0 {
-		t.Fatalf("remove should forget a vault whose folder is gone: %+v", cfg.Vaults)
-	}
-	if code := h.run("list"); code != 0 || strings.Contains(h.out.String(), "scratch") {
-		t.Fatalf("list still shows it:\n%s", h.out.String())
+	if cfg := h.config(t); len(cfg.Projects) != 0 {
+		t.Fatalf("forget should drop a project whose folder is gone: %+v", cfg.Projects)
 	}
 	if code := h.run("doctor"); code != 0 {
 		t.Fatalf("doctor after the removal: exit %d\n%s", code, h.out.String())
 	}
 }
 
-// A registered folder that exists but is not a vault has no entry to hang on, so doctor
-// and info report the scan's own problem instead of passing over it.
-func TestDoctorAndInfoReportAProblemWithNoEntry(t *testing.T) {
+// A registered work folder that exists but lost its atlas/ is reported as not a project.
+func TestDoctorReportsAWorkFolderThatIsNoLongerAProject(t *testing.T) {
 	h, _ := setup(t)
-	outside := filepath.Join(t.TempDir(), "scratch")
-	if code := h.run("new-project", outside); code != 0 {
-		t.Fatalf("new-project exit %d %s", code, h.err.String())
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--no-knowledge"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
-	os.Remove(filepath.Join(outside, vault.Marker))
-	os.RemoveAll(filepath.Join(outside, "wiki"))
-	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "scratch") {
+	os.RemoveAll(filepath.Join(dir, project.Dir))
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "webapp") || !strings.Contains(h.out.String(), "bad") {
 		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
 	}
-	if code := h.run("info"); code != 0 || !strings.Contains(h.out.String(), "scratch") {
+	if code := h.run("info"); code != 0 || !strings.Contains(h.out.String(), "webapp") {
 		t.Fatalf("info exit %d:\n%s", code, h.out.String())
 	}
 }
 
-func TestOpenVaultResolvesNamesAndPaths(t *testing.T) {
+// The in-vault commands resolve the knowledge base from a name, a path, the folder you
+// are in, or the project you are in.
+func TestOpenVaultArgResolvesNamesPathsAndProjects(t *testing.T) {
 	h, vaults := setup(t)
-	ix, err := registry.Scan(h.config(t))
-	if err != nil {
-		t.Fatal(err)
+	welcome := filepath.Join(vaults, "welcome")
+	e := &env{home: home.Home{Root: h.home}}
+	if v, err := e.openVaultArg("welcome"); err != nil || v.Root != welcome {
+		t.Fatalf("name: %v %v", v, err)
 	}
-	if got, label, err := resolveVault(ix, "welcome"); err != nil || got != project(vaults, "welcome") || label != "welcome" {
-		t.Fatalf("name: %s %s %v", got, label, err)
+	if v, err := e.openVaultArg(welcome); err != nil || v.Root != welcome {
+		t.Fatalf("path: %v %v", v, err)
 	}
-	if got, _, err := resolveVault(ix, vaults); err != nil || got != vaults {
-		t.Fatalf("path: %s %v", got, err)
-	}
-	if _, _, err := resolveVault(ix, "nope"); err == nil {
+	if _, err := e.openVaultArg("nope"); err == nil {
 		t.Fatal("unknown name should fail")
 	}
-}
-
-// The view reaches the backend only through these hooks; this is the wiring the screens
-// get, over a real atlas.
-func TestViewHooksCreateEditAndForget(t *testing.T) {
-	h, dir := setup(t)
-	cfg := h.config(t)
-	e := &env{
-		home:    home.Home{Root: h.home},
-		console: console.NewWith(true, strings.NewReader(""), &h.out, false),
-		stdin:   strings.NewReader(""),
-		stdout:  &h.out,
-		stderr:  &h.err,
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--knowledge", "welcome"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
-	hooks := actions.Bind(home.Home{Root: h.home}, cfg, e.console)
-	path := project(dir, "ghost")
-	got, err := hooks.Create(actions.AddVault{Kind: vault.Project, Name: "ghost", Path: path, Mode: "generic", Tags: []string{"usc"}})
-	if err != nil || got != path {
-		t.Fatalf("create: %q %v", got, err)
+	if v, err := e.openVaultArg("webapp"); err != nil || v.Root != welcome {
+		t.Fatalf("a project name resolves to its knowledge base: %v %v", v, err)
 	}
-	if _, _, err := hooks.Refresh(); err != nil {
-		t.Fatal(err)
+	t.Chdir(dir)
+	if v, err := e.openVaultArg(""); err != nil || v.Root != welcome {
+		t.Fatalf("inside the work: %v %v", v, err)
 	}
-	entries, err := hooks.Load()
-	if err != nil {
-		t.Fatal(err)
+	if code := h.run("lint"); code != 0 {
+		t.Fatalf("lint from inside a project lints its knowledge base: exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	var ghost registry.Entry
-	for _, en := range entries {
-		if en.Path == path {
-			ghost = en
-		}
-	}
-	if ghost.Name != "ghost" || ghost.Rel() != "projects/usc/ghost" || ghost.State == nil {
-		t.Fatalf("the registry should carry the new project with its state: %+v", ghost)
-	}
-	moved, err := hooks.Edit(ghost, vaults.Edit{Name: "Ghost"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if filepath.Base(moved) != "Ghost" {
-		t.Fatalf("the folder should follow the name, got %q", moved)
-	}
-	path = moved
-	v, err := vault.Open(path)
-	if err != nil || v.Config.Name != "Ghost" {
-		t.Fatalf("identity file: %+v %v", v.Config, err)
-	}
-	// A vault inside the vaults directory cannot be forgotten; one outside can.
-	if err := hooks.Unregister(ghost); err == nil || !strings.Contains(err.Error(), "vaults directory") {
-		t.Fatalf("forget inside: %v", err)
-	}
-	outside := filepath.Join(t.TempDir(), "outside")
-	if _, err := hooks.Create(actions.AddVault{Kind: vault.Knowledge, Name: "outside", Path: outside, Mode: "generic", Scope: "Papers."}); err != nil {
-		t.Fatal(err)
-	}
-	if cfg := h.config(t); len(cfg.Vaults) != 1 || cfg.Vaults[0] != outside {
-		t.Fatalf("a vault outside the vaults directory is registered: %+v", cfg.Vaults)
-	}
-	kb, err := vault.Open(outside)
-	if err != nil || kb.Config.Kind != vault.Knowledge || kb.Config.Scope != "Papers." {
-		t.Fatalf("knowledge base: %+v %v", kb.Config, err)
-	}
-	if err := hooks.Unregister(registry.Entry{Path: outside}); err != nil {
-		t.Fatalf("forget outside: %v", err)
-	}
-	if cfg := h.config(t); len(cfg.Vaults) != 0 {
-		t.Fatalf("still registered: %+v", cfg.Vaults)
+	t.Chdir(filepath.Join(welcome, "wiki"))
+	if v, err := e.openVaultArg(""); err != nil || v.Root != welcome {
+		t.Fatalf("inside the vault: %v %v", v, err)
 	}
 }
 
@@ -827,9 +520,6 @@ func TestCommandsNeedSetupFirst(t *testing.T) {
 	}
 	if code := h.run("info"); code != 0 || !strings.Contains(h.out.String(), "not set up") {
 		t.Fatalf("info before setup: %d %s", code, h.out.String())
-	}
-	if code := h.run("new-project"); code != 2 {
-		t.Fatalf("new-project with no name and no terminal should be a usage error, got %d", code)
 	}
 	if code := h.run("new-knowledge"); code != 2 {
 		t.Fatalf("new-knowledge needs a name, got %d", code)
@@ -844,7 +534,7 @@ func TestCommandsNeedSetupFirst(t *testing.T) {
 
 func TestIngestStagesNewFilesAndRemembersTheFolder(t *testing.T) {
 	h, vaults := setup(t)
-	welcome := project(vaults, "welcome")
+	welcome := filepath.Join(vaults, "welcome")
 	src := filepath.Join(filepath.Dir(vaults), "Papers")
 	os.MkdirAll(src, 0o755)
 	os.WriteFile(filepath.Join(src, "a.md"), []byte("aaa"), 0o644)
@@ -863,10 +553,6 @@ func TestIngestStagesNewFilesAndRemembersTheFolder(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(welcome, "inbox", "Papers", "a.md")); string(data) != "aaa" {
 		t.Fatal("file not staged")
 	}
-	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "no repositories") {
-		t.Fatalf("ingesting from a folder does not mount it:\n%s", h.out.String())
-	}
-	// With no path, the remembered folder is the source; nothing is new, but the staged file still waits.
 	if code := h.run("ingest", "welcome", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "nothing new to stage; 1 file already waiting") {
 		t.Fatalf("second ingest exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
@@ -874,51 +560,24 @@ func TestIngestStagesNewFilesAndRemembersTheFolder(t *testing.T) {
 	if code := h.run("ingest", "welcome", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "new        Papers/b.md") || strings.Contains(h.out.String(), "new        Papers/a.md") {
 		t.Fatalf("third ingest exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("new-knowledge", "ai-ml"); code != 0 {
-		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
-	}
-	if code := h.run("ingest", "ai-ml", src); code != 1 || !strings.Contains(h.err.String(), "knowledge enters through a project") {
-		t.Fatalf("a knowledge base takes no sources: exit %d %s", code, h.err.String())
-	}
 }
 
-func TestTaskCommands(t *testing.T) {
+func TestUpgradeRaisesAV2KnowledgeBase(t *testing.T) {
 	h, vaults := setup(t)
-	welcome := project(vaults, "welcome")
-	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "no open tasks in any project") {
-		t.Fatalf("tasks exit %d\n%s%s", code, h.out.String(), h.err.String())
+	welcome := filepath.Join(vaults, "welcome")
+	v, err := vault.Open(welcome)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if code := h.run("plant", "welcome", "Fix", "the", "dialog", "--priority", "high"); code != 0 || !strings.Contains(h.out.String(), "planted") || !strings.Contains(h.out.String(), "wiki/tasks/Fix the dialog.md") {
-		t.Fatalf("plant exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if _, err := os.Stat(filepath.Join(welcome, "wiki", "tasks", "Fix the dialog.md")); err != nil {
-		t.Fatal("page missing")
-	}
-	if code := h.run("tasks", "welcome"); code != 0 || !strings.Contains(h.out.String(), "planted   high     Fix the dialog") {
-		t.Fatalf("tasks welcome exit %d:\n%s", code, h.out.String())
-	}
-	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "welcome\n") || !strings.Contains(h.out.String(), "Fix the dialog") {
-		t.Fatalf("all tasks:\n%s", h.out.String())
-	}
-	if code := h.run("plant", "welcome"); code != 2 {
-		t.Fatalf("plant without text exit %d", code)
-	}
-	if code := h.run("plant", "welcome", "x", "--priority", "urgent"); code != 1 {
-		t.Fatalf("bad priority exit %d %s", code, h.err.String())
-	}
-	// An older vault gains the scratch folder and the snippet through upgrade, and its task
-	// index moves to its current path; an appearance file it already has keeps its settings
-	// and gains the snippet.
+	v2 := `{"schema":"claude-atlas.vault.v2","id":"` + v.Config.ID + `","kind":"knowledge","name":"welcome","mode":"generic","created":"2026-09-01","scope":"Old.","access":"guarded","grants":[{"id":"x","name":"y","access":"write"}]}` + "\n"
+	os.WriteFile(filepath.Join(welcome, vault.Marker), []byte(v2), 0o644)
 	os.RemoveAll(filepath.Join(welcome, "ideas"))
-	os.Rename(filepath.Join(welcome, "wiki", "tasks", "tasks.md"), filepath.Join(welcome, "wiki", "tasks", "index.md"))
-	os.Remove(filepath.Join(welcome, ".obsidian", "snippets", "claude-atlas.css"))
-	os.WriteFile(filepath.Join(welcome, ".obsidian", "appearance.json"), []byte(`{"baseFontSize": 15, "enabledCssSnippets": ["vault-colors"]}`), 0o644)
-	if code := h.run("upgrade", "welcome"); code != 0 || !strings.Contains(h.out.String(), "added .obsidian/appearance.json, .obsidian/snippets/claude-atlas.css, ideas/.gitkeep; moved wiki/tasks/index.md to wiki/tasks/tasks.md") || !strings.Contains(h.out.String(), "reload Obsidian") {
+	if code := h.run("upgrade", "welcome"); code != 0 || !strings.Contains(h.out.String(), "raised to "+vault.Schema) || !strings.Contains(h.out.String(), "ideas/.gitkeep") {
 		t.Fatalf("upgrade exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	appearance, _ := os.ReadFile(filepath.Join(welcome, ".obsidian", "appearance.json"))
-	if !strings.Contains(string(appearance), `"baseFontSize": 15`) || !strings.Contains(string(appearance), `"vault-colors"`) || !strings.Contains(string(appearance), `"claude-atlas"`) {
-		t.Fatalf("appearance should keep its settings and enable the snippet:\n%s", appearance)
+	data, _ := os.ReadFile(filepath.Join(welcome, vault.Marker))
+	if strings.Contains(string(data), "grants") || strings.Contains(string(data), "guarded") || !strings.Contains(string(data), vault.Schema) {
+		t.Fatalf("upgrade should drop access and grants:\n%s", data)
 	}
 	if code := h.run("upgrade", "--all"); code != 0 || !strings.Contains(h.out.String(), "current") {
 		t.Fatalf("upgrade --all exit %d\n%s", code, h.out.String())
@@ -927,33 +586,36 @@ func TestTaskCommands(t *testing.T) {
 
 func TestAV1VaultIsNamedByDoctorAndUpgrade(t *testing.T) {
 	h, vaults := setup(t)
-	welcome := project(vaults, "welcome")
+	welcome := filepath.Join(vaults, "welcome")
 	os.WriteFile(filepath.Join(welcome, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
-	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "v1      welcome") {
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "v1      ?          welcome") {
 		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
 	}
-	if code := h.run("upgrade", "--all"); code != 0 || !strings.Contains(h.out.String(), "v1 vault; adopt it") {
+	if code := h.run("upgrade", "--all"); code != 0 || !strings.Contains(h.out.String(), "v1") {
 		t.Fatalf("upgrade --all exit %d:\n%s%s", code, h.out.String(), h.err.String())
 	}
 	if code := h.run("upgrade", "welcome"); code != 1 || !strings.Contains(h.err.String(), "adopt") {
 		t.Fatalf("one v1 vault still fails: exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
+	if code := h.run("adopt", welcome, "--scope", "Adopted."); code != 0 || !strings.Contains(h.out.String(), "v1 vault as a knowledge base") {
+		t.Fatalf("adopt exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if v, err := vault.Open(welcome); err != nil || v.Config.Scope != "Adopted." {
+		t.Fatalf("adopted: %+v %v", v, err)
+	}
 }
 
-func TestBareCommandOpensTheTreeOrExplains(t *testing.T) {
-	// Piped: the usage, as before.
+func TestBareCommandOpensTheViewOrExplains(t *testing.T) {
 	var out, errOut bytes.Buffer
 	c := console.NewWith(false, strings.NewReader(""), &out, false)
 	if code := run([]string{"--home", filepath.Join(t.TempDir(), "none")}, strings.NewReader(""), &out, &errOut, c); code != 0 || !strings.Contains(out.String(), "Usage:") || strings.Contains(out.String(), "No atlas yet") {
 		t.Fatalf("piped: %d\n%s", code, out.String())
 	}
-	// A terminal with no atlas: the usage and the missing step.
 	out.Reset()
 	c = console.NewWith(false, strings.NewReader(""), &out, true)
-	if code := run([]string{"--home", filepath.Join(t.TempDir(), "none")}, strings.NewReader(""), &out, &errOut, c); code != 0 || !strings.Contains(out.String(), "claude-atlas                       open the view") || !strings.Contains(out.String(), "No atlas yet; run `claude-atlas setup`") {
+	if code := run([]string{"--home", filepath.Join(t.TempDir(), "none")}, strings.NewReader(""), &out, &errOut, c); code != 0 || !strings.Contains(out.String(), "open the view") || !strings.Contains(out.String(), "No atlas yet; run `claude-atlas setup`") {
 		t.Fatalf("no atlas: %d\n%s", code, out.String())
 	}
-	// help still prints the usage whatever the terminal.
 	out.Reset()
 	if code := run([]string{"help"}, strings.NewReader(""), &out, &errOut, c); code != 0 || !strings.Contains(out.String(), "Usage:") {
 		t.Fatalf("help: %d", code)
@@ -962,7 +624,7 @@ func TestBareCommandOpensTheTreeOrExplains(t *testing.T) {
 
 func TestConfigNewDays(t *testing.T) {
 	h, _ := setup(t)
-	if code := h.run("config"); code != 0 || !strings.Contains(h.out.String(), "new-days           7") {
+	if code := h.run("config"); code != 0 || !strings.Contains(h.out.String(), "new-days           7") || strings.Contains(h.out.String(), "repo-changes") {
 		t.Fatalf("config exit %d\n%s", code, h.out.String())
 	}
 	if code := h.run("config", "new-days", "1"); code != 0 || !strings.Contains(h.out.String(), "refreshed") {
@@ -971,7 +633,7 @@ func TestConfigNewDays(t *testing.T) {
 	if cfg := h.config(t); cfg.NewDays() != 1 {
 		t.Fatalf("saved %+v", cfg.Heat)
 	}
-	for _, bad := range [][]string{{"config", "new-days", "-1"}, {"config", "new-days", "soon"}, {"config", "hot-days", "3"}, {"config", "new-days"}} {
+	for _, bad := range [][]string{{"config", "new-days", "-1"}, {"config", "new-days", "soon"}, {"config", "repo-changes", "pr"}, {"config", "new-days"}} {
 		if code := h.run(bad...); code != 2 {
 			t.Fatalf("%v exit %d", bad, code)
 		}
@@ -986,7 +648,7 @@ func TestConfigNewDays(t *testing.T) {
 
 func TestStubCommand(t *testing.T) {
 	h, vaults := setup(t)
-	welcome := project(vaults, "welcome")
+	welcome := filepath.Join(vaults, "welcome")
 	os.MkdirAll(filepath.Join(welcome, "wiki", "concepts"), 0o755)
 	os.WriteFile(filepath.Join(welcome, "wiki", "concepts", "Training.md"), []byte("---\ntitle: Training\ntype: concept\nstatus: developing\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Training\n\nSee [[vanishing gradient problem]] and [[Adam]].\n"), 0o644)
 	index, _ := os.ReadFile(filepath.Join(welcome, "wiki", "index.md"))
@@ -1000,225 +662,44 @@ func TestStubCommand(t *testing.T) {
 	if code := h.run("stub", "welcome"); code != 0 || !strings.Contains(h.out.String(), "wiki/concepts/vanishing gradient problem.md (concept)") || !strings.Contains(h.out.String(), "committed") {
 		t.Fatalf("stub all exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("lint", "welcome", "--strict"); code != 0 || !strings.Contains(h.out.String(), "## Stubs to fill (2)") {
-		t.Fatalf("stubs are not findings: exit %d\n%s", code, h.out.String())
-	}
 	if code := h.run("stub", "welcome"); code != 0 || !strings.Contains(h.out.String(), "nothing to stub") {
 		t.Fatalf("nothing left exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("stub", "welcome", "Nowhere"); code != 1 || !strings.Contains(h.err.String(), "nothing in the wiki links to") {
-		t.Fatalf("unlinked title exit %d\n%s", code, h.err.String())
-	}
-	// Two empty pages of one name: a run with no titles skips that candidate, says why,
-	// and does not also report that there was nothing to stub.
-	os.MkdirAll(filepath.Join(welcome, "wiki", "concepts", "notes"), 0o755)
-	os.MkdirAll(filepath.Join(welcome, "wiki", "concepts", "other"), 0o755)
-	os.WriteFile(filepath.Join(welcome, "wiki", "concepts", "Linker.md"), []byte("---\ntitle: Linker\ntype: concept\nstatus: developing\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags:\n  - concept\n---\n\n# Linker\n\nSee [a](notes/Three.md) and [b](other/Three.md).\n"), 0o644)
-	os.WriteFile(filepath.Join(welcome, "wiki", "concepts", "notes", "Three.md"), nil, 0o644)
-	os.WriteFile(filepath.Join(welcome, "wiki", "concepts", "other", "Three.md"), nil, 0o644)
-	code := h.run("stub", "welcome")
-	out := h.out.String()
-	if code != 0 || !strings.Contains(out, "skipped") || !strings.Contains(out, "two empty pages are named Three") {
-		t.Fatalf("skipped candidate exit %d\n%s%s", code, out, h.err.String())
-	}
-	if strings.Contains(out, "nothing to stub") || strings.Contains(out, "committed") {
-		t.Fatalf("only skips, so no commit and no nothing-to-stub line:\n%s", out)
 	}
 	if code := h.run("stub"); code != 2 {
 		t.Fatalf("usage exit %d", code)
 	}
 }
 
-// TestNewProjectInARepository covers a project that lives inside a code repository: the
-// folder is REPO/atlas, and the repository is the project's first repository.
-func TestNewProjectInARepository(t *testing.T) {
-	h, vaults := setup(t)
-	root := filepath.Dir(vaults)
-	host := filepath.Join(root, "code")
-	if err := os.MkdirAll(host, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(host, "main.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	repo := gitx.Repo{Dir: host}
-	if err := repo.Init(); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.AddAll(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.Commit("initial"); err != nil {
-		t.Fatal(err)
-	}
-
-	if code := h.run("new-project", "Notes", "--in", host, "--tags", "work"); code != 0 {
-		t.Fatalf("new-project --in exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if out := h.out.String(); !strings.Contains(out, "created") || !strings.Contains(out, "registered") {
-		t.Fatalf("new-project --in output:\n%s", out)
-	}
-	if _, err := os.Stat(filepath.Join(host, "atlas", ".claude-atlas.json")); err != nil {
-		t.Fatalf("the project should sit at REPO/atlas: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(host, "atlas", ".git")); err == nil {
-		t.Fatal("the project must not have its own git repository")
-	}
-
-	if code := h.run("show", "Notes"); code != 0 || !strings.Contains(h.out.String(), "code") || !strings.Contains(h.out.String(), "this project lives in it") {
-		t.Fatalf("show exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if !strings.Contains(h.out.String(), "work") {
-		t.Fatalf("the tags reached the identity file:\n%s", h.out.String())
-	}
-	if code := h.run("repos", "Notes"); code != 0 || !strings.Contains(h.out.String(), "code") || !strings.Contains(h.out.String(), "changes: commit") {
-		t.Fatalf("repos exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if !strings.Contains(h.out.String(), "this project lives in it") {
-		t.Fatalf("repos marks the host repository too:\n%s", h.out.String())
-	}
-	if code := h.run("unlink", "Notes", "code"); code != 1 || !strings.Contains(h.err.String(), "lives in") {
-		t.Fatalf("unlink the host exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("edit-repo", "Notes", "code", "--changes", "pr"); code != 0 {
-		t.Fatalf("edit-repo exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("repos", "Notes"); code != 0 || !strings.Contains(h.out.String(), "changes: pr") {
-		t.Fatalf("repos after the edit: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("link", "Notes", host); code != 1 || !strings.Contains(h.err.String(), "lives in") {
-		t.Fatalf("link the host exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-
-	if code := h.run("new-project", "Other", "--in", host); code != 1 || !strings.Contains(h.err.String(), "already exists") {
-		t.Fatalf("a second project in the same repository: exit %d\n%s", code, h.err.String())
-	}
-	if code := h.run("new-project", filepath.Join("sub", "dir"), "--in", host); code != 2 {
-		t.Fatalf("a path-like name with --in: exit %d\n%s", code, h.err.String())
-	}
-	if code := h.run("new-project", "Other", "--in", host, "--name", "Another"); code != 2 || !strings.Contains(h.err.String(), "give the name once") {
-		t.Fatalf("NAME and --name together: exit %d\n%s", code, h.err.String())
-	}
-
-	// A repository with no commits of its own takes a project the same way.
-	fresh := filepath.Join(root, "fresh")
-	if err := os.MkdirAll(fresh, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := (gitx.Repo{Dir: fresh}).Init(); err != nil {
-		t.Fatal(err)
-	}
-	if code := h.run("new-project", "--in", fresh); code != 0 {
-		t.Fatalf("new-project --in a fresh repository: exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("show", "fresh"); code != 0 || !strings.Contains(h.out.String(), "this project lives in it") {
-		t.Fatalf("the project takes the repository's name: exit %d\n%s", code, h.out.String())
-	}
-
-	// With no positional, --name is the project's name.
-	named := filepath.Join(root, "named")
-	if err := os.MkdirAll(named, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := (gitx.Repo{Dir: named}).Init(); err != nil {
-		t.Fatal(err)
-	}
-	if code := h.run("new-project", "--in", named, "--name", "Named Notes"); code != 0 {
-		t.Fatalf("new-project --in --name: exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if code := h.run("show", "Named Notes"); code != 0 {
-		t.Fatalf("show the named project: exit %d\n%s", code, h.err.String())
-	}
-
-	// A folder named atlas that is not already a project keeps its own history; the
-	// refusal names the command that makes one inside a repository.
-	plain := filepath.Join(root, "plain")
-	if err := os.MkdirAll(filepath.Join(plain, "atlas", "wiki"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := (gitx.Repo{Dir: plain}).Init(); err != nil {
-		t.Fatal(err)
-	}
-	if code := h.run("adopt", filepath.Join(plain, "atlas"), "--as", "project"); code != 1 || !strings.Contains(h.err.String(), "--in REPO") {
-		t.Fatalf("adopt a plain folder inside a repository: exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-
-	// A clone of the repository is registered with adopt, which says where it lives.
-	clone := filepath.Join(root, "clone")
-	if err := (gitx.Repo{Dir: clone}).Clone(named); err != nil {
-		t.Fatal(err)
-	}
-	if code := h.run("adopt", filepath.Join(clone, "atlas"), "--as", "project"); code != 0 {
-		t.Fatalf("adopt a clone: exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if out := h.out.String(); !strings.Contains(out, "inside") || !strings.Contains(out, "the repository "+clone) {
-		t.Fatalf("adopt must name the repository:\n%s", out)
-	}
-}
-
-func TestConfigRepoChanges(t *testing.T) {
-	h, _ := setup(t)
-	if code := h.run("config"); code != 0 || !strings.Contains(h.out.String(), "repo-changes       commit") {
-		t.Fatalf("config exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("config", "repo-changes", "pr"); code != 0 {
-		t.Fatalf("set exit %d\n%s%s", code, h.out.String(), h.err.String())
-	}
-	if cfg := h.config(t); cfg.DefaultChanges() != "pr" {
-		t.Fatalf("saved %q", cfg.DefaultChanges())
-	}
-	if code := h.run("config"); code != 0 || !strings.Contains(h.out.String(), "repo-changes       pr") {
-		t.Fatalf("config should show pr:\n%s", h.out.String())
-	}
-	if code := h.run("config", "repo-changes", "merge"); code != 2 {
-		t.Fatalf("only commit and pr are policies, exit %d", code)
-	}
-}
-
-func TestRelocateMovesTheTreeAndEveryDerivedPathFollows(t *testing.T) {
+func TestRelocateMovesTheTreeAndProjectsStay(t *testing.T) {
 	h, oldDir := setup(t)
 	if code := h.run("new-knowledge", "ai-ml"); code != 0 {
 		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
 	}
-	if code := h.run("mount", "welcome", "ai-ml"); code != 0 {
-		t.Fatalf("mount exit %d %s", code, h.err.String())
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--knowledge", "ai-ml"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
 	newDir := filepath.Join(t.TempDir(), "Vaults")
-
 	if code := h.run("relocate", newDir); code != 0 {
 		t.Fatalf("relocate exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	out := h.out.String()
-	if !strings.Contains(out, "2 vaults") || !strings.Contains(out, "vaults dir") {
-		t.Fatalf("the preview names what moves:\n%s", out)
+	if !strings.Contains(h.out.String(), "2 vaults") {
+		t.Fatalf("the preview names what moves:\n%s", h.out.String())
 	}
-
 	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
 		t.Fatalf("the old tree should be gone: %v", err)
 	}
-	if h.config(t).VaultsDir != newDir {
-		t.Fatalf("the config should point at %q, got %q", newDir, h.config(t).VaultsDir)
+	cfg := h.config(t)
+	if cfg.VaultsDir != newDir || len(cfg.Projects) != 1 || cfg.Projects[0] != dir {
+		t.Fatalf("the config should point at %q and keep the project: %+v", newDir, cfg)
 	}
-	// The mount symlink is local state the refresh recreates at the new root.
-	link := filepath.Join(project(newDir, "welcome"), "kb", "ai-ml")
-	wiki := filepath.Join(newDir, "knowledge", "ai-ml", "wiki")
-	if got, err := os.Readlink(link); err != nil || got != wiki {
-		t.Fatalf("symlink %q %v, want %q", got, err, wiki)
-	}
-	// The registry the refresh wrote holds no path under the old root.
-	reg, err := os.ReadFile(registry.File(filepath.Join(h.home, "state")))
-	if err != nil {
-		t.Fatal(err)
-	}
+	reg, _ := os.ReadFile(registry.File(filepath.Join(h.home, "state")))
 	if strings.Contains(string(reg), oldDir) {
 		t.Fatalf("the registry still names the old root:\n%s", reg)
 	}
-	// Both vaults open at the new root with their git history whole.
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), newDir) {
-		t.Fatalf("list exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("lint", "welcome"); code != 0 {
-		t.Fatalf("the moved project should lint clean: exit %d\n%s%s", code, h.out.String(), h.err.String())
+	// The project still reaches its knowledge base: the id travels, the path is derived.
+	if code := h.run("show", "webapp"); code != 0 || !strings.Contains(h.out.String(), filepath.Join(newDir, "ai-ml")) {
+		t.Fatalf("the project's knowledge base follows: exit %d\n%s", code, h.out.String())
 	}
 	if code := h.run("history", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "setup") {
 		t.Fatalf("the moved vault keeps its history: exit %d\n%s", code, h.out.String())
@@ -1228,12 +709,8 @@ func TestRelocateMovesTheTreeAndEveryDerivedPathFollows(t *testing.T) {
 func TestRelocateRefusesABadTargetAndChangesNothing(t *testing.T) {
 	h, oldDir := setup(t)
 	full := filepath.Join(t.TempDir(), "full")
-	if err := os.MkdirAll(full, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(full, "a.txt"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	os.MkdirAll(full, 0o755)
+	os.WriteFile(filepath.Join(full, "a.txt"), []byte("x"), 0o644)
 	for _, tc := range []struct{ name, target, want string }{
 		{"inside", filepath.Join(oldDir, "inner"), "inside the vaults directory"},
 		{"above", filepath.Dir(oldDir), "holds the vaults directory"},
@@ -1245,9 +722,6 @@ func TestRelocateRefusesABadTargetAndChangesNothing(t *testing.T) {
 	}
 	if h.config(t).VaultsDir != oldDir {
 		t.Fatalf("a refused move leaves the config alone, got %q", h.config(t).VaultsDir)
-	}
-	if _, err := os.Stat(project(oldDir, "welcome")); err != nil {
-		t.Fatalf("a refused move leaves the vaults alone: %v", err)
 	}
 	if code := h.run("relocate"); code != 2 {
 		t.Fatalf("relocate with no path is a usage error, got exit %d", code)

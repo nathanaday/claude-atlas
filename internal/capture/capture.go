@@ -6,7 +6,6 @@ package capture
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -97,24 +96,12 @@ func storedPath(sum, name string) string {
 	return vault.CapturedDir + "/" + sum + ext
 }
 
-// holderName is the name of the vault that holds a source: its own, from its identity
-// file, or the mount it was reached through when that file cannot be read.
-func holderName(h *ledger.Holder) string {
-	if cfg, ok := vault.ReadConfig(h.Root); ok && cfg.Name != "" {
-		return cfg.Name
-	}
-	return h.Mount
-}
-
-// ListInbox walks inbox/ and says which files already have a captured copy, here or in one
-// of the mounted knowledge bases (a mount name to that knowledge base's wiki path). A
-// source a knowledge base captured is captured: the project's ingest may remove it.
-func ListInbox(v *vault.Vault, mounts map[string]string, now time.Time) ([]InboxFile, error) {
+// ListInbox walks inbox/ and says which files already have a captured copy.
+func ListInbox(v *vault.Vault, now time.Time) ([]InboxFile, error) {
 	led, err := ledger.Load(v.Path(vault.LedgerPath), now)
 	if err != nil {
 		return nil, err
 	}
-	mounted := ledger.Mounts(mounts, now)
 	root := v.Path(vault.InboxDir)
 	var files []InboxFile
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -139,13 +126,8 @@ func ListInbox(v *vault.Vault, mounts map[string]string, now time.Time) ([]Inbox
 			return err
 		}
 		f := InboxFile{Path: filepath.ToSlash(rel), Size: size, Kind: KindOf(d.Name()), SHA256: sum}
-		if strings.HasPrefix(f.Path, vault.InboxTasksDir+"/") {
-			f.Area = "tasks"
-		}
 		if id, rec := led.FindBySHA(sum); id != "" {
 			f.Captured, f.SourceID, f.StoredPath = true, id, rec.Origin.Locator
-		} else if h := mounted.Find(sum); h != nil {
-			f.Captured, f.SourceID, f.StoredPath, f.CapturedIn = true, h.ID, h.Source.Origin.Locator, holderName(h)
 		}
 		files = append(files, f)
 		return nil
@@ -209,23 +191,11 @@ func resolveInbox(v *vault.Vault, arg string) (string, error) {
 }
 
 // Capture copies the named inbox files into .raw/captured/ and records them in the ledger,
-// as one commit. A file already captured is reported, not copied again.
-func Capture(v *vault.Vault, paths []string, now time.Time) (*Result, error) {
+// as one commit. A file already captured is reported, not copied again. via, when given,
+// names the project the session came through; it is provenance on the record.
+func Capture(v *vault.Vault, paths []string, via *ledger.Via, now time.Time) (*Result, error) {
 	resolve := func(arg string) (string, error) { return resolveInbox(v, arg) }
-	return captureInto(v, v.Path, resolve, nil, paths, now)
-}
-
-// CaptureFrom copies files from source's inbox into target's raw store and records them
-// in target's ledger with via, as one commit in target. source's inbox is untouched.
-func CaptureFrom(target, source *vault.Vault, paths []string, via ledger.Via, now time.Time) (*Result, error) {
-	if target.Config.Kind != vault.Knowledge {
-		return nil, errors.New("capture into a project from its own inbox with capture")
-	}
-	if source.Config.Kind != vault.Project {
-		return nil, errors.New("sources enter through a project's inbox")
-	}
-	resolve := func(arg string) (string, error) { return resolveInbox(source, arg) }
-	return captureInto(target, source.Path, resolve, &via, paths, now)
+	return captureInto(v, v.Path, resolve, via, paths, now)
 }
 
 // captureInto resolves paths through resolve, reads their bytes from srcPath, and copies

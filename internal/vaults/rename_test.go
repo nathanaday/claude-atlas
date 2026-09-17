@@ -12,11 +12,11 @@ import (
 )
 
 func TestRenameMovesTheFolderToTheNewName(t *testing.T) {
-	cfg, h, project, kb := fixtureEntries(t)
+	cfg, h, kb, _ := fixtureEntries(t)
 	for _, tc := range []struct {
 		entry registry.Entry
 		name  string
-	}{{project, "sensor-triage"}, {kb, "robotics"}} {
+	}{{kb, "sensor-triage"}} {
 		path, err := EditIdentity(h, cfg, tc.entry, Edit{Name: tc.name}, identityNow)
 		if err != nil {
 			t.Fatal(err)
@@ -36,25 +36,25 @@ func TestRenameMovesTheFolderToTheNewName(t *testing.T) {
 }
 
 func TestRenameRefusesATakenFolderAndWritesNothing(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
-	taken := filepath.Join(filepath.Dir(project.Path), "taken")
+	cfg, h, kb, _ := fixtureEntries(t)
+	taken := filepath.Join(filepath.Dir(kb.Path), "taken")
 	if err := os.MkdirAll(taken, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := EditIdentity(h, cfg, project, Edit{Name: "taken"}, identityNow); err == nil {
+	if _, err := EditIdentity(h, cfg, kb, Edit{Name: "taken"}, identityNow); err == nil {
 		t.Fatal("a taken folder should refuse the edit")
 	} else if !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("the error should name the folder in the way: %v", err)
 	}
-	v, err := vault.Open(project.Path)
-	if err != nil || v.Config.Name != "cs566" {
+	v, err := vault.Open(kb.Path)
+	if err != nil || v.Config.Name != "ai-ml" {
 		t.Fatalf("the identity file should be untouched: %+v %v", v, err)
 	}
 }
 
 func TestRenameCleansANameThatCannotBeAFolder(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
-	path, err := EditIdentity(h, cfg, project, Edit{Name: "CS 566: Robotics"}, identityNow)
+	cfg, h, kb, _ := fixtureEntries(t)
+	path, err := EditIdentity(h, cfg, kb, Edit{Name: "CS 566: Robotics"}, identityNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestRenameCleansANameThatCannotBeAFolder(t *testing.T) {
 func TestRenameRewritesAConfigEntryForAVaultOutsideTheVaultsDir(t *testing.T) {
 	cfg, h, _, _ := fixtureEntries(t)
 	outside := filepath.Join(t.TempDir(), "side")
-	if _, err := vault.Init(outside, vault.Options{Kind: vault.Project, Name: "side"}, identityNow); err != nil {
+	if _, err := vault.Init(outside, vault.Options{Name: "side"}, identityNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Register(h, cfg, outside); err != nil {
@@ -83,37 +83,22 @@ func TestRenameRewritesAConfigEntryForAVaultOutsideTheVaultsDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Vaults) != 1 || cfg.Vaults[0] != path {
-		t.Fatalf("the config should point at the new folder: %+v", cfg.Vaults)
+	if len(cfg.Knowledge) != 1 || cfg.Knowledge[0] != path {
+		t.Fatalf("the config should point at the new folder: %+v", cfg.Knowledge)
 	}
 	saved, err := h.Load()
-	if err != nil || len(saved.Vaults) != 1 || saved.Vaults[0] != path {
+	if err != nil || len(saved.Knowledge) != 1 || saved.Knowledge[0] != path {
 		t.Fatalf("and it should be saved: %+v %v", saved, err)
 	}
 }
 
-func TestRenameLeavesTheFolderOfAProjectInsideARepository(t *testing.T) {
-	cfg, h, _, project := fixtureInRepo(t, "code")
-	path, err := EditIdentity(h, cfg, project, Edit{Name: "Renamed"}, identityNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if path != project.Path {
-		t.Fatalf("REPO/atlas keeps its folder, got %q", path)
-	}
-	v, err := vault.Open(project.Path)
-	if err != nil || v.Config.Name != "Renamed" {
-		t.Fatalf("the name still changes: %+v %v", v, err)
-	}
-}
-
 func TestRenameToTheFolderItAlreadyHasMovesNothing(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
-	path, err := EditIdentity(h, cfg, project, Edit{Name: "cs566"}, identityNow)
+	cfg, h, kb, _ := fixtureEntries(t)
+	path, err := EditIdentity(h, cfg, kb, Edit{Name: "ai-ml"}, identityNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != project.Path {
+	if path != kb.Path {
 		t.Fatalf("the folder already has that name, got %q", path)
 	}
 }

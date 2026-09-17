@@ -9,8 +9,7 @@ Apply during scaffold. This makes the file explorer color-coded by folder type a
 Every claude-atlas vault carries `.obsidian/snippets/claude-atlas.css`, enabled in
 `.obsidian/appearance.json`, and `claude-atlas upgrade` adds both to older vaults.
 It gives one color to each kind of place: the wiki and each of its folders,
-`inbox/`, `ideas/`, and every mounted repository beside the wiki, so the
-distinction between memory and deliverables shows in the file explorer. It also
+`inbox/`, and `ideas/`, so the kinds of place show in the file explorer. It also
 defines the four custom callouts below. Do not create a second snippet for the
 same folders; to change a color, edit the variables at the top of that file.
 
@@ -27,7 +26,6 @@ Guide the user to set these in Graph View settings (click the settings icon in t
 | `path:wiki/entities` | Purple (`#c586c0`) |
 | `path:wiki/concepts` | Yellow (`#dcdcaa`) |
 | `path:wiki/sources` | Orange (`#ce9178`) |
-| `path:wiki/questions` | Green (`#6a9955`) |
 | `path:.raw` | Gray (dimmed) |
 
 ---

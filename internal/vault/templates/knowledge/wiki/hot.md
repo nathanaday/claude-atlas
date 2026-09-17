@@ -25,4 +25,4 @@ Knowledge base initialized. No knowledge operations have completed yet.
 
 ## Active Threads
 
-- Mount this knowledge base in a project, then ingest a source there.
+- Drop a source in inbox/ and ingest it, or describe a project that uses this knowledge base.

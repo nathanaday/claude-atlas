@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -15,11 +16,11 @@ import (
 // config, and a target beside the vaults directory.
 func relocateFixture(t *testing.T) (*home.Config, home.Home, string) {
 	t.Helper()
-	cfg, h, project, _ := fixtureEntries(t)
+	cfg, h, kb, _ := fixtureEntries(t)
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
-	return cfg, h, filepath.Join(filepath.Dir(filepath.Dir(project.Path)), "..", "Moved")
+	return cfg, h, filepath.Join(filepath.Dir(kb.Path), "..", "Moved")
 }
 
 func TestPlanRelocateCountsTheTreeAndNamesTheRewrite(t *testing.T) {
@@ -84,7 +85,7 @@ func TestPlanRelocateRefusesATargetThatOverlapsTheVaultsDirectory(t *testing.T) 
 func TestPlanRelocateRefusesATargetInsideAVault(t *testing.T) {
 	cfg, h, _ := relocateFixture(t)
 	outside := filepath.Join(t.TempDir(), "side")
-	if _, err := vault.Init(outside, vault.Options{Kind: vault.Project, Name: "side"}, identityNow); err != nil {
+	if _, err := vault.Init(outside, vault.Options{Name: "side"}, identityNow); err != nil {
 		t.Fatal(err)
 	}
 	_, err := PlanRelocate(h, cfg, filepath.Join(outside, "Vaults"))
@@ -94,11 +95,11 @@ func TestPlanRelocateRefusesATargetInsideAVault(t *testing.T) {
 }
 
 func TestPlanRelocateRefusesAVaultWithAnOperationInFlight(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
+	cfg, h, kb, _ := fixtureEntries(t)
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
-	meta := filepath.Join(project.Path, vault.MetaDir)
+	meta := filepath.Join(kb.Path, vault.MetaDir)
 	if err := os.MkdirAll(meta, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -112,13 +113,19 @@ func TestPlanRelocateRefusesAVaultWithAnOperationInFlight(t *testing.T) {
 }
 
 func TestPlanRelocateRewritesTheRecordedPathsUnderTheOldRoot(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
-	// A repository recorded outside its project but still under the vaults directory,
-	// and a vault registered elsewhere, which the move must leave alone.
+	cfg, h, _, _ := fixtureEntries(t)
+	// A project whose work sits under the vaults directory, and a knowledge base
+	// registered elsewhere, which the move must leave alone.
 	inside := filepath.Join(cfg.VaultsDir, "code", "shared")
-	cfg.SetRepoPath(project.ID, "shared", inside)
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := project.Init(inside, project.Options{}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	cfg.AddProject(inside)
 	elsewhere := filepath.Join(t.TempDir(), "side")
-	if _, err := vault.Init(elsewhere, vault.Options{Kind: vault.Project, Name: "side"}, identityNow); err != nil {
+	if _, err := vault.Init(elsewhere, vault.Options{Name: "side"}, identityNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Register(h, cfg, elsewhere); err != nil {
@@ -129,25 +136,26 @@ func TestPlanRelocateRewritesTheRecordedPathsUnderTheOldRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var repo *Rewrite
+	var proj *Rewrite
 	for i := range p.Rewrites {
-		if strings.Contains(p.Rewrites[i].What, "shared") {
-			repo = &p.Rewrites[i]
+		if p.Rewrites[i].What == "project shared" {
+			proj = &p.Rewrites[i]
 		}
 		if p.Rewrites[i].From == elsewhere {
-			t.Fatalf("a vault outside the vaults directory does not move: %+v", p.Rewrites[i])
+			t.Fatalf("a knowledge base outside the vaults directory does not move: %+v", p.Rewrites[i])
 		}
 	}
-	if repo == nil {
-		t.Fatalf("the repository under the old root should be rewritten, got %+v", p.Rewrites)
+	if proj == nil {
+		t.Fatalf("the project under the old root should be rewritten, got %+v", p.Rewrites)
 	}
-	if want := filepath.Join(to, "code", "shared"); repo.To != want {
-		t.Fatalf("repo rewrite %q, want %q", repo.To, want)
+	if want := filepath.Join(to, "code", "shared"); proj.To != want {
+		t.Fatalf("project rewrite %q, want %q", proj.To, want)
 	}
 }
 
 func TestApplyRelocateMovesTheTreeAndRewritesTheConfig(t *testing.T) {
-	cfg, h, project, kb := fixtureEntries(t)
+	cfg, h, kb, _ := fixtureEntries(t)
+	other := filepath.Join(cfg.VaultsDir, "robotics")
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +171,7 @@ func TestApplyRelocateMovesTheTreeAndRewritesTheConfig(t *testing.T) {
 	if _, err := os.Stat(from); !os.IsNotExist(err) {
 		t.Fatalf("the old root should be gone: %v", err)
 	}
-	for _, e := range []string{project.Path, kb.Path} {
+	for _, e := range []string{other, kb.Path} {
 		rel, _ := filepath.Rel(from, e)
 		moved := filepath.Join(to, rel)
 		v, err := vault.Open(moved)
@@ -187,14 +195,17 @@ func TestApplyRelocateMovesTheTreeAndRewritesTheConfig(t *testing.T) {
 }
 
 func TestApplyRelocateSwapsThePrefixOfEveryRecordedPath(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
+	cfg, h, _, proj := fixtureEntries(t)
 	inside := filepath.Join(cfg.VaultsDir, "code", "shared")
 	if err := os.MkdirAll(inside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg.SetRepoPath(project.ID, "shared", inside)
+	if _, _, err := project.Init(inside, project.Options{}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	cfg.AddProject(inside)
 	elsewhere := filepath.Join(t.TempDir(), "side")
-	if _, err := vault.Init(elsewhere, vault.Options{Kind: vault.Project, Name: "side"}, identityNow); err != nil {
+	if _, err := vault.Init(elsewhere, vault.Options{Name: "side"}, identityNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Register(h, cfg, elsewhere); err != nil {
@@ -212,16 +223,21 @@ func TestApplyRelocateSwapsThePrefixOfEveryRecordedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(to, "code", "shared"); saved.RepoPath(project.ID, "shared") != want {
-		t.Fatalf("repo path %q, want %q", saved.RepoPath(project.ID, "shared"), want)
+	if want := filepath.Join(to, "code", "shared"); !saved.HasProject(want) || saved.HasProject(inside) {
+		t.Fatalf("project path: %v", saved.Projects)
 	}
-	if len(saved.Vaults) != 1 || saved.Vaults[0] != elsewhere {
-		t.Fatalf("the vault outside the tree stays where it is, got %v", saved.Vaults)
+	if !saved.HasProject(proj.Path) {
+		t.Fatalf("the project outside the tree stays where it is, got %v", saved.Projects)
+	}
+	if len(saved.Knowledge) != 1 || saved.Knowledge[0] != elsewhere {
+		t.Fatalf("the vault outside the tree stays where it is, got %v", saved.Knowledge)
 	}
 }
 
 func TestApplyRelocateCopiesAndVerifiesWhenTheVolumeDiffers(t *testing.T) {
 	cfg, h, project, _ := fixtureEntries(t)
+	_ = project
+	project.Path = filepath.Join(cfg.VaultsDir, "robotics")
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -282,11 +298,11 @@ func TestApplyRelocateRollsBackWhenTheConfigCannotBeSaved(t *testing.T) {
 }
 
 func TestPlanRelocateWarnsAboutStateThatHoldsTheOldPath(t *testing.T) {
-	cfg, h, project, _ := fixtureEntries(t)
+	cfg, h, kb, _ := fixtureEntries(t)
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
-	repos := filepath.Join(project.Path, "repos", "code")
+	repos := filepath.Join(kb.Path, "ideas", "code")
 	for _, f := range []string{
 		filepath.Join(repos, ".venv", "pyvenv.cfg"),
 		filepath.Join(repos, "build", "CMakeCache.txt"),
@@ -342,6 +358,7 @@ func TestPlanRelocateWarnsAboutStateThatHoldsTheOldPath(t *testing.T) {
 
 func TestApplyRelocateCopiesWhenARenameOutOfAManagedFolderIsRefused(t *testing.T) {
 	cfg, h, project, _ := fixtureEntries(t)
+	project.Path = filepath.Join(cfg.VaultsDir, "robotics")
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}

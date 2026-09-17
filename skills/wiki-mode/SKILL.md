@@ -1,16 +1,17 @@
 ---
 name: wiki-mode
-description: "Read or change the vault's filing mode and see where a new page of a type belongs: generic (typed folders) or lyt (atomic notes and Maps of Content). Use for wiki mode, what is my vault mode, set vault mode, switch to LYT, use generic, methodology routing. Does not move existing notes."
+description: "Read or change the knowledge base's filing mode and see where a new page of a type belongs: generic (typed folders) or lyt (atomic notes and Maps of Content). Use for wiki mode, what is my vault mode, set vault mode, switch to LYT, use generic, methodology routing. Does not move existing notes."
 ---
 
 # Filing mode
 
-The mode decides where a new page goes. It changes nothing about evidence or
-existing files. Tools: `mode`, `route`, `apply`.
+The mode decides where a new page goes in the knowledge base. It changes
+nothing about evidence or existing files. Tools: `mode`, `route`, `apply`.
+The skill runs in a knowledge base session.
 
 | Mode | New pages | Navigation |
 |---|---|---|
-| `generic` (default) | `wiki/sources/`, `entities/`, `concepts/`, `questions/`, `sessions/` by type | `wiki/index.md` |
+| `generic` (default) | `wiki/sources/`, `entities/`, `concepts/` by type | `wiki/index.md` |
 | `lyt` | `wiki/notes/`, one idea per note, whatever the type | `wiki/mocs/*.md`; `wiki/index.md` is the home map |
 
 ## Read and route

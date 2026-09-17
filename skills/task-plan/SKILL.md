@@ -6,21 +6,25 @@ description: "Plan a task: read it, ask what changes the plan, choose an approac
 # Plan a task
 
 Read [tasks.md](../wiki/references/tasks.md). Tools: `status`, `tasks`,
-`plan`, `apply`.
+`task`. The plan is prose on the task page, written with Edit.
 
-Tasks live in a project. In a knowledge base session this skill does not
-apply; the hook's first line names the projects that mount it.
+Tasks live in a project. In a knowledge base session, pass `project` to
+`tasks` and `task`, and read the task page by the absolute path `tasks`
+returns.
 
 ## Understand
 
 1. Call `tasks` and pick the task the user means; a planted one unless told
    otherwise. Read its page with Read.
-2. Read `wiki/hot.md` and the pages the task touches, at most five. Use Grep
-   under `wiki/` for prior decisions, sources, and open questions on the same
-   subject.
+2. Read the phase's goal when the task names one. Read the project's page in
+   the knowledge base (`status` names it) and Grep the knowledge base for the
+   subject, at most five pages: prior decisions, sources, and known problems
+   on the same subject. Read the work's CLAUDE.md when the work is a
+   repository.
 3. Ask the questions whose answers change the plan, and only those: what
-   done looks like, where the work happens, what must not change, what is
-   already decided. One round.
+   done looks like, what must not change, what is already decided. When the
+   project has phases and the task names none, ask which phase, offering the
+   open ones in order. One round.
 
 ## Choose the approach
 
@@ -29,21 +33,18 @@ apply; the hook's first line names the projects that mount it.
   procedure governs the run.
 - Otherwise plan directly: the steps in order, each small enough to finish
   in one sitting, with what each produces.
-- Say where the work happens. Deliverables, code or a paper or a deck, go in
-  the project's repositories: set `repos` to every one the task changes, by
-  name as `repos` lists them, and `workdir` to the one a session should open
-  in. If the project has none yet, say so; `claude-atlas new-repo` creates
-  one. Vault work has neither. Each step names the repository it lands in.
+- The work happens in the project's own folder, the parent of `atlas/`: the
+  code, the paper, the deck. A step that changes the knowledge base says so
+  and goes through `plan` and `apply` when it runs.
 
 ## Write the plan
 
-One plan of kind `task` that replaces the page:
+1. With Edit on the task page, write the `## Plan` section: the approach in
+   one paragraph, the steps, what done looks like, and the risks or unknowns
+   that could change the plan. Leave the Idea section untouched.
+2. Call `task` with `id`, `status: planned`, and `phase`, `priority`, or
+   `due` when the answers set them. The tool sets `updated` and regenerates
+   the index.
 
-- `status: planned`, `updated` set to today, `repos`, `workdir`, and `due`
-  when known, `priority` when the user changed it;
-- a `## Plan` section: the approach in one paragraph, the steps, what done
-  looks like, and the risks or unknowns that could change the plan;
-- the Idea section untouched.
-
-Show the preview and apply. Do not start the work; that is `task-run`. If
-the user wants to start now, hand off to it after the apply.
+Do not start the work; that is `task-run`. If the user wants to start now,
+hand off to it.

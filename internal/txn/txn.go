@@ -24,7 +24,6 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
 	"github.com/nathanaday/claude-atlas/internal/lint"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -42,16 +41,15 @@ const (
 	Config   Kind = "config"
 	Capture  Kind = "capture"
 	Undo     Kind = "undo"
-	Task     Kind = "task"
 	Stub     Kind = "stub"
 )
 
 // ModelKinds are the kinds a plan from the model may use. Capture, undo, and stub are the core's own.
-var ModelKinds = []Kind{Ingest, Save, Markdown, Repair, Fold, Canvas, Base, Config, Task}
+var ModelKinds = []Kind{Ingest, Save, Markdown, Repair, Fold, Canvas, Base, Config}
 
 func validKind(k Kind) bool {
 	switch k {
-	case Ingest, Save, Markdown, Repair, Fold, Canvas, Base, Config, Capture, Task, Stub:
+	case Ingest, Save, Markdown, Repair, Fold, Canvas, Base, Config, Capture, Stub:
 		return true
 	}
 	return false
@@ -82,10 +80,6 @@ type Request struct {
 	Summary string
 	Writes  []Write
 	Sources []ledger.Update
-	// Mounts names the knowledge bases the vault mounts, a mount name to that knowledge
-	// base's wiki path, for the lint run that produces the plan's warnings. Nil reads the
-	// symlinks under kb/, which are absent until refresh makes them.
-	Mounts map[string]string
 }
 
 const (
@@ -177,28 +171,11 @@ func normalizePath(p string) (string, error) {
 	return p, nil
 }
 
-// allowed enforces each kind's write scope, and the vault kind's: a knowledge base has
-// no inbox, ideas, tasks, questions, or sessions.
-func allowed(vk vault.Kind, kind Kind, p string, mode WriteMode) error {
+// allowed enforces each kind's write scope.
+func allowed(kind Kind, p string, mode WriteMode) error {
 	under := func(dir string) bool { return strings.HasPrefix(p, dir+"/") }
-	if vk == vault.Knowledge {
-		for _, rel := range vault.ProjectOnly {
-			if rel == vault.TaskLedgerPath {
-				if p == rel {
-					return fmt.Errorf("%s belongs to a project, not a knowledge base", p)
-				}
-				continue
-			}
-			if under(rel) {
-				return fmt.Errorf("%s/ belongs to a project, not a knowledge base: %s", rel, p)
-			}
-		}
-	}
-	if under(vault.KbDir) {
-		return fmt.Errorf("%s/ holds mounted knowledge bases; change their pages in the knowledge base's own operation: %s", vault.KbDir, p)
-	}
-	if under(vault.ReposDir) {
-		return fmt.Errorf("%s/ holds repositories; they are not the vault's files: %s", vault.ReposDir, p)
+	if under(vault.IdeasDir) {
+		return fmt.Errorf("%s/ is the user's scratch space; nothing writes it: %s", vault.IdeasDir, p)
 	}
 	switch {
 	case p == ".git" || strings.HasPrefix(p, ".git/"),
@@ -208,13 +185,6 @@ func allowed(vk vault.Kind, kind Kind, p string, mode WriteMode) error {
 		return fmt.Errorf("%s is written by the core from the plan's summary; do not write it", p)
 	case p == vault.LedgerPath:
 		return fmt.Errorf("%s is updated through the plan's sources field; do not write it", p)
-	case p == vault.TaskLedgerPath, p == vault.TasksIndex:
-		return fmt.Errorf("%s is written by the core from the task pages; do not write it", p)
-	case p == vault.LegacyTasksIndex:
-		return fmt.Errorf("%s is the task index's old path; the core moves it to %s", p, vault.TasksIndex)
-	}
-	if under(vault.TasksDir) && kind != Task && kind != Repair {
-		return fmt.Errorf("task pages change only through a task operation (or a repair): %s", p)
 	}
 	switch kind {
 	case Config:
@@ -247,19 +217,6 @@ func allowed(vk vault.Kind, kind Kind, p string, mode WriteMode) error {
 		if !under(vault.WikiDir) {
 			return fmt.Errorf("a %s operation writes only under wiki/: %s", kind, p)
 		}
-	case Task:
-		switch {
-		case under(vault.InboxTasksDir):
-			if mode != Delete {
-				return fmt.Errorf("a task operation may only remove notes from %s/, not write them", vault.InboxTasksDir)
-			}
-		case p == vault.HotPage:
-			if mode != Replace {
-				return fmt.Errorf("a task operation may replace %s, not create or delete it", p)
-			}
-		case !tasks.IsPage(p):
-			return fmt.Errorf("a task operation writes task pages under %s/ (and %s/), %s, and removes notes from %s/: %s", vault.TasksDir, vault.TaskArchiveDir, vault.HotPage, vault.InboxTasksDir, p)
-		}
 	case Stub:
 		if !under(vault.WikiDir) || !strings.EqualFold(path.Ext(p), ".md") {
 			return fmt.Errorf("a stub operation writes only pages under wiki/: %s", p)
@@ -286,11 +243,6 @@ func validateContent(p string, content []byte) error {
 		}
 		if missing := vault.MissingFrontmatter(fields); len(missing) > 0 {
 			return fmt.Errorf("%s frontmatter lacks %s", p, strings.Join(missing, ", "))
-		}
-		if tasks.IsPage(p) {
-			if _, err := tasks.Parse(p, content); err != nil {
-				return err
-			}
 		}
 	case ext == ".json" || ext == ".canvas":
 		if !json.Valid(content) {
@@ -334,9 +286,6 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 	if !validKind(req.Kind) {
 		return nil, fmt.Errorf("unknown operation kind %q", req.Kind)
 	}
-	if v.Config.Kind == vault.Knowledge && req.Kind == Task {
-		return nil, errors.New("a knowledge base has no tasks; plant the task in a project that mounts it")
-	}
 	summary := strings.Join(strings.Fields(req.Summary), " ")
 	if summary == "" {
 		return nil, errors.New("summary is required: one line saying what the operation does")
@@ -354,7 +303,6 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	mounted := ledger.Mounts(req.Mounts, now)
 	for _, w := range req.Writes {
 		p, err := normalizePath(w.Path)
 		if err != nil {
@@ -367,7 +315,7 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 		if w.Mode != Create && w.Mode != Replace && w.Mode != Delete {
 			return nil, fmt.Errorf("%s: mode must be create, replace, or delete", p)
 		}
-		if err := allowed(v.Config.Kind, req.Kind, p, w.Mode); err != nil {
+		if err := allowed(req.Kind, p, w.Mode); err != nil {
 			return nil, err
 		}
 		current, size, exists, err := fileState(v, p)
@@ -395,11 +343,9 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 				return nil, err
 			}
 		}
-		// An ingest removes an inbox file the vault captured, or one a knowledge base it
-		// mounts captured: knowledge enters through a project, and the source is durable
-		// wherever it landed. The mounts' ledgers are read here and nowhere else.
+		// An ingest removes an inbox file only once the vault captured it.
 		if req.Kind == Ingest && strings.HasPrefix(p, vault.InboxDir+"/") {
-			if id, _ := led.FindBySHA(current); id == "" && mounted.Find(current) == nil {
+			if id, _ := led.FindBySHA(current); id == "" {
 				return nil, fmt.Errorf("%s has not been captured; capture it before removing it from the inbox", p)
 			}
 		}
@@ -418,9 +364,6 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 			plan.Preview.Deletes = append(plan.Preview.Deletes, change)
 			overlay[p] = nil
 		}
-	}
-	if err := checkTaskIDs(v, plan, overlay); err != nil {
-		return nil, err
 	}
 	trial, err := ledger.Parse(led.Encode())
 	if err != nil {
@@ -445,7 +388,7 @@ func Prepare(v *vault.Vault, req Request, now time.Time) (*Plan, error) {
 		}
 	}
 	if len(written) > 0 {
-		report, err := lint.Run(v.Root, lint.Options{Overlay: overlay, AsOf: now, Mounts: req.Mounts})
+		report, err := lint.Run(v.Root, lint.Options{Overlay: overlay, AsOf: now})
 		if err == nil {
 			plan.Warnings = append(plan.Warnings, report.Problems(written)...)
 		}
@@ -467,113 +410,6 @@ func pageExists(v *vault.Vault, writes []prepared) func(string) bool {
 		_, _, exists, _ := fileState(v, p)
 		return exists
 	}
-}
-
-// checkTaskIDs refuses a plan whose task pages reuse an id another page holds.
-func checkTaskIDs(v *vault.Vault, plan *Plan, overlay map[string][]byte) error {
-	ids := map[string]string{}
-	for _, w := range plan.writes {
-		if w.Mode == Delete || !tasks.IsPage(w.Path) {
-			continue
-		}
-		t, err := tasks.Parse(w.Path, w.Content)
-		if err != nil {
-			return err
-		}
-		if other, dup := ids[t.ID]; dup {
-			return fmt.Errorf("%s and %s both carry task_id %s", other, w.Path, t.ID)
-		}
-		ids[t.ID] = w.Path
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	led, err := tasks.LoadLedger(v)
-	if err != nil {
-		return err
-	}
-	for _, rec := range led.Tasks {
-		if p, dup := ids[rec.ID]; dup && rec.Path != p {
-			if content, planned := overlay[rec.Path]; planned && content == nil {
-				continue // the page moves in this plan
-			}
-			return fmt.Errorf("%s reuses task_id %s, which belongs to %s", p, rec.ID, rec.Path)
-		}
-	}
-	return nil
-}
-
-// touchesTasks reports whether a plan writes a task page or a task note.
-func touchesTasks(plan *Plan) bool {
-	for _, w := range plan.writes {
-		if tasks.IsPage(w.Path) {
-			return true
-		}
-	}
-	return false
-}
-
-// Planted says where a plant put its page.
-type Planted struct {
-	Path string `json:"path"`
-	ID   string `json:"task_id"`
-}
-
-// PlantRequest builds the request that plants a task: one new page from the skeleton,
-// and the removal of the inbox note it came from, when there is one.
-func PlantRequest(v *vault.Vault, p tasks.Plant, from string, now time.Time) (Request, Planted, error) {
-	p.Title = strings.TrimSpace(p.Title)
-	if p.Title == "" {
-		p.Title = tasks.TitleFromText(p.Text)
-	}
-	if p.Title == "" {
-		return Request{}, Planted{}, errors.New("a task needs a title or some text")
-	}
-	if p.Priority != "" && !contains(tasks.Priorities, p.Priority) {
-		return Request{}, Planted{}, fmt.Errorf("priority must be one of %s", strings.Join(tasks.Priorities, ", "))
-	}
-	if p.Start && strings.TrimSpace(p.Plan) == "" {
-		return Request{}, Planted{}, errors.New("start needs a plan; a task runs only once it is planned")
-	}
-	for _, r := range p.Repos {
-		if strings.TrimSpace(r) == "" {
-			return Request{}, Planted{}, errors.New("repos must be repository names")
-		}
-	}
-	if p.Workdir != "" {
-		abs, err := filepath.Abs(p.Workdir)
-		if err != nil {
-			return Request{}, Planted{}, err
-		}
-		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
-			return Request{}, Planted{}, fmt.Errorf("workdir %s is not a directory", p.Workdir)
-		}
-		p.Workdir = abs
-	}
-	taken := func(rel string) bool { _, _, exists, _ := fileState(v, rel); return exists }
-	planted := Planted{Path: tasks.PagePath(p.Title, taken), ID: tasks.NewID(now)}
-	verb := map[string]string{"planted": "plant", "planned": "plant and plan", "active": "plant and start"}[p.Status()]
-	req := Request{Kind: Task, Summary: verb + " " + p.Title, Writes: []Write{{Path: planted.Path, Mode: Create, Content: []byte(tasks.Skeleton(p, planted.ID, now))}}}
-	if from != "" {
-		rel, err := normalizePath(from)
-		if err != nil {
-			return Request{}, Planted{}, err
-		}
-		if !strings.HasPrefix(rel, vault.InboxTasksDir+"/") {
-			return Request{}, Planted{}, fmt.Errorf("%s is not a note under %s/", from, vault.InboxTasksDir)
-		}
-		req.Writes = append(req.Writes, Write{Path: rel, Mode: Delete})
-	}
-	return req, planted, nil
-}
-
-func contains(list []string, s string) bool {
-	for _, item := range list {
-		if item == s {
-			return true
-		}
-	}
-	return false
 }
 
 // ConfigRequest builds the request that changes the vault's mode.
@@ -742,22 +578,6 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 	if writeLedger {
 		in.Paths = append(in.Paths, InflightPath{Path: vault.LedgerPath, Existed: ledgerExisted})
 	}
-	withTasks := touchesTasks(plan)
-	var prevTasks tasks.Ledger
-	var indexBefore []byte
-	var legacyIndexExisted bool
-	if withTasks {
-		if prevTasks, err = tasks.LoadLedger(v); err != nil {
-			return nil, err
-		}
-		indexBefore, _ = os.ReadFile(v.Path(vault.TasksIndex))
-		_, _, taskLedgerExisted, _ := fileState(v, vault.TaskLedgerPath)
-		_, _, indexExisted, _ := fileState(v, vault.TasksIndex)
-		in.Paths = append(in.Paths, InflightPath{Path: vault.TaskLedgerPath, Existed: taskLedgerExisted}, InflightPath{Path: vault.TasksIndex, Existed: indexExisted})
-		if _, _, legacyIndexExisted, _ = fileState(v, vault.LegacyTasksIndex); legacyIndexExisted {
-			in.Paths = append(in.Paths, InflightPath{Path: vault.LegacyTasksIndex, Existed: true})
-		}
-	}
 	if err := writeInflight(v, in); err != nil {
 		return nil, err
 	}
@@ -790,26 +610,6 @@ func Apply(v *vault.Vault, plan *Plan, now time.Time) (*Result, error) {
 			return nil, rollback(err)
 		}
 		changed = append(changed, vault.LedgerPath)
-	}
-	if withTasks {
-		touch := tasks.Touch{OperationID: plan.OperationID, Date: now.Format("2006-01-02"), Summary: plan.Summary}
-		taskLedger, err := tasks.Build(v, prevTasks, &touch, changed, now)
-		if err != nil {
-			return nil, rollback(err)
-		}
-		if err := writeAtomic(v.Path(vault.TaskLedgerPath), taskLedger.Encode()); err != nil {
-			return nil, rollback(err)
-		}
-		if err := writeAtomic(v.Path(vault.TasksIndex), []byte(tasks.RenderIndex(taskLedger, indexBefore, now))); err != nil {
-			return nil, rollback(err)
-		}
-		changed = append(changed, vault.TaskLedgerPath, vault.TasksIndex)
-		if legacyIndexExisted {
-			if err := os.Remove(v.Path(vault.LegacyTasksIndex)); err != nil {
-				return nil, rollback(err)
-			}
-			changed = append(changed, vault.LegacyTasksIndex)
-		}
 	}
 	if err := repo.Add(changed...); err != nil {
 		return nil, rollback(err)

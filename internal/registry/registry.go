@@ -1,7 +1,7 @@
-// Package registry scans the vaults directory for identity files and resolves each
-// vault's mounts and repositories. It replaces the atlas vault: nothing here is stored
-// beyond what Write derives, and Scan rebuilds the whole picture from the vaults
-// themselves every time.
+// Package registry knows every knowledge base and project on the machine: it scans the
+// vaults directory for identity files, reads the projects the config lists, and resolves
+// each project's knowledge base. Nothing here is stored beyond what Write derives, and
+// Scan rebuilds the whole picture from the folders themselves every time.
 package registry
 
 import (
@@ -16,142 +16,121 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-// The reasons a vault the atlas knows cannot be read. An Entry with an Error carries one,
-// so a command decides on the code and not on the sentence.
+// Kind says what an entry is.
+type Kind string
+
 const (
-	ReasonV1         = "v1"         // a v1 identity file; adopt rewrites it
-	ReasonUnreadable = "unreadable" // the identity file is not JSON
-	ReasonSchema     = "schema"     // an identity file from a later version
-	ReasonMissing    = "missing"    // a registered path whose folder is gone
+	Knowledge Kind = "knowledge"
+	Project   Kind = "project"
 )
 
-// maxDepth is the deepest directory level Scan searches below the vaults directory: a
-// vault root at this level is found, one past it is not.
-const maxDepth = 5
+// Noun is the kind as a person says it.
+func (k Kind) Noun() string {
+	if k == Knowledge {
+		return "knowledge base"
+	}
+	return string(k)
+}
 
-// Ref names a vault another entry refers to.
+// The reasons an entry the atlas knows cannot be read. An Entry with an Error carries
+// one, so a command decides on the code and not on the sentence.
+const (
+	ReasonV1         = "v1"          // a v1 identity file; adopt rewrites it
+	ReasonV2Project  = "v2-project"  // a v2 project vault; init recreates the project in the work
+	ReasonUnreadable = "unreadable"  // the identity file is not JSON
+	ReasonSchema     = "schema"      // an identity file from a later version
+	ReasonMissing    = "missing"     // a registered path whose folder is gone
+	ReasonNotProject = "not-project" // a registered work folder with no atlas/project.json
+)
+
+// Ref names an entry another entry refers to: a project's knowledge base, or one of a
+// knowledge base's projects. Path is set when the scan found it.
 type Ref struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Access string `json:"access,omitempty"` // the effective access, on a mount or a mounted-by
-	Error  string `json:"error,omitempty"`  // "no knowledge base with id …", for a member the scan lost
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Path  string `json:"path,omitempty"`
+	Error string `json:"error,omitempty"` // "no knowledge base with id …"
 }
 
-// Grant is what a knowledge base grants one project, resolved against the scan: Name is
-// the project's current name when the scan holds it, and Error says when it does not.
-type Grant struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Access string `json:"access"`
-	Error  string `json:"error,omitempty"`
-}
-
-// Mount is a project's mount resolved against the scan.
-type Mount struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Access    string `json:"access"`              // what the project asked for
-	Effective string `json:"effective,omitempty"` // the lesser of the request and the grant; "" when unresolved
-	Path      string `json:"path,omitempty"`      // the knowledge base's wiki/, when found
-	Error     string `json:"error,omitempty"`     // "no knowledge base with id …"
-	// Through is the cluster a mount comes through; "" for a mount the project recorded
-	// itself. A mount with Through is derived: the project's identity file does not hold
-	// it, and unmounting it means unmounting the cluster.
-	Through string `json:"through,omitempty"`
-}
-
-// Repo is a project's repository resolved to a path.
-type Repo struct {
-	Name    string `json:"name"`
-	Path    string `json:"path,omitempty"` // "" when the config names no path and <project>/repos/<name> is absent
-	Remote  string `json:"remote,omitempty"`
-	Changes string `json:"changes,omitempty"`
-	Error   string `json:"error,omitempty"`
-}
-
-// Entry is one vault the atlas knows: its identity file, where it is, and how its
-// mounts and repositories resolve. Refresh adds the derived State.
+// Entry is one knowledge base or project the atlas knows. Refresh adds the derived State.
 type Entry struct {
-	ID      string     `json:"id"`
-	Kind    vault.Kind `json:"kind"`
-	Name    string     `json:"name"`
-	Path    string     `json:"path"`
-	Mode    vault.Mode `json:"mode"`
-	Created string     `json:"created"`
-	Tags    []string   `json:"tags,omitempty"`
-	Scope   string     `json:"scope,omitempty"`
-	Access  string     `json:"access,omitempty"`
-	Grants  []Grant    `json:"grants,omitempty"`
-	// Members are a cluster's knowledge bases, resolved against the scan. A knowledge base
-	// with members is a cluster.
-	Members []Ref `json:"members,omitempty"`
-	// Clusters names the clusters that hold this knowledge base as a member.
-	Clusters []Ref   `json:"clusters,omitempty"`
-	Mounts   []Mount `json:"mounts,omitempty"`
-	Repos    []Repo  `json:"repos,omitempty"`
-	// Host is the repository a project lives in, for a project at REPO/atlas; "" for a
-	// vault that is its own repository. The scan derives it from the folder, and Repos
-	// lists it first.
-	Host string `json:"host,omitempty"`
-	// MountedBy lists the projects that mount a knowledge base, with their effective access.
-	MountedBy []Ref `json:"mounted_by,omitempty"`
-	// Error is set for a vault the atlas knows but could not read: a v1 identity file, one
-	// that is not JSON, or a registered folder that is gone. Such an entry has Path,
-	// Error, and Reason, and nothing else.
+	ID   string `json:"id"`
+	Kind Kind   `json:"kind"`
+	Name string `json:"name"`
+	// Path is a knowledge base's root, or a project's work folder, the parent of atlas/.
+	Path    string `json:"path"`
+	Created string `json:"created,omitempty"`
+	// A knowledge base's fields.
+	Mode  vault.Mode `json:"mode,omitempty"`
+	Scope string     `json:"scope,omitempty"`
+	// Projects lists the projects that use a knowledge base.
+	Projects []Ref `json:"projects,omitempty"`
+	// A project's fields.
+	Description string `json:"description,omitempty"`
+	// Knowledge is the one knowledge base a project uses, resolved against the scan; nil
+	// when the project uses none.
+	Knowledge *Ref `json:"knowledge,omitempty"`
+	// Error is set for an entry the atlas knows but could not read. Such an entry has
+	// Path, Error, and Reason, and nothing else.
 	Error string `json:"error,omitempty"`
-	// Reason is the code behind Error: ReasonV1, ReasonUnreadable, ReasonSchema, ReasonMissing.
+	// Reason is the code behind Error.
 	Reason string `json:"reason,omitempty"`
 	State  *State `json:"state,omitempty"`
 }
 
-// State is what refresh derived for one vault; the refresh package fills it.
+// State is what refresh derived for one entry; the refresh package fills it.
 type State struct {
-	GeneratedAt     string       `json:"generated_at"`
-	VaultOK         bool         `json:"vault_ok"`
-	VaultError      string       `json:"vault_error,omitempty"`
-	PendingRecovery bool         `json:"pending_recovery,omitempty"`
-	LastOperation   string       `json:"last_operation,omitempty"`
-	LastTouched     string       `json:"last_touched,omitempty"`
-	DaysIdle        *int         `json:"days_idle"`
-	Heat            string       `json:"heat"`
-	Pages           *int         `json:"pages"`
-	OpenThreads     []string     `json:"open_threads"`
-	Unfinished      Unfinished   `json:"unfinished"`
-	Tasks           *TaskSummary `json:"tasks,omitempty"`
-	// RepoFacts pairs each repository name with what git says about it.
-	RepoFacts map[string]links.Link `json:"repo_facts,omitempty"`
-	// RepoDescriptions pairs each repository name with the page that describes it, when
-	// the project's wiki or a mounted knowledge base holds one.
-	RepoDescriptions map[string]RepoDescription `json:"repo_descriptions,omitempty"`
+	GeneratedAt string `json:"generated_at"`
+	// OK is set when the entry could be read in full.
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	// A knowledge base's state.
+	PendingRecovery bool       `json:"pending_recovery,omitempty"`
+	LastOperation   string     `json:"last_operation,omitempty"`
+	Pages           *int       `json:"pages,omitempty"`
+	Inbox           *int       `json:"inbox,omitempty"`
+	OpenThreads     []string   `json:"open_threads,omitempty"`
+	Unfinished      Unfinished `json:"unfinished"`
+	// Both kinds.
+	LastTouched string `json:"last_touched,omitempty"`
+	DaysIdle    *int   `json:"days_idle"`
+	Heat        string `json:"heat"`
+	// A project's state.
+	Tasks *TaskSummary `json:"tasks,omitempty"`
+	// Described is the page in the project's knowledge base that describes it, when one
+	// does.
+	Described *Description `json:"described,omitempty"`
+	// Git is what git says about the work folder, when it is a repository.
+	Git *links.Link `json:"git,omitempty"`
 }
 
-// RepoDescription is the page that describes a repository: an entity page with
-// `entity_type: repository` whose `repo` property names the repository's remote or its
-// name, and the commit it was written from. The atlas derives it and never writes it.
-type RepoDescription struct {
+// Description is the page that describes a project: an entity page in its knowledge
+// base whose `project` property names the project's id or name, and the commit it was
+// written from when the work is a repository. The atlas derives it and never writes it.
+type Description struct {
 	Page   string `json:"page"` // vault-relative path of the page
-	In     string `json:"in"`   // the vault that holds it: the project's name, or the mount's name
 	Commit string `json:"commit,omitempty"`
-	// Behind counts the commits on the repository's current branch since Commit; -1 when
-	// Commit is empty or not in the repository's history.
+	// Behind counts the commits on the work's current branch since Commit; -1 when
+	// Commit is empty, the work is not a repository, or Commit is not in its history.
 	Behind int `json:"behind"`
 }
 
-// Summary says where the page is and how current it is, for the hook, the CLI, and
-// the view: "described in tools at fc70d93, 12 commits behind".
-func (d RepoDescription) Summary() string {
+// Summary says where the page is and how current it is: "described in
+// wiki/entities/webapp.md at fc70d93, 12 commits behind".
+func (d Description) Summary() string {
 	commit := d.Commit
 	if len(commit) > 7 {
 		commit = commit[:7]
 	}
-	where := fmt.Sprintf("described in %s (%s)", d.In, d.Page)
+	where := "described in " + d.Page
 	switch {
 	case commit == "":
-		return where + ", no commit recorded"
+		return where
 	case d.Behind < 0:
 		return fmt.Sprintf("%s at %s, not in the repository's history", where, commit)
 	case d.Behind == 0:
@@ -162,32 +141,10 @@ func (d RepoDescription) Summary() string {
 	return fmt.Sprintf("%s at %s, %d commits behind", where, commit, d.Behind)
 }
 
-// Short is Summary for a narrow box: "tools: wiki/entities/code.md · fc70d93 · 12 commits behind".
-func (d RepoDescription) Short() string {
-	commit := d.Commit
-	if len(commit) > 7 {
-		commit = commit[:7]
-	}
-	parts := []string{d.In + ": " + d.Page}
-	switch {
-	case commit == "":
-		parts = append(parts, "no commit recorded")
-	case d.Behind < 0:
-		parts = append(parts, commit, "not in the history")
-	case d.Behind == 0:
-		parts = append(parts, commit, "current")
-	case d.Behind == 1:
-		parts = append(parts, commit, "1 commit behind")
-	default:
-		parts = append(parts, commit, fmt.Sprintf("%d commits behind", d.Behind))
-	}
-	return strings.Join(parts, " · ")
-}
+// NotDescribed is what every surface says for a project no page describes.
+const NotDescribed = "not described in the knowledge base"
 
-// NotDescribed is what every surface says for a repository no page describes.
-const NotDescribed = "not described in the wiki or a knowledge base"
-
-// Unfinished counts work the vault still owes. nil means unknown.
+// Unfinished counts work a knowledge base still owes. nil means unknown.
 type Unfinished struct {
 	EmptySections *int `json:"empty_sections"`
 	Stubs         *int `json:"stubs"`
@@ -232,22 +189,23 @@ func (u Unfinished) Total() *int {
 
 // TaskLine is one open task as the atlas shows it.
 type TaskLine struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Status      string   `json:"status"`
-	Priority    string   `json:"priority"`
-	Due         string   `json:"due,omitempty"`
-	Workdir     string   `json:"workdir,omitempty"`
-	Repos       []string `json:"repos,omitempty"`
-	LastTouched string   `json:"last_touched"`
-	Path        string   `json:"path"` // absolute path of the task page
-	Stale       bool     `json:"stale,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Status   string `json:"status"`
+	Priority string `json:"priority"`
+	Phase    string `json:"phase,omitempty"`
+	Due      string `json:"due,omitempty"`
+	Updated  string `json:"updated"`
+	Path     string `json:"path"` // absolute path of the task page
+	Stale    bool   `json:"stale,omitempty"`
 }
 
-// TaskSummary is what refresh read from a vault's task ledger.
+// TaskSummary is what refresh read from a project's task pages.
 type TaskSummary struct {
 	Counts tasks.Counts `json:"counts"`
 	Open   []TaskLine   `json:"open"`
+	// Phases lists the phases in order, finished ones last.
+	Phases []string `json:"phases,omitempty"`
 }
 
 // Problem is a path the scan could not use.
@@ -263,11 +221,11 @@ type Index struct {
 }
 
 var ErrAmbiguous = errors.New("ambiguous")
-var ErrNotFound = errors.New("no such vault")
+var ErrNotFound = errors.New("no such vault or project")
 
-// Scan walks cfg.VaultsDir for identity files, reads the vaults it finds, adds the
-// vaults cfg.Vaults names outside that directory, and resolves every project's mounts
-// and repositories against the whole set.
+// Scan walks cfg.VaultsDir for knowledge base identity files, adds the knowledge bases
+// cfg.Knowledge names outside that directory, reads every project cfg.Projects names,
+// and resolves each project's knowledge base against the whole set.
 func Scan(cfg *home.Config) (*Index, error) {
 	ix := &Index{}
 	found := map[string]bool{}
@@ -315,7 +273,7 @@ func Scan(cfg *home.Config) (*Index, error) {
 		}
 	}
 
-	for _, v := range cfg.Vaults {
+	for _, v := range cfg.Knowledge {
 		abs, err := filepath.Abs(v)
 		if err != nil {
 			abs = v
@@ -333,16 +291,31 @@ func Scan(cfg *home.Config) (*Index, error) {
 		scanRoot(ix, abs)
 	}
 
-	// Sort before resolving, so a knowledge base's MountedBy is built by walking the
-	// entries in their final order and comes out in that order too.
+	for _, work := range cfg.Projects {
+		abs, err := filepath.Abs(work)
+		if err != nil {
+			abs = work
+		}
+		key := realPath(abs)
+		if found[key] {
+			continue
+		}
+		found[key] = true
+		scanProject(ix, abs)
+	}
+
 	sortEntries(ix.Entries)
-	resolve(ix, cfg)
+	resolve(ix)
 	return ix, nil
 }
 
-// realPath is the dedupe key of a vault root: two spellings of one folder, one of them
-// through a symlink, resolve to the same key and yield one entry. A path that cannot be
-// resolved, such as a registered folder that is gone, keeps its own spelling.
+// maxDepth is the deepest directory level Scan searches below the vaults directory: a
+// vault root at this level is found, one past it is not.
+const maxDepth = 5
+
+// realPath is the dedupe key of a root: two spellings of one folder, one of them through
+// a symlink, resolve to the same key and yield one entry. A path that cannot be resolved,
+// such as a registered folder that is gone, keeps its own spelling.
 func realPath(path string) string {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		return resolved
@@ -357,9 +330,9 @@ func markerFileExists(root string) bool {
 }
 
 // scanRoot reads the identity file at root and records an Entry: a full one when it is
-// a current vault, an Entry{Path, Error} alongside a matching Problem when the scan
-// found the vault but could not read it (a bad marker, a v1 vault, or an unsupported
-// schema). A path with no identity file at all is a Problem only.
+// a knowledge base, an Entry{Path, Error} alongside a matching Problem when the scan
+// found a vault but could not use it. A path with no identity file at all is a Problem
+// only.
 func scanRoot(ix *Index, root string) {
 	cfg, ok := vault.ReadConfig(root)
 	if !ok {
@@ -371,25 +344,67 @@ func scanRoot(ix *Index, root string) {
 		return
 	}
 	switch cfg.Schema {
-	case vault.Schema:
-		ix.Entries = append(ix.Entries, buildEntry(root, cfg))
+	case vault.Schema, vault.SchemaV2:
+		if cfg.Kind != vault.Kind {
+			if cfg.Kind == "project" {
+				fail(ix, root, "a v2 project vault; run claude-atlas init in the work, then delete this folder", ReasonV2Project)
+			} else {
+				fail(ix, root, fmt.Sprintf("unsupported kind %q", cfg.Kind), ReasonSchema)
+			}
+			return
+		}
+		ix.Entries = append(ix.Entries, knowledgeEntry(root, cfg))
 	case vault.SchemaV1:
-		fail(ix, root, fmt.Sprintf("v1 vault; run claude-atlas adopt %s --as knowledge|project", root), ReasonV1)
+		fail(ix, root, fmt.Sprintf("v1 vault; run claude-atlas adopt %s", root), ReasonV1)
 	default:
 		fail(ix, root, fmt.Sprintf("unsupported schema %q", cfg.Schema), ReasonSchema)
 	}
 }
 
-// fail records a vault the atlas knows but could not read: the same reason in both a
+// scanProject reads atlas/project.json under a registered work folder.
+func scanProject(ix *Index, work string) {
+	info, err := os.Stat(work)
+	if err != nil || !info.IsDir() {
+		fail(ix, work, "not found; work in it again to heal the path, or run claude-atlas forget", ReasonMissing)
+		return
+	}
+	cfg, ok := project.ReadConfig(work)
+	if !ok {
+		if !project.IsProject(work) {
+			fail(ix, work, "no "+project.Dir+"/"+project.Marker+"; run claude-atlas init there, or claude-atlas forget", ReasonNotProject)
+			return
+		}
+		fail(ix, work, "identity file is not JSON", ReasonUnreadable)
+		return
+	}
+	if cfg.Schema != project.Schema {
+		fail(ix, work, fmt.Sprintf("unsupported schema %q", cfg.Schema), ReasonSchema)
+		return
+	}
+	if cfg.ID == "" {
+		fail(ix, work, "identity file has no id", ReasonUnreadable)
+		return
+	}
+	name := strings.TrimSpace(cfg.Name)
+	if name == "" {
+		name = filepath.Base(work)
+	}
+	e := Entry{ID: cfg.ID, Kind: Project, Name: name, Path: work, Created: cfg.Created, Description: cfg.Description}
+	if cfg.Knowledge != nil && cfg.Knowledge.ID != "" {
+		e.Knowledge = &Ref{ID: cfg.Knowledge.ID, Name: cfg.Knowledge.Name}
+	}
+	ix.Entries = append(ix.Entries, e)
+}
+
+// fail records an entry the atlas knows but could not read: the same reason in both a
 // Problem and an Entry{Path, Error, Reason}.
 func fail(ix *Index, root, reason, code string) {
 	ix.Problems = append(ix.Problems, Problem{Path: root, Reason: reason})
 	ix.Entries = append(ix.Entries, Entry{Path: root, Error: reason, Reason: code})
 }
 
-// buildEntry turns a valid identity file into an Entry, unresolved: a project's mounts
-// and repos carry only what the identity file recorded.
-func buildEntry(root string, cfg vault.Config) Entry {
+// knowledgeEntry turns a valid identity file into an Entry.
+func knowledgeEntry(root string, cfg vault.Config) Entry {
 	name := cfg.Name
 	if name == "" {
 		name = filepath.Base(root)
@@ -398,39 +413,12 @@ func buildEntry(root string, cfg vault.Config) Entry {
 	if mode == "" {
 		mode = vault.Generic
 	}
-	e := Entry{
-		ID:      cfg.ID,
-		Kind:    cfg.Kind,
-		Name:    name,
-		Path:    root,
-		Mode:    mode,
-		Created: cfg.Created,
-		Tags:    cfg.Tags,
-		Scope:   cfg.Scope,
-		Access:  cfg.Access,
-	}
-	for _, g := range cfg.Grants {
-		e.Grants = append(e.Grants, Grant{ID: g.ID, Name: g.Name, Access: g.Access})
-	}
-	if cfg.Kind == vault.Project {
-		e.Host = vault.HostRepo(root)
-		for _, m := range cfg.Mounts {
-			e.Mounts = append(e.Mounts, Mount{ID: m.ID, Name: m.Name, Access: m.Access})
-		}
-		for _, r := range cfg.Repos {
-			e.Repos = append(e.Repos, Repo{Name: r.Name, Remote: r.Remote, Changes: r.Changes})
-		}
-	} else {
-		for _, m := range cfg.Members {
-			e.Members = append(e.Members, Ref{ID: m.ID, Name: m.Name})
-		}
-	}
-	return e
+	return Entry{ID: cfg.ID, Kind: Knowledge, Name: name, Path: root, Mode: mode, Created: cfg.Created, Scope: cfg.Scope}
 }
 
-// resolve fills in every project's mounts and repos, and every knowledge base's
-// MountedBy, now that the whole set of entries is known.
-func resolve(ix *Index, cfg *home.Config) {
+// resolve fills in every project's knowledge base and every knowledge base's projects,
+// now that the whole set of entries is known.
+func resolve(ix *Index) {
 	byID := map[string]*Entry{}
 	for i := range ix.Entries {
 		e := &ix.Entries[i]
@@ -438,200 +426,24 @@ func resolve(ix *Index, cfg *home.Config) {
 			byID[e.ID] = e
 		}
 	}
-	// Members resolve first: a project's cluster mount expands from them.
 	for i := range ix.Entries {
 		e := &ix.Entries[i]
-		if e.Error != "" || e.Kind != vault.Knowledge {
+		if e.Error != "" || e.Kind != Project || e.Knowledge == nil {
 			continue
 		}
-		for j := range e.Members {
-			ref := &e.Members[j]
-			kb, ok := byID[ref.ID]
-			if !ok || kb.Kind != vault.Knowledge {
-				ref.Error = "no knowledge base with id " + ref.ID
-				continue
-			}
-			ref.Name = kb.Name
-			kb.Clusters = append(kb.Clusters, Ref{ID: e.ID, Name: e.Name})
-		}
-	}
-	for i := range ix.Entries {
-		e := &ix.Entries[i]
-		if e.Error != "" || e.Kind != vault.Project {
+		kb, ok := byID[e.Knowledge.ID]
+		if !ok || kb.Kind != Knowledge {
+			e.Knowledge.Error = "no knowledge base with id " + e.Knowledge.ID + " on this machine"
 			continue
 		}
-		for j := range e.Mounts {
-			m := &e.Mounts[j]
-			kb, ok := byID[m.ID]
-			if !ok || kb.Kind != vault.Knowledge {
-				m.Error = "no knowledge base with id " + m.ID
-				continue
-			}
-			m.Path = kb.Wiki()
-			m.Effective = Effective(m.Access, GrantedAccess(*kb, e.ID))
-			kb.MountedBy = append(kb.MountedBy, Ref{ID: e.ID, Name: e.Name, Access: m.Effective})
-		}
-		e.Mounts = append(e.Mounts, expand(e, byID)...)
-		host := takeHost(e)
-		for j := range e.Repos {
-			r := &e.Repos[j]
-			dir := e.RepoDir(r.Name)
-			if info, err := os.Stat(dir); err == nil && info.IsDir() {
-				r.Path = dir
-				continue
-			}
-			if p := cfg.RepoPath(e.ID, r.Name); p != "" {
-				r.Path = p
-				continue
-			}
-			r.Error = "no folder; link it with claude-atlas link"
-		}
-		if host != nil {
-			e.Repos = append([]Repo{*host}, e.Repos...)
-		}
-	}
-	for i := range ix.Entries {
-		e := &ix.Entries[i]
-		if e.Error != "" || e.Kind != vault.Knowledge {
-			continue
-		}
-		for j := range e.Grants {
-			g := &e.Grants[j]
-			if proj, ok := byID[g.ID]; ok && proj.Kind == vault.Project {
-				g.Name = proj.Name
-				continue
-			}
-			g.Error = "no project with id " + g.ID
-		}
+		e.Knowledge.Name = kb.Name
+		e.Knowledge.Path = kb.Path
+		kb.Projects = append(kb.Projects, Ref{ID: e.ID, Name: e.Name, Path: e.Path})
 	}
 }
 
-// expand is the mounts a project reaches through the clusters it mounts, one per member,
-// resolved the way a recorded mount is. A member the project already mounts itself is
-// left out: the project asked for that knowledge base by name, so its own mount stands.
-func expand(project *Entry, byID map[string]*Entry) []Mount {
-	taken := map[string]bool{}   // mount names in use, lowercased
-	mounted := map[string]bool{} // knowledge base ids the project reaches already
-	for _, m := range project.Mounts {
-		taken[strings.ToLower(m.Name)] = true
-		mounted[m.ID] = true
-	}
-	var out []Mount
-	for _, m := range project.Mounts {
-		cluster, ok := byID[m.ID]
-		if !ok || len(cluster.Members) == 0 {
-			continue
-		}
-		for _, ref := range cluster.Members {
-			if ref.Error != "" || mounted[ref.ID] {
-				continue
-			}
-			kb, ok := byID[ref.ID]
-			if !ok || kb.Kind != vault.Knowledge {
-				continue
-			}
-			mounted[ref.ID] = true
-			name := memberName(kb, cluster, taken)
-			taken[strings.ToLower(name)] = true
-			member := Mount{
-				ID: kb.ID, Name: name, Access: m.Access, Through: cluster.Name,
-				Path: kb.Wiki(), Effective: Effective(m.Access, GrantedAccess(*kb, project.ID)),
-			}
-			out = append(out, member)
-			kb.MountedBy = append(kb.MountedBy, Ref{ID: project.ID, Name: project.Name, Access: member.Effective})
-		}
-	}
-	return out
-}
-
-// memberName is the folder a member takes under kb/: its own name, the cluster's name and
-// its own when that is taken, and its id's first eight characters when that is taken too.
-// The last name counts up until it is free, so every member gets a folder of its own and
-// none of them is empty.
-func memberName(kb, cluster *Entry, taken map[string]bool) string {
-	short := kb.ID[:min(8, len(kb.ID))]
-	for _, try := range []string{kb.Name, cluster.Name + "-" + kb.Name, cluster.Name + "-" + short} {
-		if name := links.CleanName(try); name != "" && !taken[strings.ToLower(name)] {
-			return name
-		}
-	}
-	base := links.CleanName("kb-" + short)
-	if base == "" {
-		base = "kb"
-	}
-	name := base
-	for n := 2; taken[strings.ToLower(name)]; n++ {
-		name = fmt.Sprintf("%s-%d", base, n)
-	}
-	return name
-}
-
-// takeHost is the repository a project lives in, pulled out of the identity list: the
-// host's folder, with the change policy and the remote an identity entry of that name
-// records for it. Nothing stores the path, so a clone answers the same way. It returns
-// nil for a project that is its own repository.
-func takeHost(e *Entry) *Repo {
-	if e.Host == "" {
-		return nil
-	}
-	host := Repo{Name: HostName(e.Host), Path: e.Host, Changes: links.ChangesCommit}
-	var rest []Repo
-	for _, r := range e.Repos {
-		if strings.EqualFold(r.Name, host.Name) || strings.EqualFold(r.Name, filepath.Base(e.Host)) {
-			if r.Changes != "" {
-				host.Changes = r.Changes
-			}
-			if r.Remote != "" {
-				host.Remote = r.Remote
-			}
-			continue
-		}
-		rest = append(rest, r)
-	}
-	e.Repos = rest
-	return &host
-}
-
-// HostName is the repository name a host folder takes: the folder's name, cleaned the
-// way a linked repository's name is, so a name that carries a character Obsidian refuses
-// cannot name the same folder twice. The raw name stands when cleaning leaves nothing.
-func HostName(host string) string {
-	base := filepath.Base(host)
-	if name := links.CleanName(base); name != "" {
-		return name
-	}
-	return base
-}
-
-// GrantedAccess is what a knowledge base grants a project: open grants write to everyone;
-// guarded grants what the project's own grant says, or read when there is none.
-func GrantedAccess(kb Entry, projectID string) string {
-	switch kb.Access {
-	case vault.AccessOpen:
-		return vault.AccessWrite
-	case vault.AccessGuarded:
-		for _, g := range kb.Grants {
-			if g.ID == projectID {
-				return g.Access
-			}
-		}
-		return vault.AccessRead
-	default:
-		return vault.AccessRead
-	}
-}
-
-// Effective is the lesser of what a project asked for and what it was granted. Anything
-// it does not recognize reads only, so a hand-edited identity file cannot widen access.
-func Effective(request, grant string) string {
-	if request == vault.AccessWrite && grant == vault.AccessWrite {
-		return vault.AccessWrite
-	}
-	return vault.AccessRead
-}
-
-// sortEntries orders valid entries before entries with an Error, projects before
-// knowledge bases, then by lowercased name, then by path.
+// sortEntries orders valid entries before entries with an Error, knowledge bases before
+// projects, then by lowercased name, then by path.
 func sortEntries(entries []Entry) {
 	sort.SliceStable(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
@@ -642,7 +454,7 @@ func sortEntries(entries []Entry) {
 			return a.Path < b.Path
 		}
 		if a.Kind != b.Kind {
-			return a.Kind == vault.Project
+			return a.Kind == Knowledge
 		}
 		an, bn := strings.ToLower(a.Name), strings.ToLower(b.Name)
 		if an != bn {
@@ -652,7 +464,7 @@ func sortEntries(entries []Entry) {
 	})
 }
 
-// ByID finds an entry by its vault id.
+// ByID finds an entry by its id.
 func (ix *Index) ByID(id string) *Entry {
 	for i := range ix.Entries {
 		if ix.Entries[i].ID == id {
@@ -662,7 +474,7 @@ func (ix *Index) ByID(id string) *Entry {
 	return nil
 }
 
-// ByPath finds an entry by its root path. A path that reaches the vault through a
+// ByPath finds an entry by its root path. A path that reaches the folder through a
 // symlinked parent, which is what a session hands the hooks and the server on macOS,
 // where /tmp links to /private/tmp, matches the entry it resolves to.
 func (ix *Index) ByPath(path string) *Entry {
@@ -688,12 +500,13 @@ func (ix *Index) ByPath(path string) *Entry {
 }
 
 // Find matches a name without regard to case, an id or an id prefix of at least 8
-// characters, or a path. Two vaults with one name make it return ErrAmbiguous with both.
-func (ix *Index) Find(arg string) (*Entry, error) {
+// characters, or a path. Two entries with one name make it return ErrAmbiguous with
+// both. kind narrows the search; "" searches both kinds.
+func (ix *Index) Find(arg string, kind Kind) (*Entry, error) {
 	if strings.ContainsAny(arg, "/\\") || strings.HasPrefix(arg, "~") {
 		abs, err := filepath.Abs(home.Expand(arg))
 		if err == nil {
-			if e := ix.ByPath(abs); e != nil && e.Error == "" {
+			if e := ix.ByPath(abs); e != nil && e.Error == "" && (kind == "" || e.Kind == kind) {
 				return e, nil
 			}
 		}
@@ -702,7 +515,7 @@ func (ix *Index) Find(arg string) (*Entry, error) {
 	var byName []*Entry
 	for i := range ix.Entries {
 		e := &ix.Entries[i]
-		if e.Error != "" {
+		if e.Error != "" || (kind != "" && e.Kind != kind) {
 			continue
 		}
 		if strings.EqualFold(e.Name, arg) {
@@ -717,12 +530,12 @@ func (ix *Index) Find(arg string) (*Entry, error) {
 		for _, e := range byName {
 			paths = append(paths, e.Path)
 		}
-		return nil, fmt.Errorf("%w: %s is the name of %d vaults (%s); use the path or the id", ErrAmbiguous, arg, len(byName), strings.Join(paths, ", "))
+		return nil, fmt.Errorf("%w: %s is the name of %d entries (%s); use the path or the id", ErrAmbiguous, arg, len(byName), strings.Join(paths, ", "))
 	}
 	var byID []*Entry
 	for i := range ix.Entries {
 		e := &ix.Entries[i]
-		if e.Error != "" {
+		if e.Error != "" || (kind != "" && e.Kind != kind) {
 			continue
 		}
 		if e.ID == arg || (len(arg) >= 8 && strings.HasPrefix(e.ID, arg)) {
@@ -737,60 +550,80 @@ func (ix *Index) Find(arg string) (*Entry, error) {
 		for _, e := range byID {
 			paths = append(paths, e.Path)
 		}
-		return nil, fmt.Errorf("%w: %s is the id of %d vaults (%s); use the full id", ErrAmbiguous, arg, len(byID), strings.Join(paths, ", "))
+		return nil, fmt.Errorf("%w: %s is the id of %d entries (%s); use the full id", ErrAmbiguous, arg, len(byID), strings.Join(paths, ", "))
 	}
-	return nil, fmt.Errorf("%w: %s", ErrNotFound, arg)
+	what := "vault or project"
+	if kind != "" {
+		what = kind.Noun()
+	}
+	return nil, fmt.Errorf("%w: no %s named %s", ErrNotFound, what, arg)
 }
 
-// Projects lists the valid entries whose kind is project.
+// Projects lists the valid project entries.
 func (ix *Index) Projects() []Entry {
 	var out []Entry
 	for _, e := range ix.Entries {
-		if e.Error == "" && e.Kind == vault.Project {
+		if e.Error == "" && e.Kind == Project {
 			out = append(out, e)
 		}
 	}
 	return out
 }
 
-// Knowledge lists the valid entries whose kind is knowledge.
+// Knowledge lists the valid knowledge base entries.
 func (ix *Index) Knowledge() []Entry {
 	var out []Entry
 	for _, e := range ix.Entries {
-		if e.Error == "" && e.Kind == vault.Knowledge {
+		if e.Error == "" && e.Kind == Knowledge {
 			out = append(out, e)
 		}
 	}
 	return out
 }
 
-// Rel is the entry's place in the view: projects/<first tag>/<name> or projects/<name>
-// for a project, knowledge/<name> for a knowledge base, problems/<folder> for a vault the
-// atlas could not read.
+// ProjectsOf lists the valid projects that use the knowledge base with id.
+func (ix *Index) ProjectsOf(id string) []Entry {
+	var out []Entry
+	for _, e := range ix.Projects() {
+		if e.Knowledge != nil && e.Knowledge.ID == id && e.Knowledge.Error == "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// Rel is the entry's place in the view: knowledge/<name> for a knowledge base,
+// projects/<knowledge base>/<name> or projects/<name> for a project, problems/<folder>
+// for an entry the atlas could not read.
 func (e Entry) Rel() string {
 	if e.Error != "" {
 		return "problems/" + filepath.Base(e.Path)
 	}
-	if e.Kind == vault.Knowledge {
+	if e.Kind == Knowledge {
 		return "knowledge/" + e.Name
 	}
-	if len(e.Tags) > 0 {
-		return "projects/" + e.Tags[0] + "/" + e.Name
+	if e.Knowledge != nil && e.Knowledge.Error == "" {
+		return "projects/" + e.Knowledge.Name + "/" + e.Name
 	}
 	return "projects/" + e.Name
 }
 
-// Wiki is the entry's wiki folder.
+// Wiki is a knowledge base's wiki folder.
 func (e Entry) Wiki() string { return filepath.Join(e.Path, vault.WikiDir) }
 
-// RepoDir is where a repository of that name sits by default.
-func (e Entry) RepoDir(name string) string { return filepath.Join(e.Path, vault.ReposDir, name) }
+// Atlas is a project's atlas/ folder.
+func (e Entry) Atlas() string { return filepath.Join(e.Path, project.Dir) }
 
-// KbDir is where a project holds a knowledge base it mounts under that name.
-func (e Entry) KbDir(name string) string { return filepath.Join(e.Path, vault.KbDir, name) }
+// KnowledgePath is the root of the knowledge base a project uses, or "".
+func (e Entry) KnowledgePath() string {
+	if e.Knowledge == nil || e.Knowledge.Error != "" {
+		return ""
+	}
+	return e.Knowledge.Path
+}
 
 // StateSchema is the schema the registry state file declares.
-const StateSchema = "claude-atlas.registry.v1"
+const StateSchema = "claude-atlas.registry.v2"
 
 // registryFile is the on-disk shape of the state file.
 type registryFile struct {

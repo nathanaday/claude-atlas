@@ -45,7 +45,7 @@ func TestStagePlansOnlyNewFiles(t *testing.T) {
 	}
 
 	// After ingest (capture) and inbox removal, unchanged files still count as known.
-	if _, err := Capture(v, []string{"inbox/Papers/a.pdf"}, now); err != nil {
+	if _, err := Capture(v, []string{"inbox/Papers/a.pdf"}, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	os.Remove(v.Path("inbox/Papers/a.pdf"))

@@ -46,7 +46,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestConfigV2FieldsAndV1Upgrade(t *testing.T) {
+func TestConfigV3FieldsAndOlderConfigsUpgrade(t *testing.T) {
 	h := Home{Root: t.TempDir()}
 	cfg := h.Default("~/Vaults")
 	cfg.Schema = ConfigSchemaV1
@@ -55,12 +55,14 @@ func TestConfigV2FieldsAndV1Upgrade(t *testing.T) {
 	}
 	loaded, err := h.Load()
 	if err != nil || loaded.Schema != ConfigSchema {
-		t.Fatalf("v1 config loads as v2: %+v %v", loaded, err)
+		t.Fatalf("v1 config loads as v3: %+v %v", loaded, err)
 	}
-	if !loaded.AddVault("~/Elsewhere/side") || loaded.AddVault("~/Elsewhere/side") {
-		t.Fatal("AddVault dedupes")
+	if !loaded.AddKnowledge("~/Elsewhere/side") || loaded.AddKnowledge("~/Elsewhere/side") {
+		t.Fatal("AddKnowledge dedupes")
 	}
-	loaded.SetRepoPath("id-1", "paper", "~/Code/paper")
+	if !loaded.AddProject("~/Code/webapp") || loaded.AddProject("~/Code/webapp") {
+		t.Fatal("AddProject dedupes")
+	}
 	if err := h.Save(loaded); err != nil {
 		t.Fatal(err)
 	}
@@ -68,19 +70,60 @@ func TestConfigV2FieldsAndV1Upgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(again.Vaults) != 1 || again.Vaults[0] != Expand("~/Elsewhere/side") || again.RepoPath("id-1", "paper") != Expand("~/Code/paper") || again.RepoPath("id-1", "nope") != "" {
-		t.Fatalf("v2 fields %+v", again)
+	if len(again.Knowledge) != 1 || again.Knowledge[0] != Expand("~/Elsewhere/side") || len(again.Projects) != 1 || again.Projects[0] != Expand("~/Code/webapp") {
+		t.Fatalf("v3 fields %+v", again)
 	}
-	if !again.Inside(filepath.Join(again.VaultsDir, "projects", "x")) || again.Inside(again.Vaults[0]) {
+	if !again.HasProject("~/Code/webapp") || again.HasProject("~/Code/other") {
+		t.Fatal("HasProject")
+	}
+	if !again.Inside(filepath.Join(again.VaultsDir, "x")) || again.Inside(again.Knowledge[0]) {
 		t.Fatal("Inside")
 	}
-	again.SetRepoPath("id-1", "paper", "")
-	if !again.RemoveVault(again.Vaults[0]) || len(again.Repos) != 0 || len(again.Vaults) != 0 {
-		t.Fatalf("removal %+v", again)
+	if !again.RemoveKnowledge(again.Knowledge[0]) || again.RemoveKnowledge("~/nope") || len(again.Knowledge) != 0 {
+		t.Fatalf("knowledge removal %+v", again)
+	}
+	if !again.RemoveProject("~/Code/webapp") || again.RemoveProject("~/Code/webapp") || len(again.Projects) != 0 {
+		t.Fatalf("project removal %+v", again)
 	}
 	data, _ := os.ReadFile(h.ConfigPath())
-	if !strings.Contains(string(data), `"schema": "claude-atlas.config.v2"`) {
+	if !strings.Contains(string(data), `"schema": "claude-atlas.config.v3"`) {
 		t.Fatalf("saved schema:\n%s", data)
+	}
+}
+
+func TestV2ConfigVaultsBecomeKnowledge(t *testing.T) {
+	h := Home{Root: t.TempDir()}
+	if err := os.MkdirAll(h.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v2 := `{
+  "schema": "claude-atlas.config.v2",
+  "vaults_dir": "~/Vaults",
+  "vaults": ["~/Elsewhere/kb"],
+  "repos": {"id/paper": "~/Code/paper"},
+  "default_repo_changes": "pr",
+  "plugin": {"id": "claude-atlas@x", "source": "x"},
+  "claude_code": {"command": "claude", "session_context": true}
+}
+`
+	if err := os.WriteFile(h.ConfigPath(), []byte(v2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := h.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Schema != ConfigSchema || len(cfg.Knowledge) != 1 || cfg.Knowledge[0] != Expand("~/Elsewhere/kb") || len(cfg.Projects) != 0 {
+		t.Fatalf("v2 vaults become knowledge bases: %+v", cfg)
+	}
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(h.ConfigPath())
+	for _, gone := range []string{"repos", "default_repo_changes", `"vaults"`} {
+		if strings.Contains(string(data), gone) {
+			t.Fatalf("%s should not survive a save:\n%s", gone, data)
+		}
 	}
 }
 
@@ -91,45 +134,5 @@ func TestDisplayAndExpand(t *testing.T) {
 	}
 	if Expand("~/x") != filepath.Join(userHome, "x") || Expand("/abs") != "/abs" {
 		t.Fatal("expand wrong")
-	}
-}
-
-func TestDefaultChanges(t *testing.T) {
-	h := Home{Root: t.TempDir()}
-	cfg := h.Default("~/Vaults")
-	if cfg.DefaultChanges() != "commit" {
-		t.Fatalf("a fresh config defaults to commit, got %q", cfg.DefaultChanges())
-	}
-	var old Config
-	if old.DefaultChanges() != "commit" {
-		t.Fatalf("a config written before the section defaults to commit, got %q", old.DefaultChanges())
-	}
-	if err := cfg.SetDefaultChanges("pr"); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Save(cfg); err != nil {
-		t.Fatal(err)
-	}
-	back, err := h.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if back.DefaultChanges() != "pr" {
-		t.Fatalf("pr should round-trip, got %q", back.DefaultChanges())
-	}
-	if err := cfg.SetDefaultChanges("merge"); err == nil {
-		t.Fatal("only commit and pr are policies")
-	}
-}
-
-func TestLoadRefusesUnknownDefaultChanges(t *testing.T) {
-	h := Home{Root: t.TempDir()}
-	cfg := h.Default("~/Vaults")
-	cfg.DefaultRepoChanges = "merge"
-	if err := h.Save(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.Load(); err == nil {
-		t.Fatal("a config naming an unknown policy should not load")
 	}
 }

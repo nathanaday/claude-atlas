@@ -1,12 +1,13 @@
-// Package tasks is the task model: task pages under wiki/tasks/, the ledger the core
-// derives from them, and the index it renders. It validates pages; it never decides to
-// write one. The transaction layer calls it before and after an operation.
+// Package tasks is the task model of a project: task pages under atlas/tasks/, phase
+// pages under atlas/phases/, and the index the core renders from them. There is no
+// engine on the project side, so this package writes the pages itself: every write
+// validates the page and regenerates the index. The body of a task page is prose the
+// model and the user edit directly; only the frontmatter changes through here.
 package tasks
 
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,16 +15,17 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 const (
-	Schema = "claude-atlas.task-ledger.v1"
-	// StaleDays is how long an active task may go without an operation before it counts
-	// as stale.
+	// StaleDays is how long an active task may go without an update before it counts as
+	// stale.
 	StaleDays = 14
 	// MaxTitle bounds a title derived from a note.
 	MaxTitle = 80
@@ -56,57 +58,69 @@ func contains(list []string, s string) bool {
 // Terminal reports whether a status ends a task.
 func Terminal(status string) bool { return status == "done" || status == "cancelled" }
 
-// IsPage reports whether a vault-relative path is a task page: a markdown file directly
-// under wiki/tasks/ or wiki/tasks/archive/, other than the index at its current or old path.
+// IsPage reports whether an atlas-relative path is a task page: a markdown file directly
+// under tasks/ or tasks/archive/, other than the index.
 func IsPage(p string) bool {
-	if !strings.HasSuffix(strings.ToLower(p), ".md") || p == vault.TasksIndex || p == vault.LegacyTasksIndex {
+	if !strings.HasSuffix(strings.ToLower(p), ".md") || p == project.TasksIndex {
 		return false
 	}
 	dir := path.Dir(p)
-	return dir == vault.TasksDir || dir == vault.TaskArchiveDir
+	return dir == project.TasksDir || dir == project.ArchiveDir
+}
+
+// IsPhasePage reports whether an atlas-relative path is a phase page.
+func IsPhasePage(p string) bool {
+	return strings.HasSuffix(strings.ToLower(p), ".md") && path.Dir(p) == project.PhasesDir
 }
 
 // Task is what a task page's frontmatter says.
 type Task struct {
 	ID       string `json:"id"`
-	Path     string `json:"path"`
+	Path     string `json:"path"` // atlas-relative
 	Title    string `json:"title"`
 	Status   string `json:"status"`
 	Priority string `json:"priority"`
+	Phase    string `json:"phase,omitempty"`
 	Due      string `json:"due,omitempty"`
-	Workdir  string `json:"workdir,omitempty"`
-	// Repos names every repository of the project the task changes.
-	Repos   []string `json:"repos,omitempty"`
-	Created string   `json:"created"`
-	Updated string   `json:"updated"`
+	Created  string `json:"created"`
+	Updated  string `json:"updated"`
 	// HasPlan says whether the page has a Plan section with content.
 	HasPlan bool `json:"has_plan"`
+}
+
+// Phase is what a phase page's frontmatter says: a named slice of the timeline.
+type Phase struct {
+	Path    string `json:"path"` // atlas-relative
+	Title   string `json:"title"`
+	Order   int    `json:"order"`
+	Created string `json:"created"`
+	Updated string `json:"updated"`
 }
 
 // Parse reads a task page and checks the rules the core enforces: the type, the
 // status, the priority, the id, the dates, and the folder matching the status.
 func Parse(p string, content []byte) (*Task, error) {
 	if !IsPage(p) {
-		return nil, fmt.Errorf("%s: task pages sit directly in %s/ or %s/", p, vault.TasksDir, vault.TaskArchiveDir)
+		return nil, fmt.Errorf("%s: task pages sit directly in %s/ or %s/", p, project.TasksDir, project.ArchiveDir)
 	}
 	fields, body, err := vault.Frontmatter(string(content))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", p, err)
 	}
 	if fields == nil {
-		return nil, fmt.Errorf("%s has no frontmatter", p)
-	}
-	if missing := vault.MissingFrontmatter(fields); len(missing) > 0 {
-		return nil, fmt.Errorf("%s frontmatter lacks %s", p, strings.Join(missing, ", "))
+		return nil, fmt.Errorf("%s: no frontmatter", p)
 	}
 	t := &Task{
-		Path: p, ID: vault.StringField(fields, "task_id"), Title: vault.StringField(fields, "title"),
+		Path: p, ID: vault.StringField(fields, "task_id"), Title: strings.TrimSpace(vault.StringField(fields, "title")),
 		Status: vault.StringField(fields, "status"), Priority: vault.StringField(fields, "priority"),
-		Due: dateField(fields, "due"), Workdir: vault.StringField(fields, "workdir"),
+		Phase: strings.TrimSpace(vault.StringField(fields, "phase")), Due: dateField(fields, "due"),
 		Created: dateField(fields, "created"), Updated: dateField(fields, "updated"),
 	}
 	if vault.StringField(fields, "type") != "task" {
-		return nil, fmt.Errorf("%s: a page under %s/ needs `type: task`", p, vault.TasksDir)
+		return nil, fmt.Errorf("%s: a page under %s/ needs `type: task`", p, project.TasksDir)
+	}
+	if t.Title == "" {
+		t.Title = vault.PageTitle(p)
 	}
 	if !contains(Statuses, t.Status) {
 		return nil, fmt.Errorf("%s: status must be one of %s", p, strings.Join(Statuses, ", "))
@@ -118,7 +132,7 @@ func Parse(p string, content []byte) (*Task, error) {
 		return nil, fmt.Errorf("%s: priority must be one of %s", p, strings.Join(Priorities, ", "))
 	}
 	if !idPattern.MatchString(t.ID) {
-		return nil, fmt.Errorf("%s: task_id must look like task-20260913-3f2a; the route tool gives one", p)
+		return nil, fmt.Errorf("%s: task_id must look like task-20260913-3f2a", p)
 	}
 	for _, kv := range []struct{ k, v string }{{"created", t.Created}, {"updated", t.Updated}} {
 		if !datePattern.MatchString(kv.v) {
@@ -128,20 +142,52 @@ func Parse(p string, content []byte) (*Task, error) {
 	if t.Due != "" && !datePattern.MatchString(t.Due) {
 		return nil, fmt.Errorf("%s: due must be empty or a date like 2026-09-13", p)
 	}
-	repos, ok := repoList(fields["repos"])
-	if !ok {
-		return nil, fmt.Errorf("%s: repos must be a list of repository names", p)
-	}
-	t.Repos = repos
-	archived := path.Dir(p) == vault.TaskArchiveDir
+	archived := path.Dir(p) == project.ArchiveDir
 	switch {
 	case Terminal(t.Status) && !archived:
-		return nil, fmt.Errorf("%s: a %s task moves to %s/ (delete this path and create it there in the same plan)", p, t.Status, vault.TaskArchiveDir)
+		return nil, fmt.Errorf("%s: a %s task belongs in %s/; set the status again with the task tool to move it", p, t.Status, project.ArchiveDir)
 	case !Terminal(t.Status) && archived:
-		return nil, fmt.Errorf("%s: an archived task is done or cancelled; a %s task sits in %s/", p, t.Status, vault.TasksDir)
+		return nil, fmt.Errorf("%s: an archived task is done or cancelled; a %s task belongs in %s/", p, t.Status, project.TasksDir)
 	}
 	t.HasPlan = hasPlan(body)
 	return t, nil
+}
+
+// ParsePhase reads a phase page.
+func ParsePhase(p string, content []byte) (*Phase, error) {
+	if !IsPhasePage(p) {
+		return nil, fmt.Errorf("%s: phase pages sit directly in %s/", p, project.PhasesDir)
+	}
+	fields, _, err := vault.Frontmatter(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", p, err)
+	}
+	if fields == nil {
+		return nil, fmt.Errorf("%s: no frontmatter", p)
+	}
+	if vault.StringField(fields, "type") != "phase" {
+		return nil, fmt.Errorf("%s: a page under %s/ needs `type: phase`", p, project.PhasesDir)
+	}
+	ph := &Phase{Path: p, Title: strings.TrimSpace(vault.StringField(fields, "title")), Created: dateField(fields, "created"), Updated: dateField(fields, "updated")}
+	if ph.Title == "" {
+		ph.Title = vault.PageTitle(p)
+	}
+	switch v := fields["order"].(type) {
+	case int:
+		ph.Order = v
+	case float64:
+		ph.Order = int(v)
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return nil, fmt.Errorf("%s: order must be a whole number", p)
+		}
+		ph.Order = n
+	case nil:
+	default:
+		return nil, fmt.Errorf("%s: order must be a whole number", p)
+	}
+	return ph, nil
 }
 
 // dateField reads a date property; YAML parses an unquoted date as a time.
@@ -150,30 +196,6 @@ func dateField(fields map[string]any, key string) string {
 		return t.Format("2006-01-02")
 	}
 	return strings.TrimSpace(vault.StringField(fields, key))
-}
-
-// repoList reads the repos property: absent or empty, a list of names, or one name.
-func repoList(v any) ([]string, bool) {
-	switch v := v.(type) {
-	case nil:
-		return nil, true
-	case string:
-		if strings.TrimSpace(v) == "" {
-			return nil, true
-		}
-		return []string{strings.TrimSpace(v)}, true
-	case []any:
-		var out []string
-		for _, item := range v {
-			s, ok := item.(string)
-			if !ok || strings.TrimSpace(s) == "" {
-				return nil, false
-			}
-			out = append(out, strings.TrimSpace(s))
-		}
-		return out, true
-	}
-	return nil, false
 }
 
 // hasPlan reports whether a "## Plan" section holds anything but whitespace.
@@ -196,18 +218,332 @@ func NewID(now time.Time) string {
 	return fmt.Sprintf("task-%s-%s", now.Format("20060102"), hex.EncodeToString(b[:]))
 }
 
+// Problem is a page under tasks/ or phases/ that is not valid.
+type Problem struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+// Board is every task and phase of a project, as the pages are now.
+type Board struct {
+	Tasks    []Task    `json:"tasks"`
+	Phases   []Phase   `json:"phases"`
+	Problems []Problem `json:"problems,omitempty"`
+}
+
+// Load reads every task and phase page of the project. A page it cannot parse is a
+// Problem, not an error; only an unreadable folder fails.
+func Load(p *project.Project) (*Board, error) {
+	b := &Board{Tasks: []Task{}, Phases: []Phase{}}
+	seen := map[string]string{}
+	for _, dir := range []string{project.TasksDir, project.ArchiveDir} {
+		files, err := pages(p, dir)
+		if err != nil {
+			return nil, err
+		}
+		for _, rel := range files {
+			if !IsPage(rel) {
+				continue
+			}
+			data, err := os.ReadFile(p.Path(rel))
+			if err != nil {
+				return nil, err
+			}
+			t, err := Parse(rel, data)
+			if err != nil {
+				b.Problems = append(b.Problems, Problem{Path: rel, Reason: strings.TrimPrefix(err.Error(), rel+": ")})
+				continue
+			}
+			if other, dup := seen[t.ID]; dup {
+				b.Problems = append(b.Problems, Problem{Path: rel, Reason: fmt.Sprintf("task_id %s is also used by %s", t.ID, other)})
+				continue
+			}
+			seen[t.ID] = rel
+			b.Tasks = append(b.Tasks, *t)
+		}
+	}
+	files, err := pages(p, project.PhasesDir)
+	if err != nil {
+		return nil, err
+	}
+	titles := map[string]string{}
+	for _, rel := range files {
+		data, err := os.ReadFile(p.Path(rel))
+		if err != nil {
+			return nil, err
+		}
+		ph, err := ParsePhase(rel, data)
+		if err != nil {
+			b.Problems = append(b.Problems, Problem{Path: rel, Reason: strings.TrimPrefix(err.Error(), rel+": ")})
+			continue
+		}
+		key := strings.ToLower(ph.Title)
+		if other, dup := titles[key]; dup {
+			b.Problems = append(b.Problems, Problem{Path: rel, Reason: fmt.Sprintf("phase %q is also the title of %s", ph.Title, other)})
+			continue
+		}
+		titles[key] = rel
+		b.Phases = append(b.Phases, *ph)
+	}
+	sort.SliceStable(b.Phases, func(i, j int) bool { return phaseLess(b.Phases[i], b.Phases[j]) })
+	for _, t := range b.Tasks {
+		if t.Phase != "" && b.Phase(t.Phase) == nil {
+			b.Problems = append(b.Problems, Problem{Path: t.Path, Reason: fmt.Sprintf("phase %q has no page under %s/", t.Phase, project.PhasesDir)})
+		}
+	}
+	return b, nil
+}
+
+// pages lists the markdown files directly under an atlas-relative folder, sorted.
+func pages(p *project.Project, dir string) ([]string, error) {
+	entries, err := os.ReadDir(p.Path(dir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(strings.ToLower(name), ".md") {
+			continue
+		}
+		out = append(out, dir+"/"+name)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func phaseLess(a, b Phase) bool {
+	if a.Order != b.Order {
+		return a.Order < b.Order
+	}
+	return strings.ToLower(a.Title) < strings.ToLower(b.Title)
+}
+
+// Less orders tasks for the index and the screens: status, then priority, then age.
+func Less(a, b Task) bool {
+	if statusOrder[a.Status] != statusOrder[b.Status] {
+		return statusOrder[a.Status] < statusOrder[b.Status]
+	}
+	if priorityOrder[a.Priority] != priorityOrder[b.Priority] {
+		return priorityOrder[a.Priority] < priorityOrder[b.Priority]
+	}
+	if a.Created != b.Created {
+		return a.Created < b.Created
+	}
+	return a.Title < b.Title
+}
+
+// Open lists the tasks that are not finished, in index order.
+func (b *Board) Open() []Task {
+	var out []Task
+	for _, t := range b.Tasks {
+		if !Terminal(t.Status) {
+			out = append(out, t)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return Less(out[i], out[j]) })
+	return out
+}
+
+// Archived lists the finished tasks, newest update first.
+func (b *Board) Archived() []Task {
+	var out []Task
+	for _, t := range b.Tasks {
+		if Terminal(t.Status) {
+			out = append(out, t)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Updated != out[j].Updated {
+			return out[i].Updated > out[j].Updated
+		}
+		return out[i].Title < out[j].Title
+	})
+	return out
+}
+
+// Find returns the task with an id, or nil.
+func (b *Board) Find(id string) *Task {
+	for i := range b.Tasks {
+		if b.Tasks[i].ID == id {
+			return &b.Tasks[i]
+		}
+	}
+	return nil
+}
+
+// FindByTitle returns the task whose title matches, without regard to case, or nil.
+func (b *Board) FindByTitle(title string) *Task {
+	for i := range b.Tasks {
+		if strings.EqualFold(b.Tasks[i].Title, title) {
+			return &b.Tasks[i]
+		}
+	}
+	return nil
+}
+
+// Phase returns the phase whose title matches, without regard to case, or nil.
+func (b *Board) Phase(title string) *Phase {
+	for i := range b.Phases {
+		if strings.EqualFold(b.Phases[i].Title, title) {
+			return &b.Phases[i]
+		}
+	}
+	return nil
+}
+
+// In lists the open tasks that name a phase, in index order.
+func (b *Board) In(phase string) []Task {
+	var out []Task
+	for _, t := range b.Open() {
+		if strings.EqualFold(t.Phase, phase) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// Unphased lists the open tasks that name no phase, in index order.
+func (b *Board) Unphased() []Task {
+	var out []Task
+	for _, t := range b.Open() {
+		if t.Phase == "" || b.Phase(t.Phase) == nil {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// Finished reports whether a phase is done: it has at least one task and every task in
+// it is finished. A phase has no status of its own.
+func (b *Board) Finished(phase string) bool {
+	any := false
+	for _, t := range b.Tasks {
+		if !strings.EqualFold(t.Phase, phase) {
+			continue
+		}
+		any = true
+		if !Terminal(t.Status) {
+			return false
+		}
+	}
+	return any
+}
+
+// lastFinished is the newest update among a phase's finished tasks.
+func (b *Board) lastFinished(phase string) string {
+	last := ""
+	for _, t := range b.Tasks {
+		if strings.EqualFold(t.Phase, phase) && Terminal(t.Status) && t.Updated > last {
+			last = t.Updated
+		}
+	}
+	return last
+}
+
+// Stale reports an active task with no update for StaleDays.
+func Stale(t Task, today time.Time) bool {
+	if t.Status != "active" {
+		return false
+	}
+	u, err := time.ParseInLocation("2006-01-02", t.Updated, time.Local)
+	if err != nil {
+		return false
+	}
+	return today.Sub(u).Hours()/24 >= StaleDays
+}
+
+// Counts summarizes a board.
+type Counts struct {
+	Open      int `json:"open"`
+	Planted   int `json:"planted"`
+	Planned   int `json:"planned"`
+	Active    int `json:"active"`
+	Blocked   int `json:"blocked"`
+	Done      int `json:"done"`
+	Cancelled int `json:"cancelled"`
+	Stale     int `json:"stale"`
+	// Notes counts task notes waiting in inbox/.
+	Notes int `json:"notes"`
+	// Phases counts the phases that still hold an open task.
+	Phases int `json:"phases"`
+}
+
+// Counts summarizes the board as of today. Notes is the caller's to fill.
+func (b *Board) Counts(today time.Time) Counts {
+	var c Counts
+	for _, t := range b.Tasks {
+		switch t.Status {
+		case "planted":
+			c.Planted++
+		case "planned":
+			c.Planned++
+		case "active":
+			c.Active++
+		case "blocked":
+			c.Blocked++
+		case "done":
+			c.Done++
+		case "cancelled":
+			c.Cancelled++
+		}
+		if !Terminal(t.Status) {
+			c.Open++
+		}
+		if Stale(t, today) {
+			c.Stale++
+		}
+	}
+	for _, ph := range b.Phases {
+		if len(b.In(ph.Title)) > 0 {
+			c.Phases++
+		}
+	}
+	return c
+}
+
+// Notes lists the task notes waiting in inbox/, atlas-relative.
+func Notes(p *project.Project) []string {
+	var out []string
+	root := p.Path(project.InboxDir)
+	filepath.WalkDir(root, func(q string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") && q != root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), ".") || !d.Type().IsRegular() {
+			return nil
+		}
+		rel, _ := filepath.Rel(p.Atlas(), q)
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
 // Plant is what a planted task starts from.
 type Plant struct {
-	Title    string   `json:"title"`
-	Text     string   `json:"text"`
-	Priority string   `json:"priority,omitempty"`
-	Workdir  string   `json:"workdir,omitempty"`
-	Due      string   `json:"due,omitempty"`
-	Repos    []string `json:"repos,omitempty"`
+	Title    string `json:"title"`
+	Text     string `json:"text"`
+	Priority string `json:"priority,omitempty"`
+	Phase    string `json:"phase,omitempty"`
+	Due      string `json:"due,omitempty"`
 	// Plan is the Plan section's text; with it the task is planned, not planted.
 	Plan string `json:"plan,omitempty"`
 	// Start makes a planned task active, with a first Progress line.
 	Start bool `json:"start,omitempty"`
+	// From is the inbox note the task came from, atlas-relative; it is removed once the
+	// page exists.
+	From string `json:"from,omitempty"`
 }
 
 // Status is the status a plant gives the page.
@@ -254,17 +590,8 @@ func Skeleton(p Plant, id string, now time.Time) string {
 	}
 	date := now.Format("2006-01-02")
 	var b strings.Builder
-	fmt.Fprintf(&b, "---\ntype: task\ntitle: %q\nstatus: %s\npriority: %s\ncreated: %s\nupdated: %s\ntags:\n  - task\ntask_id: %s\ndue: %q\nworkdir: %q\n",
-		p.Title, p.Status(), priority, date, date, id, p.Due, p.Workdir)
-	if len(p.Repos) == 0 {
-		b.WriteString("repos: []\n")
-	} else {
-		b.WriteString("repos:\n")
-		for _, r := range p.Repos {
-			fmt.Fprintf(&b, "  - %q\n", r)
-		}
-	}
-	fmt.Fprintf(&b, "---\n\n# %s\n\n## Idea\n\n", p.Title)
+	fmt.Fprintf(&b, "---\ntype: task\ntitle: %q\nstatus: %s\npriority: %s\nphase: %q\ndue: %q\ncreated: %s\nupdated: %s\ntask_id: %s\n---\n\n# %s\n\n## Idea\n\n",
+		p.Title, p.Status(), priority, p.Phase, p.Due, date, date, id, p.Title)
 	text := strings.TrimSpace(p.Text)
 	if text == "" {
 		text = p.Title
@@ -279,392 +606,465 @@ func Skeleton(p Plant, id string, now time.Time) string {
 	return b.String()
 }
 
+// PhaseSkeleton renders a phase page.
+func PhaseSkeleton(title, goal string, order int, now time.Time) string {
+	date := now.Format("2006-01-02")
+	goal = strings.TrimSpace(goal)
+	if goal == "" {
+		goal = "What this phase delivers, and how you will know it is done."
+	}
+	return fmt.Sprintf("---\ntype: phase\ntitle: %q\norder: %d\ncreated: %s\nupdated: %s\n---\n\n# %s\n\n## Goal\n\n%s\n", title, order, date, date, title, goal)
+}
+
 // PagePath is where a new open task titled title goes; taken says whether a path is used.
 func PagePath(title string, taken func(string) bool) string {
 	stem := vault.SanitizeTitle(title)
-	candidate := vault.TasksDir + "/" + stem + ".md"
-	reserved := func(p string) bool {
-		return strings.EqualFold(p, vault.TasksIndex) || strings.EqualFold(p, vault.LegacyTasksIndex)
-	}
-	for n := 2; reserved(candidate) || taken(candidate) || taken(vault.TaskArchiveDir+"/"+path.Base(candidate)); n++ {
-		candidate = fmt.Sprintf("%s/%s (%d).md", vault.TasksDir, stem, n)
+	candidate := project.TasksDir + "/" + stem + ".md"
+	for n := 2; strings.EqualFold(candidate, project.TasksIndex) || taken(candidate) || taken(project.ArchiveDir+"/"+path.Base(candidate)); n++ {
+		candidate = fmt.Sprintf("%s/%s (%d).md", project.TasksDir, stem, n)
 	}
 	return candidate
 }
 
-// Touch is one operation that changed a task page.
-type Touch struct {
-	OperationID string `json:"operation_id"`
-	Date        string `json:"date"`
-	Summary     string `json:"summary"`
+func exists(p *project.Project, rel string) bool {
+	_, err := os.Stat(p.Path(rel))
+	return err == nil
 }
 
-// Record is one task in the ledger: the page's facts and the operations behind it.
-type Record struct {
-	Task
-	LastTouched string  `json:"last_touched"`
-	History     []Touch `json:"history"`
-}
-
-// Problem is a page under wiki/tasks/ that is not a valid task.
-type Problem struct {
-	Path   string `json:"path"`
-	Reason string `json:"reason"`
-}
-
-// Ledger is the derived view of every task page.
-type Ledger struct {
-	Schema   string    `json:"schema"`
-	Tasks    []Record  `json:"tasks"`
-	Problems []Problem `json:"problems,omitempty"`
-}
-
-// Empty is the ledger of a vault with no tasks.
-func Empty() Ledger { return Ledger{Schema: Schema, Tasks: []Record{}} }
-
-// Encode renders the ledger as it is stored.
-func (l Ledger) Encode() []byte {
-	if l.Tasks == nil {
-		l.Tasks = []Record{}
+// PlantTask writes a new task page from a plant, removes the note it came from, and
+// regenerates the index. The phase, when named, must have a page.
+func PlantTask(p *project.Project, plant Plant, now time.Time) (*Task, error) {
+	plant.Title = strings.TrimSpace(plant.Title)
+	if plant.Title == "" {
+		plant.Title = TitleFromText(plant.Text)
 	}
-	data, _ := json.MarshalIndent(l, "", "  ")
-	return append(data, '\n')
-}
-
-// LoadLedger reads the stored ledger; a missing file is the empty ledger.
-func LoadLedger(v *vault.Vault) (Ledger, error) {
-	data, err := os.ReadFile(v.Path(vault.TaskLedgerPath))
-	if errors.Is(err, os.ErrNotExist) {
-		return Empty(), nil
+	if plant.Title == "" {
+		return nil, errors.New("a task needs a title or some text")
 	}
+	if plant.Priority != "" && !contains(Priorities, plant.Priority) {
+		return nil, fmt.Errorf("priority must be one of %s", strings.Join(Priorities, ", "))
+	}
+	if plant.Due != "" && !datePattern.MatchString(plant.Due) {
+		return nil, errors.New("due must be a date like 2026-09-13")
+	}
+	if plant.Start && strings.TrimSpace(plant.Plan) == "" {
+		return nil, errors.New("start needs a plan; a task runs only once it is planned")
+	}
+	board, err := Load(p)
 	if err != nil {
-		return Ledger{}, err
+		return nil, err
 	}
-	var l Ledger
-	if err := json.Unmarshal(data, &l); err != nil {
-		return Ledger{}, fmt.Errorf("%s: %w", vault.TaskLedgerPath, err)
-	}
-	if l.Tasks == nil {
-		l.Tasks = []Record{}
-	}
-	return l, nil
-}
-
-// Find returns the record with an id.
-func (l Ledger) Find(id string) *Record {
-	for i := range l.Tasks {
-		if l.Tasks[i].ID == id {
-			return &l.Tasks[i]
+	plant.Phase = strings.TrimSpace(plant.Phase)
+	if plant.Phase != "" {
+		ph := board.Phase(plant.Phase)
+		if ph == nil {
+			return nil, fmt.Errorf("no phase named %q; create it with the phase tool first", plant.Phase)
 		}
+		plant.Phase = ph.Title
 	}
-	return nil
-}
-
-// FindByPath returns the record at a page path.
-func (l Ledger) FindByPath(p string) *Record {
-	for i := range l.Tasks {
-		if l.Tasks[i].Path == p {
-			return &l.Tasks[i]
+	if plant.From != "" {
+		rel := path.Clean(filepath.ToSlash(plant.From))
+		if !strings.HasPrefix(rel, project.InboxDir+"/") || !exists(p, rel) {
+			return nil, fmt.Errorf("%s is not a note under %s/", plant.From, project.InboxDir)
 		}
+		plant.From = rel
 	}
-	return nil
-}
-
-// Less orders tasks for the index and the screens: status, then priority, then age.
-func Less(a, b Record) bool {
-	if statusOrder[a.Status] != statusOrder[b.Status] {
-		return statusOrder[a.Status] < statusOrder[b.Status]
+	if err := p.EnsureFolders(); err != nil {
+		return nil, err
 	}
-	if priorityOrder[a.Priority] != priorityOrder[b.Priority] {
-		return priorityOrder[a.Priority] < priorityOrder[b.Priority]
+	rel := PagePath(plant.Title, func(r string) bool { return exists(p, r) })
+	id := NewID(now)
+	for board.Find(id) != nil {
+		id = NewID(now)
 	}
-	if a.Created != b.Created {
-		return a.Created < b.Created
+	if err := os.WriteFile(p.Path(rel), []byte(Skeleton(plant, id, now)), 0o644); err != nil {
+		return nil, err
 	}
-	return a.Title < b.Title
-}
-
-// Open lists the tasks that are not finished, in index order.
-func (l Ledger) Open() []Record {
-	var out []Record
-	for _, r := range l.Tasks {
-		if !Terminal(r.Status) {
-			out = append(out, r)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool { return Less(out[i], out[j]) })
-	return out
-}
-
-// Archived lists the finished tasks, newest touch first.
-func (l Ledger) Archived() []Record {
-	var out []Record
-	for _, r := range l.Tasks {
-		if Terminal(r.Status) {
-			out = append(out, r)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].LastTouched > out[j].LastTouched })
-	return out
-}
-
-// Stale reports an active task with no touch for StaleDays.
-func Stale(r Record, today time.Time) bool {
-	if r.Status != "active" {
-		return false
-	}
-	t, err := time.ParseInLocation("2006-01-02", r.LastTouched, time.Local)
-	if err != nil {
-		return false
-	}
-	return today.Sub(t).Hours()/24 >= StaleDays
-}
-
-// Counts summarizes a ledger.
-type Counts struct {
-	Open      int `json:"open"`
-	Planted   int `json:"planted"`
-	Planned   int `json:"planned"`
-	Active    int `json:"active"`
-	Blocked   int `json:"blocked"`
-	Done      int `json:"done"`
-	Cancelled int `json:"cancelled"`
-	Stale     int `json:"stale"`
-	// Notes counts task notes waiting in inbox/tasks/.
-	Notes int `json:"notes"`
-}
-
-func (l Ledger) Counts(today time.Time) Counts {
-	var c Counts
-	for _, r := range l.Tasks {
-		switch r.Status {
-		case "planted":
-			c.Planted++
-		case "planned":
-			c.Planned++
-		case "active":
-			c.Active++
-		case "blocked":
-			c.Blocked++
-		case "done":
-			c.Done++
-		case "cancelled":
-			c.Cancelled++
-		}
-		if !Terminal(r.Status) {
-			c.Open++
-		}
-		if Stale(r, today) {
-			c.Stale++
-		}
-	}
-	return c
-}
-
-// Notes lists the task notes waiting in inbox/tasks/, vault-relative.
-func Notes(v *vault.Vault) []string {
-	var out []string
-	filepath.WalkDir(v.Path(vault.InboxTasksDir), func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && p != v.Path(vault.InboxTasksDir) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasPrefix(d.Name(), ".") || !d.Type().IsRegular() {
-			return nil
-		}
-		rel, _ := filepath.Rel(v.Root, p)
-		out = append(out, filepath.ToSlash(rel))
-		return nil
-	})
-	sort.Strings(out)
-	return out
-}
-
-// pages reads every task page in the vault.
-func pages(v *vault.Vault) (map[string][]byte, error) {
-	out := map[string][]byte{}
-	for _, dir := range []string{vault.TasksDir, vault.TaskArchiveDir} {
-		entries, err := os.ReadDir(v.Path(dir))
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
+	if plant.From != "" {
+		if err := os.Remove(p.Path(plant.From)); err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
-		for _, entry := range entries {
-			rel := dir + "/" + entry.Name()
-			if entry.IsDir() || !IsPage(rel) || strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-			data, err := os.ReadFile(v.Path(rel))
-			if err != nil {
-				return nil, err
-			}
-			out[rel] = data
-		}
 	}
-	return out, nil
+	if _, err := WriteIndex(p, now); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(p.Path(rel))
+	if err != nil {
+		return nil, err
+	}
+	return Parse(rel, data)
 }
 
-// Build derives the ledger from the task pages. History carries over from the previous
-// ledger by task id; a page the previous ledger did not know gets its history from git.
-// pending, when given, is the operation about to commit, recorded on the tasks whose
-// paths are in touched.
-func Build(v *vault.Vault, prev Ledger, pending *Touch, touched []string, now time.Time) (Ledger, error) {
-	files, err := pages(v)
+// Changes is what Set may change on a task. A nil field is unchanged.
+type Changes struct {
+	Status   *string `json:"status,omitempty"`
+	Priority *string `json:"priority,omitempty"`
+	Phase    *string `json:"phase,omitempty"`
+	Due      *string `json:"due,omitempty"`
+}
+
+// Set changes a task's frontmatter and regenerates the index. A status that crosses
+// the line between open and finished moves the page between tasks/ and
+// tasks/archive/. The page's body is untouched; `updated` becomes today.
+func Set(p *project.Project, id string, ch Changes, now time.Time) (*Task, error) {
+	board, err := Load(p)
 	if err != nil {
-		return Ledger{}, err
+		return nil, err
 	}
-	l := Empty()
-	isTouched := map[string]bool{}
-	for _, p := range touched {
-		isTouched[p] = true
-	}
-	var paths []string
-	for p := range files {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	seen := map[string]string{}
-	for _, p := range paths {
-		t, err := Parse(p, files[p])
-		if err != nil {
-			l.Problems = append(l.Problems, Problem{Path: p, Reason: err.Error()})
-			continue
-		}
-		if other, dup := seen[t.ID]; dup {
-			l.Problems = append(l.Problems, Problem{Path: p, Reason: fmt.Sprintf("task_id %s is also used by %s", t.ID, other)})
-			continue
-		}
-		seen[t.ID] = p
-		rec := Record{Task: *t, History: []Touch{}}
-		if old := prev.Find(t.ID); old != nil {
-			rec.History = append(rec.History, old.History...)
+	t := board.Find(id)
+	if t == nil {
+		if byTitle := board.FindByTitle(id); byTitle != nil {
+			t = byTitle
 		} else {
-			rec.History = gitHistory(v, p)
+			return nil, fmt.Errorf("no task %s", id)
 		}
-		if pending != nil && isTouched[p] && (len(rec.History) == 0 || rec.History[len(rec.History)-1].OperationID != pending.OperationID) {
-			rec.History = append(rec.History, *pending)
-		}
-		rec.LastTouched = t.Updated
-		for _, h := range rec.History {
-			if h.Date > rec.LastTouched {
-				rec.LastTouched = h.Date
-			}
-		}
-		l.Tasks = append(l.Tasks, rec)
 	}
-	return l, nil
+	data, err := os.ReadFile(p.Path(t.Path))
+	if err != nil {
+		return nil, err
+	}
+	content := string(data)
+	if ch.Status != nil {
+		if !contains(Statuses, *ch.Status) {
+			return nil, fmt.Errorf("status must be one of %s", strings.Join(Statuses, ", "))
+		}
+		content = setField(content, "status", *ch.Status)
+	}
+	if ch.Priority != nil {
+		if !contains(Priorities, *ch.Priority) {
+			return nil, fmt.Errorf("priority must be one of %s", strings.Join(Priorities, ", "))
+		}
+		content = setField(content, "priority", *ch.Priority)
+	}
+	if ch.Phase != nil {
+		phase := strings.TrimSpace(*ch.Phase)
+		if phase != "" {
+			ph := board.Phase(phase)
+			if ph == nil {
+				return nil, fmt.Errorf("no phase named %q; create it with the phase tool first", phase)
+			}
+			phase = ph.Title
+		}
+		content = setField(content, "phase", strconv.Quote(phase))
+	}
+	if ch.Due != nil {
+		due := strings.TrimSpace(*ch.Due)
+		if due != "" && !datePattern.MatchString(due) {
+			return nil, errors.New("due must be empty or a date like 2026-09-13")
+		}
+		content = setField(content, "due", strconv.Quote(due))
+	}
+	content = setField(content, "updated", now.Format("2006-01-02"))
+	status := t.Status
+	if ch.Status != nil {
+		status = *ch.Status
+	}
+	dest := t.Path
+	base := path.Base(t.Path)
+	switch {
+	case Terminal(status) && path.Dir(t.Path) != project.ArchiveDir:
+		dest = uniquePath(p, project.ArchiveDir, base)
+	case !Terminal(status) && path.Dir(t.Path) != project.TasksDir:
+		dest = uniquePath(p, project.TasksDir, base)
+	}
+	if _, err := Parse(dest, []byte(content)); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(p.Path(dest)), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(p.Path(dest), []byte(content), 0o644); err != nil {
+		return nil, err
+	}
+	if dest != t.Path {
+		if err := os.Remove(p.Path(t.Path)); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := WriteIndex(p, now); err != nil {
+		return nil, err
+	}
+	return Parse(dest, []byte(content))
 }
 
-// gitHistory reads the operations that touched a page, oldest first.
-func gitHistory(v *vault.Vault, p string) []Touch {
-	commits, err := v.Repo().LogFollow(p)
-	if err != nil {
-		return []Touch{}
+// uniquePath is dir/base, or dir/base (n).md when that is taken.
+func uniquePath(p *project.Project, dir, base string) string {
+	stem := strings.TrimSuffix(base, path.Ext(base))
+	candidate := dir + "/" + base
+	for n := 2; exists(p, candidate); n++ {
+		candidate = fmt.Sprintf("%s/%s (%d).md", dir, stem, n)
 	}
-	out := []Touch{}
-	for i := len(commits) - 1; i >= 0; i-- {
-		c := commits[i]
-		id := c.Trailers["atlas-operation"]
-		if id == "" {
-			id = c.SHA[:min(7, len(c.SHA))]
-		}
-		out = append(out, Touch{OperationID: id, Date: c.Date.Local().Format("2006-01-02"), Summary: c.Subject})
-	}
-	return out
+	return candidate
 }
 
-// Current is the ledger as the pages are now: the stored one when it still matches
-// them, else a fresh build that is not written. Reads are always right; the file
-// catches up at the next task operation.
-func Current(v *vault.Vault, now time.Time) (Ledger, error) {
-	stored, err := LoadLedger(v)
-	if err != nil {
-		return Ledger{}, err
+var frontLine = regexp.MustCompile(`(?m)^([A-Za-z_][A-Za-z0-9_]*):[^\n]*$`)
+
+// setField replaces a scalar frontmatter line, or adds one before the closing fence, and
+// leaves every other line as it is. value is written as given.
+func setField(content, key, value string) string {
+	front, body, ok, err := vault.SplitFrontmatter(content)
+	if !ok || err != nil {
+		return content
 	}
-	files, err := pages(v)
-	if err != nil {
-		return Ledger{}, err
-	}
-	fresh := len(files) == len(stored.Tasks)+len(stored.Problems)
-	if fresh {
-		for _, r := range stored.Tasks {
-			data, ok := files[r.Path]
-			if !ok {
-				fresh = false
-				break
-			}
-			t, err := Parse(r.Path, data)
-			if err != nil || t.Status != r.Status || t.Updated != r.Updated || t.Title != r.Title || t.Priority != r.Priority {
-				fresh = false
-				break
-			}
+	lines := strings.Split(strings.TrimRight(front, "\n"), "\n")
+	done := false
+	for i, line := range lines {
+		if m := frontLine.FindStringSubmatch(line); m != nil && m[1] == key {
+			lines[i] = key + ": " + value
+			done = true
+			break
 		}
 	}
-	if fresh {
-		return stored, nil
+	if !done {
+		lines = append(lines, key+": "+value)
 	}
-	return Build(v, stored, nil, nil, now)
+	return "---\n" + strings.Join(lines, "\n") + "\n---\n" + body
 }
 
-// RenderIndex writes the tasks index from a ledger. created keeps the page's original
-// date when the page exists.
-func RenderIndex(l Ledger, existing []byte, now time.Time) string {
-	today := now.Format("2006-01-02")
-	created := today
-	if fields, _, err := vault.Frontmatter(string(existing)); err == nil && fields != nil {
-		if c := dateField(fields, "created"); datePattern.MatchString(c) {
-			created = c
+// CreatePhase writes a phase page and regenerates the index. Without an order it takes
+// the next one after the highest.
+func CreatePhase(p *project.Project, title, goal string, order *int, now time.Time) (*Phase, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, errors.New("a phase needs a title")
+	}
+	board, err := Load(p)
+	if err != nil {
+		return nil, err
+	}
+	if board.Phase(title) != nil {
+		return nil, fmt.Errorf("a phase named %q exists", title)
+	}
+	n := 1
+	for _, ph := range board.Phases {
+		if ph.Order >= n {
+			n = ph.Order + 1
 		}
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "---\ntype: meta\ntitle: Tasks\nstatus: evergreen\ncreated: %s\nupdated: %s\ntags:\n  - meta\n  - tasks\n---\n\n# Tasks\n\n", created, today)
-	b.WriteString("> [!info] Generated page\n> The core rewrites this page from the task pages after every task operation. Change a task on its own page, or with the task skills.\n\n")
-	open := l.Open()
-	b.WriteString("## Open\n\n")
+	if order != nil {
+		n = *order
+	}
+	if err := p.EnsureFolders(); err != nil {
+		return nil, err
+	}
+	rel := project.PhasesDir + "/" + vault.SanitizeTitle(title) + ".md"
+	if exists(p, rel) {
+		return nil, fmt.Errorf("%s exists; choose another title", rel)
+	}
+	if err := os.WriteFile(p.Path(rel), []byte(PhaseSkeleton(title, goal, n, now)), 0o644); err != nil {
+		return nil, err
+	}
+	if _, err := WriteIndex(p, now); err != nil {
+		return nil, err
+	}
+	return &Phase{Path: rel, Title: title, Order: n, Created: now.Format("2006-01-02"), Updated: now.Format("2006-01-02")}, nil
+}
+
+// RenamePhase retitles a phase, renames its page, and rewrites every task that names it.
+func RenamePhase(p *project.Project, old, title string, now time.Time) (*Phase, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, errors.New("a phase needs a title")
+	}
+	board, err := Load(p)
+	if err != nil {
+		return nil, err
+	}
+	ph := board.Phase(old)
+	if ph == nil {
+		return nil, fmt.Errorf("no phase named %q", old)
+	}
+	if other := board.Phase(title); other != nil && other.Path != ph.Path {
+		return nil, fmt.Errorf("a phase named %q exists", title)
+	}
+	data, err := os.ReadFile(p.Path(ph.Path))
+	if err != nil {
+		return nil, err
+	}
+	content := setField(setField(string(data), "title", strconv.Quote(title)), "updated", now.Format("2006-01-02"))
+	dest := project.PhasesDir + "/" + vault.SanitizeTitle(title) + ".md"
+	if !strings.EqualFold(dest, ph.Path) && exists(p, dest) {
+		return nil, fmt.Errorf("%s exists; choose another title", dest)
+	}
+	if err := os.WriteFile(p.Path(dest), []byte(content), 0o644); err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(dest, ph.Path) {
+		os.Remove(p.Path(ph.Path))
+	}
+	for _, t := range board.Tasks {
+		if !strings.EqualFold(t.Phase, ph.Title) {
+			continue
+		}
+		data, err := os.ReadFile(p.Path(t.Path))
+		if err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(p.Path(t.Path), []byte(setField(string(data), "phase", strconv.Quote(title))), 0o644); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := WriteIndex(p, now); err != nil {
+		return nil, err
+	}
+	return &Phase{Path: dest, Title: title, Order: ph.Order, Created: ph.Created, Updated: now.Format("2006-01-02")}, nil
+}
+
+// ReorderPhase sets a phase's order and regenerates the index.
+func ReorderPhase(p *project.Project, title string, order int, now time.Time) (*Phase, error) {
+	board, err := Load(p)
+	if err != nil {
+		return nil, err
+	}
+	ph := board.Phase(title)
+	if ph == nil {
+		return nil, fmt.Errorf("no phase named %q", title)
+	}
+	data, err := os.ReadFile(p.Path(ph.Path))
+	if err != nil {
+		return nil, err
+	}
+	content := setField(setField(string(data), "order", strconv.Itoa(order)), "updated", now.Format("2006-01-02"))
+	if err := os.WriteFile(p.Path(ph.Path), []byte(content), 0o644); err != nil {
+		return nil, err
+	}
+	if _, err := WriteIndex(p, now); err != nil {
+		return nil, err
+	}
+	ph.Order, ph.Updated = order, now.Format("2006-01-02")
+	return ph, nil
+}
+
+// RemovePhase deletes a phase page. It refuses while a task still names the phase.
+func RemovePhase(p *project.Project, title string, now time.Time) error {
+	board, err := Load(p)
+	if err != nil {
+		return err
+	}
+	ph := board.Phase(title)
+	if ph == nil {
+		return fmt.Errorf("no phase named %q", title)
+	}
+	var names []string
+	for _, t := range board.Tasks {
+		if strings.EqualFold(t.Phase, ph.Title) {
+			names = append(names, t.Title)
+		}
+	}
+	if len(names) > 0 {
+		return fmt.Errorf("%d task%s still name%s the phase %q (%s); move them to another phase first", len(names), plural(len(names)), map[bool]string{true: "s", false: ""}[len(names) == 1], ph.Title, strings.Join(names, "; "))
+	}
+	if err := os.Remove(p.Path(ph.Path)); err != nil {
+		return err
+	}
+	_, err = WriteIndex(p, now)
+	return err
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// WriteIndex loads the board and rewrites tasks/tasks.md from it.
+func WriteIndex(p *project.Project, now time.Time) (*Board, error) {
+	board, err := Load(p)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(p.Path(project.TasksDir), 0o755); err != nil {
+		return nil, err
+	}
+	return board, os.WriteFile(p.Path(project.TasksIndex), []byte(RenderIndex(board, now)), 0o644)
+}
+
+// RenderIndex renders tasks/tasks.md: the open tasks grouped by phase in phase order,
+// then the ones with no phase, the finished phases, and the archive.
+func RenderIndex(b *Board, now time.Time) string {
+	var w strings.Builder
+	w.WriteString("# Tasks\n\n")
+	w.WriteString("Generated by claude-atlas from the task and phase pages; do not edit. Change a task on its own page, or with the task tools.\n")
+	header := "\n| Task | Status | Priority | Due | Updated |\n|:--|:--|:--|:--|:--|\n"
+	row := func(t Task) {
+		status := t.Status
+		if Stale(t, now) {
+			status += " · stale"
+		}
+		fmt.Fprintf(&w, "| %s | %s | %s | %s | %s |\n", link(t), status, t.Priority, dash(t.Due), dash(t.Updated))
+	}
+	open := b.Open()
 	if len(open) == 0 {
-		b.WriteString("No open tasks. Plant one with `claude-atlas plant`, a note in `inbox/tasks/`, or `/claude-atlas:task-plant`.\n")
-	} else {
-		b.WriteString("| Task | Status | Priority | Due | Last touched |\n|:--|:--|:--|:--|:--|\n")
-		for _, r := range open {
-			status := r.Status
-			if Stale(r, now) {
-				status += " · stale"
+		w.WriteString("\n## Open\n\nNo open tasks. Plant one with `claude-atlas plant`, a note in `inbox/`, or the task-plant skill.\n")
+	}
+	var finished []Phase
+	for _, ph := range b.Phases {
+		if b.Finished(ph.Title) {
+			finished = append(finished, ph)
+			continue
+		}
+		in := b.In(ph.Title)
+		if len(in) == 0 && len(open) == 0 {
+			continue
+		}
+		fmt.Fprintf(&w, "\n## %s (%d open)\n", ph.Title, len(in))
+		if len(in) == 0 {
+			w.WriteString("\nNo open tasks in this phase yet.\n")
+			continue
+		}
+		w.WriteString(header)
+		for _, t := range in {
+			row(t)
+		}
+	}
+	if unphased := b.Unphased(); len(unphased) > 0 {
+		if len(b.Phases) > 0 {
+			w.WriteString("\n## No phase\n")
+		} else {
+			w.WriteString("\n## Open\n")
+		}
+		w.WriteString(header)
+		for _, t := range unphased {
+			row(t)
+		}
+	}
+	if len(finished) > 0 {
+		w.WriteString("\n## Finished phases\n\n| Phase | Tasks | Last finished |\n|:--|:--|:--|\n")
+		for _, ph := range finished {
+			n := 0
+			for _, t := range b.Tasks {
+				if strings.EqualFold(t.Phase, ph.Title) {
+					n++
+				}
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", ref(r), status, r.Priority, dash(r.Due), dash(r.LastTouched))
+			fmt.Fprintf(&w, "| %s | %d | %s |\n", ph.Title, n, dash(b.lastFinished(ph.Title)))
 		}
 	}
-	b.WriteString("\n## Archive\n\n")
-	archived := l.Archived()
+	w.WriteString("\n## Archive\n")
+	archived := b.Archived()
 	if len(archived) == 0 {
-		b.WriteString("Nothing finished yet.\n")
+		w.WriteString("\nNothing finished yet.\n")
 	} else {
-		b.WriteString("| Task | Status | Priority | Finished |\n|:--|:--|:--|:--|\n")
-		for _, r := range archived {
-			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", ref(r), r.Status, r.Priority, dash(r.LastTouched))
+		w.WriteString("\n| Task | Status | Phase | Finished |\n|:--|:--|:--|:--|\n")
+		for _, t := range archived {
+			fmt.Fprintf(&w, "| %s | %s | %s | %s |\n", link(t), t.Status, dash(t.Phase), dash(t.Updated))
 		}
 	}
-	if len(l.Problems) > 0 {
-		b.WriteString("\n## Not readable as tasks\n\n")
-		for _, p := range l.Problems {
-			fmt.Fprintf(&b, "- `%s`: %s\n", p.Path, p.Reason)
+	if len(b.Problems) > 0 {
+		w.WriteString("\n## Not readable\n\n")
+		for _, pr := range b.Problems {
+			fmt.Fprintf(&w, "- `%s`: %s\n", pr.Path, pr.Reason)
 		}
 	}
-	return b.String()
+	return w.String()
 }
 
-func ref(r Record) string {
-	stem := vault.PageTitle(r.Path)
-	if r.Title != "" && r.Title != stem && !strings.ContainsAny(r.Title, "[]|#") {
-		return "[[" + stem + "\\|" + r.Title + "]]"
-	}
-	return "[[" + stem + "]]"
+// link is a markdown link to a task page, relative to tasks/, so it opens in any viewer.
+func link(t Task) string {
+	rel := strings.TrimPrefix(t.Path, project.TasksDir+"/")
+	title := strings.ReplaceAll(t.Title, "|", "\\|")
+	return fmt.Sprintf("[%s](<%s>)", title, rel)
 }
 
 func dash(s string) string {

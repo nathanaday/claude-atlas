@@ -1,60 +1,58 @@
 ---
 name: atlas-project
-description: "Create a project step by step, with suggestions and defaults: name, location, tags, which knowledge bases to mount, a repository now or later. Also rename, retag, or forget one. Use for new project, create a project, make a project for this repo, project in this repository, rename the project, tag the project, forget this vault."
+description: "Make the current folder a project, or change one: name, description, which knowledge base it uses; link, unlink, rename, describe, forget. Use for new project, init here, make this a project, project for this repo, link the knowledge base, unlink, rename the project, forget this project."
 ---
 
-# Create or change a project
+# Make or change a project
 
-Tools: `atlas`, `vault`, `mount`, `repo` on the atlas MCP server. A project
-is where work happens: an inbox, tasks, questions, ideas, and repositories.
-Its knowledge lives in the knowledge bases it mounts.
+Tools: `atlas`, `project` on the atlas MCP server. A project is a folder
+named `atlas/` inside the user's work, a repository or a folder of
+documents. It holds the project's identity, its tasks, its phases, and an
+inbox for task notes. It has no git of its own: when the work is a
+repository, the repository tracks `atlas/` like any other folder. It uses
+one knowledge base.
 
-Call `atlas` first: the vaults directory, the knowledge bases and their
-scopes, and the names already taken.
+Call `atlas` first: the knowledge bases and their scopes, and the projects
+that exist.
 
-## Ask, in this order
+## Make one
 
 Ask one question at a time. Offer the default; accept a yes.
 
-1. **Name.** When the session sits in a git repository no project holds,
-   suggest the repository's folder name. A name becomes the folder's name.
-2. **Location.** Default: `<vaults dir>/projects/<name>`. When the session
-   sits at a repository's top level, offer `in_repo`: the project goes to
-   `REPO/atlas/`, its history lives in the repository's git, and the
-   repository becomes the project's first repository. Otherwise a path the
-   user names.
-3. **Tags**, optional. One or two words each; the view groups projects by the
-   first.
-4. **Knowledge bases to mount.** Read each scope from `atlas` and suggest
-   the ones that fit what the project is for. One mount goes on `vault`
-   `create` as `mount`; more go through `mount` afterwards. A guarded
-   knowledge base needs a grant too; say so and offer `atlas-mount`.
-5. **A repository**, now or later: the one the session is in, a URL to clone,
-   or a new one. Later is fine; `atlas-repo` does it any time.
+1. **Where.** The current folder, when the session is in the work. Otherwise
+   the path the user names. Never a folder inside a knowledge base or inside
+   another project.
+2. **Name.** Default: the folder's name.
+3. **Description.** One sentence saying what the project is. Draft it from the
+   folder's README or CLAUDE.md when there is one, and read it back.
+4. **Knowledge base.** Read each scope from `atlas` and suggest the one that
+   fits. None is a valid answer; the task skills work without one, and
+   `link` adds one later.
 
-## Confirm and create
+State the whole change in one line:
 
-State the whole change in one line, in the user's words:
+> Make `~/code/webapp` the project `webapp`, "The customer-facing web application for the fire-detection product", using `product-x`?
 
-> Create project `sensor-triage` at `~/Documents/Vaults/projects/sensor-triage`, tags `usc, fall`, mounting `ai-ml` for writing, linking `~/code/triage` (changes: commit)?
+On yes: `project` with `action: init`, `work`, `name`, `description`, and
+`knowledge`. It writes `atlas/` and lists the folder in the atlas config.
+Report the result, then offer `describe`, which writes the project's page in
+the knowledge base, and say how to work: a session anywhere inside the work
+is the project's session.
 
-On yes: `vault` with `action: create`, `kind: project`, and the answers;
-then `mount` for each further knowledge base; then `repo` with `link`,
-`clone`, or `new`. Report each tool's result. Then say how to work there:
-`claude-atlas open-claude <name>`, or `cd` into the vault and start `claude`.
-A session in a linked repository reaches the project too.
+If the tool refuses, say why in the tool's words and ask again for that one
+answer; do not retry with a guess.
 
-If a tool refuses, say why in the tool's words and ask again for that one
-answer; do not retry with a guess. A taken path means adopt or another name.
+## Change one
 
-## Change a project
+- Link or unlink: `project` with `action: link` and `knowledge`, or
+  `action: unlink`. Linking changes nothing in either folder; it is one
+  field in `atlas/project.json`.
+- Rename or describe: `project` with `action: edit`, `name` or
+  `description`. The folder does not move; the work folder is the user's.
+- Forget: `project` with `action: forget`. The folder and its `atlas/`
+  stay. Deleting `atlas/` is how a project ends, and that is the user's to
+  do by hand.
 
-- Rename: `vault` with `action: edit`, `target`, and `name`. The folder moves
-  with the name; a project at `REPO/atlas/` keeps its folder. Say so.
-- Retag: `edit` with `tags`; an empty list clears them.
-- Forget: `vault` with `action: forget`. The folder stays. A project inside
-  the vaults directory cannot be forgotten, because the scan finds it there;
-  the tool says so, and the answer is to move or delete the folder by hand.
-
-Every question comes before the tool call, and the tool call comes after a
-yes. Never make the folder or its files yourself.
+In a knowledge base session, `work` names the project by name; in a project
+session it is implied. Every question comes before the tool call, and the
+tool call comes after a yes. Never make the folder or its files yourself.

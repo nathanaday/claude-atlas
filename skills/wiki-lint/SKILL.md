@@ -1,15 +1,12 @@
 ---
 name: wiki-lint
-description: "Run the deterministic, read-only health check on the wiki. Use for lint, vault health, audit wiki health, find orphans, find dead links, frontmatter audit, wiki audit. Reports links, orphans, index gaps, frontmatter, empty sections, and ledger problems; it does not repair files."
+description: "Run the deterministic, read-only health check on the knowledge base. Use for lint, vault health, audit wiki health, find orphans, find dead links, frontmatter audit, wiki audit. Reports links, orphans, index gaps, frontmatter, empty sections, and ledger problems; it does not repair files."
 ---
 
 # Lint the wiki
 
-The `lint` tool is the source of truth. It observes; it never writes.
-
-Lint runs per vault. In a project, it resolves links through mounts: a link
-that resolves through a mount is not wanted, and a page name that matches
-both the project and a mount is a duplicate.
+The `lint` tool is the source of truth. It observes; it never writes. It runs
+on the knowledge base in scope: the session's own, or a project's.
 
 ## Run
 
@@ -27,17 +24,15 @@ report lists, with exact paths and lines:
 | `empty_sections` | headings with nothing under them |
 | `stale_index_entries` | index links that do not resolve |
 | `read_errors` | pages that could not be parsed, including invalid frontmatter YAML |
-| `task_errors` | a task page whose status and its folder disagree, or a malformed task page: fix the page or move it to match its status |
 | `ledger_errors` | source records whose files or pages are missing |
-| `kind_errors` | a file that does not belong to the vault's kind, such as an `inbox/` in a knowledge base: move or remove it |
-| `mount_errors` | a broken `kb/` symlink: run `claude-atlas refresh` |
+| `kind_errors` | a folder from a v2 project vault, such as `wiki/tasks/`: move its pages under `wiki/` or remove it |
 
 Report only what the tool found. It does not judge prose, style, or
-contradictions.
+contradictions. A project's task pages are not linted here; the `tasks` tool
+reports a task page it cannot read.
 
 A `wanted_pages` entry, a page a link names but nobody has written, is not a
-finding; the `stub` tool seeds it. Pass `titles[].target` with a mount's
-name to seed the stub in that knowledge base instead of the project.
+finding; the `stub` tool seeds it.
 
 ## Explain
 
@@ -47,7 +42,7 @@ name to seed the stub in that knowledge base instead of the project.
 3. Say when an orphan may be intentional and when an ambiguous basename needs a
    folder-qualified link. Do not infer intent from a finding alone.
 
-Return the explanation in chat. Do not write a report into the vault.
+Return the explanation in chat. Do not write a report into the knowledge base.
 
 ## Repair is a separate operation
 

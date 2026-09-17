@@ -26,7 +26,10 @@ const (
 	Marker = ".claude-atlas.json"
 	// LegacyMarker is claude-obsidian's identity file; adopt converts such vaults.
 	LegacyMarker = ".claude-obsidian.json"
-	Schema       = "claude-atlas.vault.v2"
+	Schema       = "claude-atlas.vault.v3"
+	// SchemaV2 is the identity file v2 wrote: a knowledge base opens and upgrades, a
+	// project vault is refused, because v3 projects are folders, not vaults.
+	SchemaV2 = "claude-atlas.vault.v2"
 	// SchemaV1 is the identity file older versions wrote; adopt rewrites it.
 	SchemaV1 = "claude-atlas.vault.v1"
 	// EnvVault names the vault explicitly for the MCP server and hooks.
@@ -34,9 +37,7 @@ const (
 
 	MetaDir      = ".vault-meta"
 	InboxDir     = "inbox"
-	KbDir        = "kb"    // a project's mounted knowledge bases, as symlinks git ignores
-	ReposDir     = "repos" // a project's repositories; each keeps its own history
-	InRepoDir    = "atlas" // the folder a project inside a repository lives in: REPO/atlas/
+	IdeasDir     = "ideas"
 	RawDir       = ".raw"
 	CapturedDir  = ".raw/captured"
 	WikiDir      = "wiki"
@@ -46,23 +47,9 @@ const (
 	OverviewPage = "wiki/overview.md"
 	LedgerPath   = ledger.VaultPath
 
-	// Tasks: open task pages, their archive, the generated index, the derived ledger,
-	// the inbox folder for task notes, and the user's scratch space.
-	TasksDir       = "wiki/tasks"
-	TaskArchiveDir = "wiki/tasks/archive"
-	TasksIndex     = "wiki/tasks/tasks.md"
-	TaskLedgerPath = "wiki/meta/ledgers/task-ledger.json"
-	InboxTasksDir  = "inbox/tasks"
-	IdeasDir       = "ideas"
-
-	// Questions and sessions are a project's pages.
-	QuestionsDir = "wiki/questions"
-	SessionsDir  = "wiki/sessions"
-
 	// A folder's index page takes the folder's name, so no page shares the basename of
-	// wiki/index.md. LegacyTasksIndex is where older versions wrote the task index.
-	CanvasIndex      = "wiki/canvases/canvases.md"
-	LegacyTasksIndex = "wiki/tasks/index.md"
+	// wiki/index.md.
+	CanvasIndex = "wiki/canvases/canvases.md"
 )
 
 // Mode is the filing methodology for new pages.
@@ -85,81 +72,21 @@ func ParseMode(s string) (Mode, error) {
 	return "", fmt.Errorf("mode must be generic or lyt, not %q", s)
 }
 
-// Kind says what a vault is for. A knowledge base holds sources, entities, and concepts.
-// A project holds tasks, questions, and notes, and mounts knowledge bases.
-type Kind string
-
-const (
-	Knowledge Kind = "knowledge"
-	Project   Kind = "project"
-)
-
-var Kinds = []Kind{Knowledge, Project}
-
-// ParseKind validates a kind name.
-func ParseKind(s string) (Kind, error) {
-	for _, k := range Kinds {
-		if string(k) == s {
-			return k, nil
-		}
-	}
-	return "", fmt.Errorf("kind must be knowledge or project, not %q", s)
-}
-
-// Access levels. A knowledge base is open or guarded; a mount and a grant are read or write.
-const (
-	AccessOpen    = "open"
-	AccessGuarded = "guarded"
-	AccessRead    = "read"
-	AccessWrite   = "write"
-)
-
-// Grant is a knowledge base's word on one project.
-type Grant struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Access string `json:"access"`
-}
-
-// Member is a knowledge base another knowledge base gathers. A knowledge base with
-// members is a cluster: a project that mounts it reaches every member.
-type Member struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-// Mount is a project's use of one knowledge base.
-type Mount struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Access string `json:"access"`
-}
-
-// Repo is a repository a project works in.
-type Repo struct {
-	Name    string `json:"name"`
-	Remote  string `json:"remote,omitempty"`
-	Changes string `json:"changes,omitempty"`
-}
+// Kind is the one kind of vault: a knowledge base. The identity file still names it, so
+// a file from another tool, or a v2 project vault, is refused rather than misread.
+const Kind = "knowledge"
 
 // Config is the content of the identity file: the facts that travel with the vault. It
 // never holds a path; paths are facts about one machine and live in the atlas config.
 type Config struct {
 	Schema  string `json:"schema"`
 	ID      string `json:"id"`
-	Kind    Kind   `json:"kind"`
+	Kind    string `json:"kind"`
 	Name    string `json:"name"`
 	Mode    Mode   `json:"mode"`
 	Created string `json:"created"`
-	// A knowledge base's fields.
-	Scope   string   `json:"scope,omitempty"`
-	Access  string   `json:"access,omitempty"`
-	Grants  []Grant  `json:"grants,omitempty"`
-	Members []Member `json:"members,omitempty"`
-	// A project's fields.
-	Tags   []string `json:"tags,omitempty"`
-	Mounts []Mount  `json:"mounts,omitempty"`
-	Repos  []Repo   `json:"repos,omitempty"`
+	// Scope is one sentence saying what knowledge the vault holds.
+	Scope string `json:"scope,omitempty"`
 }
 
 // Encode renders the identity file.
@@ -192,38 +119,18 @@ func (v *Vault) Path(rel string) string { return filepath.Join(v.Root, filepath.
 // Repo is the vault's git repository.
 func (v *Vault) Repo() gitx.Repo { return RepoAt(v.Root) }
 
-// RepoAt is the git repository of the vault at root: the vault itself, or the repository
-// that holds it, scoped to the vault's folder. Every vault command in this package goes
-// through it, so none can miss the prefix.
-func RepoAt(root string) gitx.Repo {
-	if host := HostRepo(root); host != "" {
-		return gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
-	}
-	return gitx.Repo{Dir: root}
-}
-
-// HostRepo is the working tree that holds a vault inside a repository: root is named
-// InRepoDir, has no .git of its own, and its parent has one. It is "" for a vault that is
-// its own repository. Nothing stores this, so a clone answers the same way.
-func HostRepo(root string) string {
-	abs, err := filepath.Abs(root)
-	if err != nil || filepath.Base(abs) != InRepoDir {
-		return ""
-	}
-	if _, err := os.Lstat(filepath.Join(abs, ".git")); err == nil {
-		return ""
-	}
-	parent := filepath.Dir(abs)
-	if _, err := os.Lstat(filepath.Join(parent, ".git")); err != nil {
-		return ""
-	}
-	return parent
-}
+// RepoAt is the git repository of the vault at root. Every vault command in this package
+// goes through it.
+func RepoAt(root string) gitx.Repo { return gitx.Repo{Dir: root} }
 
 var ErrNotVault = errors.New("not a claude-atlas vault")
 
 // ErrV1 means the identity file is from before v2; adopt rewrites it.
 var ErrV1 = errors.New("v1 vault")
+
+// ErrProjectVault means the identity file is a v2 project vault. v3 projects are folders
+// inside the work; the vault is recreated with `claude-atlas init`.
+var ErrProjectVault = errors.New("v2 project vault")
 
 // ReadConfig parses the identity file without validating it. ok is false when there is
 // none or it is not JSON. Lint and adopt read a vault this way; everything else opens it.
@@ -295,13 +202,19 @@ func Open(root string) (*Vault, error) {
 	marker := filepath.Join(abs, Marker)
 	switch cfg.Schema {
 	case Schema:
+	case SchemaV2:
+		// A v2 knowledge base reads as it is; Upgrade raises the schema. Its access and
+		// grants are ignored, because v3 has none.
+		if cfg.Kind == "project" {
+			return nil, fmt.Errorf("%w: %s is a v2 project vault; v3 projects are folders, so run `claude-atlas init` in the work and delete this vault", ErrProjectVault, abs)
+		}
 	case SchemaV1:
-		return nil, fmt.Errorf("%w: %s was made by claude-atlas v1; run `claude-atlas adopt %s --as knowledge` or `--as project`", ErrV1, abs, abs)
+		return nil, fmt.Errorf("%w: %s was made by claude-atlas v1; run `claude-atlas adopt %s`", ErrV1, abs, abs)
 	default:
 		return nil, fmt.Errorf("%s: unsupported schema %q", marker, cfg.Schema)
 	}
-	if _, err := ParseKind(string(cfg.Kind)); err != nil {
-		return nil, fmt.Errorf("%s: %w", marker, err)
+	if cfg.Kind != Kind {
+		return nil, fmt.Errorf("%s: kind must be %s, not %q", marker, Kind, cfg.Kind)
 	}
 	if cfg.ID == "" {
 		return nil, fmt.Errorf("%s has no id; run `claude-atlas adopt %s`", marker, abs)
@@ -357,40 +270,23 @@ func Resolve(explicit, envValue, start string) (*Vault, error) {
 //go:embed all:templates
 var templates embed.FS
 
-// TemplateFiles lists the vault-relative paths the template provides for a kind: the
-// files every vault has, then the kind's own. A kind's file wins over a common one.
-func TemplateFiles(kind Kind) []string {
-	seen := map[string]bool{}
+const templateDir = "templates/knowledge"
+
+// TemplateFiles lists the vault-relative paths the template provides.
+func TemplateFiles() []string {
 	var out []string
-	for _, dir := range templateDirs(kind) {
-		fs.WalkDir(templates, dir, func(path string, d fs.DirEntry, err error) error {
-			if err == nil && !d.IsDir() {
-				rel := strings.TrimPrefix(path, dir+"/")
-				if !seen[rel] {
-					seen[rel] = true
-					out = append(out, rel)
-				}
-			}
-			return nil
-		})
-	}
+	fs.WalkDir(templates, templateDir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			out = append(out, strings.TrimPrefix(path, templateDir+"/"))
+		}
+		return nil
+	})
 	sort.Strings(out)
 	return out
 }
 
-// templateDirs are the embedded folders a kind draws on, the kind's own first.
-func templateDirs(kind Kind) []string {
-	return []string{"templates/" + string(kind), "templates/common"}
-}
-
-func renderTemplate(kind Kind, rel string, now time.Time) ([]byte, error) {
-	var data []byte
-	var err error
-	for _, dir := range templateDirs(kind) {
-		if data, err = templates.ReadFile(dir + "/" + rel); err == nil {
-			break
-		}
-	}
+func renderTemplate(rel string, now time.Time) ([]byte, error) {
+	data, err := templates.ReadFile(templateDir + "/" + rel)
 	if err != nil {
 		return nil, err
 	}
@@ -433,20 +329,16 @@ func requireGit() error {
 	return nil
 }
 
-// Options say what to make: the kind (required), the mode (generic by default), and the
-// name (the directory's by default).
+// Options say what to make: the mode (generic by default), the name (the directory's by
+// default), and the scope.
 type Options struct {
-	Kind Kind
-	Mode Mode
-	Name string
+	Mode  Mode
+	Name  string
+	Scope string
 }
 
 // newConfig is the identity file of a vault made now.
 func newConfig(root string, opts Options, now time.Time) (Config, error) {
-	kind, err := ParseKind(string(opts.Kind))
-	if err != nil {
-		return Config{}, fmt.Errorf("kind is required: %w", err)
-	}
 	mode := opts.Mode
 	if mode == "" {
 		mode = Generic
@@ -458,11 +350,7 @@ func newConfig(root string, opts Options, now time.Time) (Config, error) {
 	if name == "" {
 		name = filepath.Base(root)
 	}
-	cfg := Config{Schema: Schema, ID: NewID(), Kind: kind, Name: name, Mode: mode, Created: now.Format("2006-01-02")}
-	if kind == Knowledge {
-		cfg.Access = AccessOpen
-	}
-	return cfg, nil
+	return Config{Schema: Schema, ID: NewID(), Kind: Kind, Name: name, Mode: mode, Created: now.Format("2006-01-02"), Scope: strings.TrimSpace(opts.Scope)}, nil
 }
 
 // Init creates a vault at root: the template, the identity file, an empty source ledger,
@@ -500,7 +388,7 @@ func Init(root string, opts Options, now time.Time) (*InitResult, error) {
 		return nil, err
 	}
 	id := NewOperationID("setup", now)
-	sha, err := repo.Commit(CommitMessage("setup", fmt.Sprintf("initialize %s %s (%s mode)", cfg.Kind, cfg.Name, cfg.Mode), id))
+	sha, err := repo.Commit(CommitMessage("setup", fmt.Sprintf("initialize knowledge base %s (%s mode)", cfg.Name, cfg.Mode), id))
 	if err != nil {
 		return nil, err
 	}
@@ -519,72 +407,13 @@ func checkEmpty(abs string) error {
 	return nil
 }
 
-// InitIn creates a project at REPO/atlas/, tracked by the repository's git, and commits it
-// with the pathspec atlas/. repoRoot must be the top level of a git working tree, the
-// folder must not exist or must be empty, and the kind must be project. The project takes
-// the repository's name unless the caller gives one.
-func InitIn(repoRoot string, opts Options, now time.Time) (*InitResult, error) {
-	if err := requireGit(); err != nil {
-		return nil, err
-	}
-	host, err := filepath.Abs(repoRoot)
-	if err != nil {
-		return nil, err
-	}
-	whole := gitx.Repo{Dir: host}
-	if !whole.IsRepo() {
-		return nil, fmt.Errorf("%s is not the top level of a git repository", host)
-	}
-	if err := whole.CheckIdle(); err != nil {
-		return nil, err
-	}
-	if opts.Kind != Project {
-		return nil, errors.New("only a project lives inside a repository")
-	}
-	if whole.Ignored(InRepoDir + "/") {
-		return nil, fmt.Errorf("%s ignores %s/; remove that rule from .gitignore first", host, InRepoDir)
-	}
-	if outer := FindAbove(host); outer != "" {
-		return nil, fmt.Errorf("%s is inside the vault %s; a vault does not go inside another", host, outer)
-	}
-	repo := gitx.Repo{Dir: host, Prefix: InRepoDir + "/"}
-	if strings.TrimSpace(opts.Name) == "" {
-		opts.Name = filepath.Base(host)
-	}
-	abs := filepath.Join(host, InRepoDir)
-	cfg, err := newConfig(abs, opts, now)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkEmpty(abs); err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(abs, 0o755); err != nil {
-		return nil, err
-	}
-	files, err := writeMissing(abs, cfg, now, true)
-	if err != nil {
-		return nil, err
-	}
-	if err := repo.AddAll(); err != nil {
-		return nil, err
-	}
-	id := NewOperationID("setup", now)
-	summary := fmt.Sprintf("initialize project %s (%s mode) in %s", cfg.Name, cfg.Mode, filepath.Base(host))
-	sha, err := repo.Commit(CommitMessage("setup", summary, id))
-	if err != nil {
-		return nil, err
-	}
-	return &InitResult{Root: abs, OperationID: id, Commit: sha, Files: files}, nil
-}
-
 // writeMissing writes template, identity, and ledger files that do not exist yet.
 // With overwrite set (a fresh init) every file is written.
 func writeMissing(root string, cfg Config, now time.Time, overwrite bool) ([]string, error) {
 	// A settings file the merge cannot read stops the pass before it writes anything, so a
 	// refused upgrade leaves the vault as it was.
 	if !overwrite {
-		if err := checkSettings(root, cfg.Kind); err != nil {
+		if err := checkSettings(root); err != nil {
 			return nil, err
 		}
 	}
@@ -601,8 +430,8 @@ func writeMissing(root string, cfg Config, now time.Time, overwrite bool) ([]str
 		written = append(written, rel)
 		return nil
 	}
-	for _, rel := range TemplateFiles(cfg.Kind) {
-		data, err := renderTemplate(cfg.Kind, rel, now)
+	for _, rel := range TemplateFiles() {
+		data, err := renderTemplate(rel, now)
 		if err != nil {
 			return nil, err
 		}
@@ -632,152 +461,20 @@ func writeMissing(root string, cfg Config, now time.Time, overwrite bool) ([]str
 	if err := put(LedgerPath, ledger.Empty(now).Encode()); err != nil {
 		return nil, err
 	}
-	if cfg.Kind == Project {
-		if err := put(TaskLedgerPath, []byte(EmptyTaskLedger)); err != nil {
-			return nil, err
-		}
-	}
 	sort.Strings(written)
 	return written, nil
-}
-
-// EmptyTaskLedger is the task ledger of a vault with no tasks; the tasks package owns
-// the full format.
-const EmptyTaskLedger = "{\n  \"schema\": \"claude-atlas.task-ledger.v1\",\n  \"tasks\": []\n}\n"
-
-// Move is a file an older version wrote at a path the layout has since changed.
-type Move struct {
-	From string
-	To   string
-}
-
-var legacyPaths = []Move{{From: LegacyTasksIndex, To: TasksIndex}}
-
-// moveLegacy puts the files an older version wrote at their current paths. When the
-// current path already exists, the file at the old path is a stale copy and goes, but
-// only if git holds it unchanged; otherwise it may be the user's and stays.
-func moveLegacy(repo gitx.Repo, root string) ([]Move, error) {
-	var moved []Move
-	for _, m := range legacyPaths {
-		from, to := filepath.Join(root, filepath.FromSlash(m.From)), filepath.Join(root, filepath.FromSlash(m.To))
-		if _, err := os.Stat(from); err != nil {
-			continue
-		}
-		if _, err := os.Stat(to); err != nil {
-			if err := os.Rename(from, to); err != nil {
-				return moved, err
-			}
-			moved = append(moved, m)
-			continue
-		}
-		if !committed(repo, m.From) {
-			continue
-		}
-		if err := os.Remove(from); err != nil {
-			return moved, err
-		}
-		moved = append(moved, m)
-	}
-	return moved, nil
-}
-
-// ProjectOnly are the paths a knowledge base does not have. No plan writes them there,
-// and lint reports them when they exist.
-var ProjectOnly = []string{InboxDir, IdeasDir, TasksDir, TaskLedgerPath, QuestionsDir, SessionsDir}
-
-// ProjectScaffolding is the part of ProjectOnly that adopting as a knowledge base
-// removes: the inbox, the ideas folder, the tasks, and the task ledger. Question and
-// session pages stay; they hold knowledge the user moves by hand.
-var ProjectScaffolding = []string{IdeasDir, InboxDir, TaskLedgerPath, TasksDir}
-
-// inboxSources counts the files in inbox/ other than task notes and dotfiles: sources
-// nobody has ingested, which adopt must not delete.
-func inboxSources(root string) int {
-	n := 0
-	filepath.WalkDir(filepath.Join(root, InboxDir), func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if p == filepath.Join(root, filepath.FromSlash(InboxTasksDir)) || strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasPrefix(d.Name(), ".") {
-			n++
-		}
-		return nil
-	})
-	return n
-}
-
-// checkInbox refuses the adoption while inbox/ holds sources nobody has ingested.
-func checkInbox(root string) error {
-	if n := inboxSources(root); n > 0 {
-		return fmt.Errorf("inbox/ holds %d file%s; ingest them through a project or move them out before adopting as a knowledge base", n, map[bool]string{true: "", false: "s"}[n == 1])
-	}
-	return nil
-}
-
-// baseline commits the tree as it is, so git holds every file adopt is about to remove.
-// It returns "" when there is nothing to commit. Untracked files count as a change, so a
-// repository without a commit takes this path too.
-func baseline(repo gitx.Repo, now time.Time) (string, error) {
-	dirty, err := repo.Dirty()
-	if err != nil {
-		return "", err
-	}
-	if !dirty {
-		return "", nil
-	}
-	if err := repo.AddAll(); err != nil {
-		return "", err
-	}
-	return repo.Commit(CommitMessage("setup", "baseline before adopting as knowledge base", NewOperationID("setup", now)))
-}
-
-// removeProjectFiles deletes the project scaffolding that exists and reports it.
-func removeProjectFiles(root string) ([]string, error) {
-	var removed []string
-	for _, rel := range ProjectScaffolding {
-		p := filepath.Join(root, filepath.FromSlash(rel))
-		if _, err := os.Lstat(p); err != nil {
-			continue
-		}
-		if err := os.RemoveAll(p); err != nil {
-			return removed, err
-		}
-		removed = append(removed, rel)
-	}
-	return removed, nil
-}
-
-// committed reports whether HEAD holds rel and the working tree has not changed it since.
-func committed(repo gitx.Repo, rel string) bool {
-	if !repo.Tracked(rel) {
-		return false
-	}
-	entries, err := repo.Status()
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if e.Path == rel {
-			return false
-		}
-	}
-	return true
 }
 
 // UpgradeResult reports what Upgrade changed; an empty result means the vault was current.
 type UpgradeResult struct {
 	Added []string
-	Moved []Move
+	// Schema is set when the identity file was raised to the current schema.
+	Schema bool
 }
 
 // Upgrade brings a vault made by an older version to the current layout, as one commit:
-// it moves the files whose path changed and adds the template files the vault lacks.
+// it raises a v2 identity file to v3, dropping access and grants, and adds the template
+// files the vault lacks.
 func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -792,15 +489,17 @@ func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 	if err := repo.CheckIdle(); err != nil {
 		return res, err
 	}
-	if v.Config.Kind == Project {
-		if res.Moved, err = moveLegacy(repo, abs); err != nil {
+	if v.Config.Schema != Schema {
+		v.Config.Schema = Schema
+		if err := writeFile(abs, Marker, v.Config.Encode()); err != nil {
 			return res, err
 		}
+		res.Schema = true
 	}
 	if res.Added, err = writeMissing(abs, v.Config, now, false); err != nil {
 		return res, err
 	}
-	if len(res.Added)+len(res.Moved) == 0 {
+	if len(res.Added) == 0 && !res.Schema {
 		return res, nil
 	}
 	stage := append([]string{}, res.Added...)
@@ -808,12 +507,9 @@ func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 	if len(res.Added) > 0 {
 		what = append(what, "add "+strings.Join(res.Added, ", "))
 	}
-	for _, m := range res.Moved {
-		stage = append(stage, m.To)
-		if repo.Tracked(m.From) {
-			stage = append(stage, m.From)
-		}
-		what = append(what, fmt.Sprintf("move %s to %s", m.From, m.To))
+	if res.Schema {
+		stage = append(stage, Marker)
+		what = append(what, "raise the identity file to "+Schema)
 	}
 	if err := repo.Add(stage...); err != nil {
 		return res, err
@@ -824,71 +520,9 @@ func Upgrade(root string, now time.Time) (*UpgradeResult, error) {
 	return res, nil
 }
 
-// ValidAccess reports whether s is a knowledge base access level (open, guarded) when
-// forKB, or a mount and grant level (read, write) otherwise.
-func ValidAccess(s string, forKB bool) bool {
-	if forKB {
-		return s == AccessOpen || s == AccessGuarded
-	}
-	return s == AccessRead || s == AccessWrite
-}
-
-// changePolicies are the repository change policies a vault's own config may record.
-// vault does not import links, so the list is kept here too; links.Policies holds the
-// same values.
-var changePolicies = []string{"", "pr", "commit"}
-
-func validChanges(s string) bool {
-	for _, p := range changePolicies {
-		if s == p {
-			return true
-		}
-	}
-	return false
-}
-
-// checkUnique refuses a config that names one thing twice. A caller may hold an older
-// picture of the vault than the file does, so the file decides.
-func checkUnique(cfg Config) error {
-	repos := map[string]bool{}
-	for _, r := range cfg.Repos {
-		key := strings.ToLower(r.Name)
-		if repos[key] {
-			return fmt.Errorf("two repositories named %q", r.Name)
-		}
-		repos[key] = true
-	}
-	mountIDs, mountNames := map[string]bool{}, map[string]bool{}
-	for _, m := range cfg.Mounts {
-		if mountIDs[m.ID] {
-			return fmt.Errorf("two mounts of %s", m.ID)
-		}
-		name := strings.ToLower(m.Name)
-		if mountNames[name] {
-			return fmt.Errorf("two mounts of %s", m.Name)
-		}
-		mountIDs[m.ID], mountNames[name] = true, true
-	}
-	grants := map[string]bool{}
-	for _, g := range cfg.Grants {
-		if grants[g.ID] {
-			return fmt.Errorf("two grants for %s", g.ID)
-		}
-		grants[g.ID] = true
-	}
-	members := map[string]bool{}
-	for _, m := range cfg.Members {
-		if members[m.ID] {
-			return fmt.Errorf("%s is listed twice as a member", m.Name)
-		}
-		members[m.ID] = true
-	}
-	return nil
-}
-
 // UpdateConfig rewrites the identity file through change and commits it as one setup
 // operation named by summary. An unchanged file makes no commit. It is the one way a
-// vault's own facts (name, tags, scope, access, grants, mounts, repos) change.
+// vault's own facts (name, scope) change.
 func UpdateConfig(root, summary string, now time.Time, change func(*Config) error) error {
 	unlock, err := Lock(root)
 	if err != nil {
@@ -906,13 +540,10 @@ func UpdateConfig(root, summary string, now time.Time, change func(*Config) erro
 	if err := change(&cfg); err != nil {
 		return err
 	}
-	if _, err := ParseKind(string(cfg.Kind)); err != nil {
-		return err
-	}
 	if _, err := ParseMode(string(cfg.Mode)); err != nil {
 		return err
 	}
-	if cfg.Kind != v.Config.Kind {
+	if cfg.Kind != Kind {
 		return fmt.Errorf("a vault's kind does not change")
 	}
 	if cfg.ID != v.Config.ID {
@@ -921,45 +552,8 @@ func UpdateConfig(root, summary string, now time.Time, change func(*Config) erro
 	if strings.TrimSpace(cfg.Name) == "" {
 		return fmt.Errorf("name must not be blank")
 	}
-	if cfg.Access != "" && !ValidAccess(cfg.Access, true) {
-		return fmt.Errorf("access must be %s or %s, not %q", AccessOpen, AccessGuarded, cfg.Access)
-	}
-	for _, g := range cfg.Grants {
-		if !ValidAccess(g.Access, false) {
-			return fmt.Errorf("grant %s: access must be %s or %s, not %q", g.Name, AccessRead, AccessWrite, g.Access)
-		}
-	}
-	for _, m := range cfg.Mounts {
-		if !ValidAccess(m.Access, false) {
-			return fmt.Errorf("mount %s: access must be %s or %s, not %q", m.Name, AccessRead, AccessWrite, m.Access)
-		}
-	}
-	for _, r := range cfg.Repos {
-		if !validChanges(r.Changes) {
-			return fmt.Errorf("repo %s: changes must be pr or commit, not %q", r.Name, r.Changes)
-		}
-	}
-	for _, m := range cfg.Members {
-		if strings.TrimSpace(m.ID) == "" {
-			return fmt.Errorf("member %q: a member needs an id", m.Name)
-		}
-		if m.ID == cfg.ID {
-			return fmt.Errorf("%s cannot be its own member", cfg.Name)
-		}
-	}
-	if err := checkUnique(cfg); err != nil {
-		return err
-	}
-	switch cfg.Kind {
-	case Project:
-		if cfg.Scope != "" || cfg.Access != "" || len(cfg.Grants) > 0 || len(cfg.Members) > 0 {
-			return fmt.Errorf("a project carries no scope, access, grants, or members; those are a knowledge base's fields")
-		}
-	case Knowledge:
-		if len(cfg.Tags) > 0 || len(cfg.Mounts) > 0 || len(cfg.Repos) > 0 {
-			return fmt.Errorf("a knowledge base carries no tags, mounts, or repos; those are a project's fields")
-		}
-	}
+	cfg.Schema = Schema
+	cfg.Scope = strings.TrimSpace(cfg.Scope)
 	existing, err := os.ReadFile(filepath.Join(v.Root, Marker))
 	if err == nil && bytes.Equal(cfg.Encode(), existing) {
 		return nil
@@ -973,43 +567,6 @@ func UpdateConfig(root, summary string, now time.Time, change func(*Config) erro
 	}
 	_, err = repo.Commit(CommitMessage("setup", summary, NewOperationID("setup", now)))
 	return err
-}
-
-// Ignore adds a pattern to the vault's .gitignore and commits it, so a repository
-// mounted inside the vault keeps its own history apart from the vault's. It reports
-// whether the file changed.
-func Ignore(root, pattern string, now time.Time) (bool, error) {
-	path := filepath.Join(root, ".gitignore")
-	existing, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, err
-	}
-	for _, line := range strings.Split(string(existing), "\n") {
-		if strings.TrimSpace(line) == pattern {
-			return false, nil
-		}
-	}
-	var b bytes.Buffer
-	b.Write(existing)
-	if len(existing) > 0 && !bytes.HasSuffix(existing, []byte("\n")) {
-		b.WriteString("\n")
-	}
-	b.WriteString("\n# a repository mounted in the vault; it keeps its own history\n" + pattern + "\n")
-	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
-		return false, err
-	}
-	repo := RepoAt(root)
-	if !repo.IsRepo() {
-		return true, nil
-	}
-	if err := repo.CheckIdle(); err != nil {
-		return true, err
-	}
-	if err := repo.Add(".gitignore"); err != nil {
-		return true, err
-	}
-	_, err = repo.Commit(CommitMessage("setup", "ignore the mounted repository "+pattern, NewOperationID("setup", now)))
-	return true, err
 }
 
 // AppearanceFile is Obsidian's appearance settings, where CSS snippets are enabled.
@@ -1030,8 +587,8 @@ var settingsMerges = map[string]func(settings map[string]any) bool{
 
 // checkSettings reads every Obsidian settings file the vault holds and refuses one that
 // is not a JSON object.
-func checkSettings(root string, kind Kind) error {
-	for _, rel := range TemplateFiles(kind) {
+func checkSettings(root string) error {
+	for _, rel := range TemplateFiles() {
 		if _, ok := settingsMerges[rel]; !ok {
 			continue
 		}
@@ -1147,12 +704,9 @@ func mergeGitignore(root string, template []byte) error {
 // AdoptResult reports what Adopt changed.
 type AdoptResult struct {
 	Root           string
-	Kind           Kind
 	OperationID    string
 	Commit         string
 	Added          []string
-	Moved          []Move
-	Removed        []string
 	GitInitialized bool
 	WasLegacy      bool
 	AlreadyAdopted bool
@@ -1160,8 +714,8 @@ type AdoptResult struct {
 	FromV1 bool
 	// Repaired is set when a damaged identity file was rebuilt.
 	Repaired bool
-	// Baseline is the commit that recorded the tree before adopt removed anything.
-	Baseline string
+	// FromV2 is set when a v2 identity file was raised to v3.
+	FromV2 bool
 }
 
 // markerState reads the identity file's condition into res: a current file means the vault
@@ -1177,9 +731,14 @@ func markerState(root string, existing Config, parsed bool, res *AdoptResult) er
 	}
 	switch existing.Schema {
 	case Schema:
-		_, err := ParseKind(string(existing.Kind))
-		res.Repaired = existing.ID == "" || err != nil
+		res.Repaired = existing.ID == "" || existing.Kind != Kind
 		res.AlreadyAdopted = !res.Repaired
+	case SchemaV2:
+		if existing.Kind == "project" {
+			return fmt.Errorf("%w: %s; v3 projects are folders, so run `claude-atlas init` in the work and delete this vault", ErrProjectVault, root)
+		}
+		res.FromV2 = existing.ID != "" && existing.Kind == Kind
+		res.Repaired = !res.FromV2
 	case SchemaV1:
 		res.FromV1 = true
 	default:
@@ -1188,26 +747,22 @@ func markerState(root string, existing Config, parsed bool, res *AdoptResult) er
 	return nil
 }
 
-// adoptConfig decides the identity file adopt writes: a current one is kept, a v1 or a
-// damaged one is rebuilt with its mode and creation date, and a vault without one gets a
-// new one. Without a kind, adopt keeps the vault's kind or makes it a project; a repair
-// asks for the kind rather than choosing one.
+// adoptConfig decides the identity file adopt writes: a current one is kept, a v2 one
+// keeps its id and loses its access and grants, a v1 or a damaged one is rebuilt with its
+// mode and creation date, and a vault without one gets a new one.
 func adoptConfig(root string, existing Config, res *AdoptResult, opts Options, now time.Time) (Config, error) {
 	if res.AlreadyAdopted {
-		if opts.Kind != "" && opts.Kind != existing.Kind {
-			return Config{}, fmt.Errorf("%s is already a %s; a vault's kind does not change", root, existing.Kind)
-		}
 		return existing, nil
 	}
-	if opts.Kind == "" {
-		switch k, err := ParseKind(string(existing.Kind)); {
-		case err == nil:
-			opts.Kind = k
-		case res.Repaired:
-			return Config{}, errors.New("the identity file names no kind; pass --as knowledge or --as project")
-		default:
-			opts.Kind = Project
+	if res.FromV2 {
+		existing.Schema = Schema
+		if opts.Name != "" {
+			existing.Name = opts.Name
 		}
+		if opts.Scope != "" {
+			existing.Scope = opts.Scope
+		}
+		return existing, nil
 	}
 	if opts.Mode == "" {
 		opts.Mode = existing.Mode
@@ -1217,6 +772,9 @@ func adoptConfig(root string, existing Config, res *AdoptResult, opts Options, n
 	}
 	if opts.Name == "" {
 		opts.Name = existing.Name
+	}
+	if opts.Scope == "" {
+		opts.Scope = existing.Scope
 	}
 	cfg, err := newConfig(root, opts, now)
 	if err != nil {
@@ -1229,11 +787,9 @@ func adoptConfig(root string, existing Config, res *AdoptResult, opts Options, n
 }
 
 // Adopt turns an existing directory, an Obsidian vault, a claude-obsidian vault, or a v1
-// vault into a claude-atlas vault of a kind. It adds only what is missing and commits
-// every file already there. It rewrites a v1 identity file, repairs a damaged one, moves
-// files an older version put at other paths, and, when adopting as a knowledge base,
-// commits a baseline and then removes the project scaffolding; otherwise it never
-// replaces or removes a file.
+// or v2 vault into a claude-atlas knowledge base. It adds only what is missing and
+// commits every file already there. It rewrites a v1 identity file, raises a v2 one, and
+// repairs a damaged one; it never replaces or removes any other file.
 func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	if err := requireGit(); err != nil {
 		return nil, err
@@ -1250,7 +806,7 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 		return nil, fmt.Errorf("%s is not a directory", abs)
 	}
 	if !IsAdoptable(abs) {
-		return nil, fmt.Errorf("%s is not a vault: it has no .obsidian/, wiki/, or vault identity file; create one with `claude-atlas new-project` or `new-knowledge`", abs)
+		return nil, fmt.Errorf("%s is not a vault: it has no .obsidian/, wiki/, or vault identity file; create one with `claude-atlas new-knowledge`", abs)
 	}
 	existing, parsed := ReadConfig(abs)
 	res := &AdoptResult{Root: abs, WasLegacy: IsLegacy(abs)}
@@ -1261,54 +817,20 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	res.Kind = cfg.Kind
 	repo := RepoAt(abs)
 	if err := repo.CheckIdle(); err != nil {
 		return nil, err
 	}
-	if repo.Prefix != "" {
-		// The repository that holds the vault holds its history too. Only a project that
-		// already has its identity file takes this path, which is what a clone of one
-		// looks like. Any other folder named atlas keeps its history to itself.
-		switch {
-		case !res.AlreadyAdopted:
-			return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history; create a project inside a repository with `claude-atlas new-project NAME --in REPO`", abs)
-		case cfg.Kind != Project:
-			return nil, fmt.Errorf("%s: only a project lives inside a repository", abs)
-		}
-		host := gitx.Repo{Dir: repo.Dir}
-		if host.Ignored(InRepoDir + "/") {
-			return nil, fmt.Errorf("%s ignores %s/; remove that rule from .gitignore first", repo.Dir, InRepoDir)
-		}
-	} else {
-		if repo.InsideOtherRepo() {
-			return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
-		}
-		if !repo.IsRepo() {
-			if err := repo.Init(); err != nil {
-				return nil, err
-			}
-			res.GitInitialized = true
-		}
+	if repo.InsideOtherRepo() {
+		return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
 	}
-	// Removing the project scaffolding is one step, but git holds it first.
-	if cfg.Kind == Knowledge && !res.AlreadyAdopted {
-		if err := checkInbox(abs); err != nil {
+	if !repo.IsRepo() {
+		if err := repo.Init(); err != nil {
 			return nil, err
 		}
-		if res.Baseline, err = baseline(repo, now); err != nil {
-			return nil, err
-		}
-		if res.Removed, err = removeProjectFiles(abs); err != nil {
-			return nil, err
-		}
+		res.GitInitialized = true
 	}
-	if res.AlreadyAdopted && cfg.Kind == Project {
-		if res.Moved, err = moveLegacy(repo, abs); err != nil {
-			return nil, err
-		}
-	}
-	if res.FromV1 || res.Repaired {
+	if res.FromV1 || res.FromV2 || res.Repaired {
 		if err := writeFile(abs, Marker, cfg.Encode()); err != nil {
 			return nil, err
 		}
@@ -1331,18 +853,17 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 		return nil, err
 	}
 	res.OperationID = NewOperationID("setup", now)
-	what := fmt.Sprintf("adopt %s %s", cfg.Kind, cfg.Name)
+	what := fmt.Sprintf("adopt knowledge base %s", cfg.Name)
 	switch {
 	case res.WasLegacy:
-		what = fmt.Sprintf("adopt claude-obsidian vault as %s %s", cfg.Kind, cfg.Name)
+		what = fmt.Sprintf("adopt claude-obsidian vault as knowledge base %s", cfg.Name)
 	case res.FromV1:
-		what = fmt.Sprintf("adopt v1 vault as %s %s", cfg.Kind, cfg.Name)
+		what = fmt.Sprintf("adopt v1 vault as knowledge base %s", cfg.Name)
+	case res.FromV2:
+		what = fmt.Sprintf("adopt v2 vault as knowledge base %s", cfg.Name)
 	}
 	if res.Repaired {
 		what += "; repaired identity file"
-	}
-	if len(res.Removed) > 0 {
-		what += "; removed " + strings.Join(res.Removed, ", ")
 	}
 	sha, err := repo.Commit(CommitMessage("setup", what, res.OperationID))
 	if err != nil {

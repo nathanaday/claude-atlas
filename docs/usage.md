@@ -4,261 +4,279 @@ Every command, with examples. `claude-atlas help` prints the short form.
 
 ## Three layers
 
-`claude-atlas` on its own opens the whole atlas as one interactive screen
-(`claude-atlas view` says the same explicitly). Everything it does is also
-one command, and one tool from a Claude Code session, so scripts, muscle
-memory, and the `atlas` skills all work:
+`claude-atlas` on its own opens the whole atlas as one screen (`claude-atlas
+view` says the same explicitly). Everything it does is also one command, and
+one tool from a Claude Code session, so scripts, muscle memory, and the
+`atlas` skills all work:
 
 | In `view` | Command | Tool, from a Claude Code session |
 |---|---|---|
-| `n` new project, `N` new knowledge base | `new-project NAME [--in REPO]`, `new-knowledge NAME` | `vault` create |
-| `a` adopt a vault | `adopt PATH` | `vault` adopt |
-| Enter on a vault | `show NAME` | `atlas` |
-| `o` open in Obsidian | `open-vault NAME` | — |
-| `c` start Claude Code | `open-claude NAME` | — |
-| `i` ingest sources, on a project | `ingest NAME [PATH...]` | `stage`, then the `wiki-ingest` skill |
-| `l` then `i` snapshot a repository for the wiki | `ingest NAME --repo REPO` | `stage` with `repo`, then the `repo-map` skill |
-| `t` tasks on a project, `p` plant, `c` continue | `tasks NAME`, `plant NAME TEXT`, `open-claude NAME --task ID` | `tasks`, `plant` |
-| `T` every project's tasks | `tasks` | — |
-| `l` repositories on a project: `n` new, `a` link, `e` edit, `u` unlink, `i` snapshot | `new-repo NAME REPO`, `link NAME PATH`, `edit-repo NAME REPO`, `unlink NAME REPO`, `repos [NAME]` | `repo` |
-| `e` edit a vault, `s` save | `edit NAME --…` | `vault` edit |
-| `e` then `r` forget | `remove NAME` | `vault` forget |
-| `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` | `mount` |
-| `C` new cluster; `M` or `e` then Enter on `Members`, on a knowledge base: `a` add, `x` drop | `new-cluster NAME`, `cluster NAME`, `cluster add NAME KB`, `cluster remove NAME KB\|ID` | `vault` create with `members`; `cluster` |
+| Enter on an entry | `show NAME` | `atlas`, `status` |
+| `o` open a knowledge base in Obsidian | `open-vault KB` | — |
+| `c` start Claude Code in a knowledge base or a project | `open-claude NAME [--task ID]` | — |
+| `p` plant a task on a project | `plant PROJECT TEXT` | `plant` |
 | `R` refresh | `refresh` | `atlas` with `refresh` |
-| — | `relocate PATH` | — |
-| — | `config KEY VALUE` | `settings` |
-| `←` `→` switch tabs; `h` shows every key | — | — |
-| — (no `view` key; run from a `lint` finding) | `stub VAULT [TITLE...] [--type T]` | `stub` |
+| `←` `→` switch tabs; `h` shows every key; `q` quits | — | — |
+| — | `new-knowledge NAME`, `adopt PATH`, `edit KB`, `remove KB` | `vault` |
+| — | `init`, `link KB`, `unlink`, `forget PROJECT` | `project` |
+| — | `describe PROJECT` | `stage`, then the `describe` skill |
+| — | `ingest KB [PATH...]` | `stage`, then the `wiki-ingest` skill |
+| — | `tasks [PROJECT]`, `task PROJECT ID …`, `phase PROJECT …` | `tasks`, `task`, `phase` |
+| — | `config new-days N` | `settings` |
+| — | `stub KB [TITLE...]` | `stub` |
+| — | `lint`, `history`, `undo`, `mode`, `recover`, `upgrade`, `apply` | `lint`, `history`, `undo`, `mode` |
+| — | `relocate PATH`, `setup`, `doctor`, `info`, `version` | — |
 
-## Create a vault
+## Two things
 
-A vault has a kind. A **project** is where the work is: an inbox, tasks,
-questions, ideas, and repositories. A **knowledge base** holds sources,
-entities, and concepts, and has no inbox and no tasks. The kind never changes.
+A **knowledge base** is an Obsidian vault with an inbox, sources, entities,
+and concepts. Every change to it is one reviewed operation and one git
+commit. A **project** is a folder named `atlas/` inside your work, holding
+tasks, phases, and an inbox for task notes. It has no git of its own. A
+project uses one knowledge base; a knowledge base serves many projects.
+
+## Create a knowledge base
 
 ```bash
-claude-atlas new-project sensor-triage
-claude-atlas new-project cs566 --tags usc,fall
-claude-atlas new-knowledge ai-ml --scope "Machine learning: models, training, evaluation, agents."
-claude-atlas new-knowledge field-optics --access guarded
-claude-atlas new-project reading --mode lyt
-claude-atlas new-project ~/Desktop/scratch --name Scratch
+claude-atlas new-knowledge product-x --scope "The thermal fire-detection product line: cameras, firmware, alarm pipeline, false-alarm sources and mitigations."
+claude-atlas new-knowledge reading --mode lyt
+claude-atlas new-knowledge ~/Desktop/notes --name Notes
 ```
 
-With no name, in a terminal, both commands open a screen that asks for the
-kind, a name, a filing mode, the tags or the scope, and a location.
+A new knowledge base goes to `<vaults dir>/<name>`, `~/Vaults/product-x` by
+default. To put it somewhere else, give a path instead of a name. The atlas
+lists a knowledge base outside the vaults directory in its config, because
+the scan cannot find it there. Nothing else depends on where it is.
 
-A new vault goes in the vaults directory, under `projects/` or `knowledge/`:
-`sensor-triage` goes to `~/Documents/Vaults/projects/sensor-triage`, `ai-ml`
-to `~/Documents/Vaults/knowledge/ai-ml`. To put a vault somewhere else, give a
-path instead of a name, or type another location on the add screen. The atlas
-lists a vault outside the vaults directory in its config, because the scan
-cannot find it there. Nothing else depends on where a vault is.
+The scope is one or two sentences: what the knowledge base holds and what it
+does not. A project session reads it to know what belongs there. Split a
+knowledge base only at a trust boundary, work and personal, private and
+shared; few and large beats many and small.
 
-A vault cannot go inside another vault.
-
-A project's tags group it in `view`: the first tag is its group on the Projects tab.
-`--tags usc,fall` puts `cs566` under `projects/usc`.
-
-`--access` states a knowledge base's intent for the projects that mount it:
-`open` lets every one of them write, `guarded` only the ones it grants. See
-"Mount a knowledge base" below. This is hygiene, not security. Any process on
-the machine can read the files.
-
-## Edit a vault
+## Edit, show, and forget a knowledge base
 
 ```bash
-claude-atlas edit cs566 --name "CS 566" --tags usc,fall
-claude-atlas edit cs566 --tags ""
-claude-atlas edit ai-ml --scope "Machine learning, end to end." --access guarded
+claude-atlas edit product-x --name "Product X" --scope "The thermal fire-detection product line, end to end."
+claude-atlas show product-x
+claude-atlas remove product-x
 ```
 
-A project takes `--name` and `--tags`; a knowledge base takes `--name`,
-`--scope`, and `--access`. An empty value clears a field. Each edit writes the
-vault's identity file and commits it there as a `setup` operation, so the
-change is in the vault's own history.
+Each edit writes the identity file and commits it in the knowledge base as a
+`setup` operation. **A new name moves the folder.** The leaf changes and the
+parent stays; the folder takes the name cleaned for a path, so `Product X:
+Notes` files as `Product X- Notes` while the name keeps the colon. A taken
+folder refuses the whole edit.
 
-**A new name moves the folder.** `edit cs566 --name sensor-triage` renames
-`projects/cs566` to `projects/sensor-triage`. The leaf changes and the parent
-stays, so a vault outside the vaults directory moves the same way and its
-`vaults` entry in the atlas config is rewritten. The folder takes the name
-cleaned for a path, the way a repository's name is, so `CS 566: Robotics`
-files as `CS 566- Robotics` while the vault's name keeps the colon. If a
-folder of that name already exists, the whole edit is refused and the identity
-file is untouched. A project that lives inside a repository at `REPO/atlas/`
-keeps its folder: that name belongs to the layout. Mount folders keep their
-own names too, because a project's pages link through `kb/<name>`; rename one
-with `mount PROJECT KB --as NAME`.
+`remove` drops a knowledge base from the config; the folder stays. A
+knowledge base inside the vaults directory cannot be forgotten: the scan
+finds it there, so move or delete the folder.
 
-Anything outside the atlas holding the old path loses it: a shell sitting in
-the folder, an open editor, a running Obsidian window. Obsidian prunes a
-registry entry whose folder is gone, and `open-vault` registers the new path.
-
-See everything the atlas knows about a vault, and forget one (the folder stays
-on disk):
+## Make a project
 
 ```bash
-claude-atlas show cs566
-claude-atlas remove cs566
+cd ~/code/webapp
+claude-atlas init                                   # name: the folder's; asks for a description and a knowledge base
+claude-atlas init --name "Web App" --knowledge product-x --description "The customer-facing web application."
+claude-atlas init --no-knowledge                    # ask nothing
 ```
 
-`remove` drops a vault from the config. A vault inside the vaults directory
-cannot be forgotten: the scan finds it there, so move or delete the folder. A
-registered vault whose folder is gone is still listed, as `missing`, and
-`remove` takes its path or its folder's name to forget it.
+`init` writes `atlas/` in the current folder, with `project.json`, `tasks/`,
+`tasks/archive/`, `phases/`, and `inbox/`, and lists the folder in the atlas
+config. It writes nothing else and never touches git: when the work is a
+repository, the repository tracks `atlas/` like any other folder, on the
+branch you are on. In a terminal with no flags it asks for the description
+and offers the knowledge bases the atlas knows, with none as a choice. It
+refuses a folder that already has `atlas/` without a `project.json`, and a
+folder inside another project or inside a knowledge base.
 
-## Work in a vault with Claude Code
-
-Put a source in the inbox and start Claude Code inside the vault:
+Then, from inside the work:
 
 ```bash
-cp ~/Downloads/dinov2.pdf ~/Documents/Vaults/projects/sensor-triage/inbox/
-claude-atlas open-claude sensor-triage
+claude-atlas link product-x                         # set the knowledge base
+claude-atlas unlink                                 # clear it
+claude-atlas link product-x --project webapp        # from anywhere
+claude-atlas forget webapp                          # drop it from the config; atlas/ stays
+claude-atlas describe webapp                        # stage a snapshot for the describe skill
+```
+
+Deleting `atlas/` is how a project ends.
+
+**A moved project heals itself.** The config holds the work folder's path.
+Move the folder, then start a session in it: the hook finds the project's id
+listed at another path and rewrites the entry. A clone on another machine is
+added the same way. Until then the view shows the project as missing.
+
+**Describe the project.** A project is invisible to its knowledge base until
+a page describes it. `describe` writes a snapshot of the work into the
+knowledge base's inbox, then offers to start Claude Code with
+`/claude-atlas:describe`, which reads the snapshot and the work and writes
+`wiki/entities/<name>.md`: what the project is, how it is built and laid
+out, what it has delivered, the concepts it introduces. The snapshot holds
+the work's CLAUDE.md and README, its files (folders only past 2000), the
+first heading of every markdown file under `docs/`, and, once a page exists,
+the git log since that page's commit. The session hook says when the page is
+missing or has fallen behind, and `task-finish` offers the update when a
+task lands.
+
+## Tasks and phases
+
+A task is a page, `atlas/tasks/<Title>.md`, with a status that moves from
+`planted` through `planned`, `active`, and `blocked` to `done` or
+`cancelled`. Finished tasks move to `atlas/tasks/archive/`. The core renders
+`atlas/tasks/tasks.md` from the pages, grouped by phase; a session started in
+the work sees the open tasks at its start, so a task lives across sessions.
+
+Plant a task without ceremony, from anywhere:
+
+```bash
+claude-atlas plant webapp "Filter vehicle false alarms"
+claude-atlas plant webapp "Write the fault taxonomy" --priority high --phase "Alarm quality" --due 2026-10-01
+```
+
+Or drop a note into the project's `atlas/inbox/` folder; the next session's
+`/claude-atlas:task-plant` turns each note into a task and removes the note.
+
+A phase is a named slice of the timeline: a page under `atlas/phases/` with a
+goal and an order. Tasks name their phase; a phase never lists its tasks.
+
+```bash
+claude-atlas phase webapp create "Alarm quality" --goal "False alarms under 1 per camera-day." --order 1
+claude-atlas phase webapp rename "Alarm quality" --to "Alarm precision"
+claude-atlas phase webapp reorder "Alarm precision" --order 2
+claude-atlas phase webapp remove "Alarm precision"      # refused while a task names it
+```
+
+See what is open, change a task, and finish one:
+
+```bash
+claude-atlas tasks webapp
+claude-atlas tasks                                  # every project
+claude-atlas task webapp task-20260917-3f2a --status blocked
+claude-atlas task webapp "Filter vehicle" --phase "Alarm quality" --priority high
+claude-atlas task webapp task-20260917-3f2a --status done   # moves the page to archive/
+```
+
+The status is the truth and the folder follows it. The tools change the
+frontmatter; the Plan, Progress, and Outcome sections are prose Claude writes
+with its ordinary editing tools, and you may edit any page by hand in any
+editor. Only `tasks.md` and `project.json` are off limits to the model.
+
+Work a task in a session. The skills carry the ceremony: `task` lists,
+routes, and reviews, `task-plan` asks what changes the plan and writes it,
+`task-run` works the plan and writes progress at every stopping point,
+`task-finish` closes the task, archives it, and offers the knowledge base
+what the work taught. `open-claude --task` starts the session in the work
+with `task-run` as the first message:
+
+```bash
+claude-atlas open-claude webapp --task task-20260917-3f2a
+claude-atlas open-claude webapp --task "Filter vehicle"      # a title prefix works
+```
+
+`show` counts a project's tasks and signals the blocked ones and the stale
+ones, active but untouched for 14 days.
+
+## Work in a session
+
+A session started anywhere inside a project's work is the project's session.
+Its start says which project this is, which knowledge base it uses, whether
+a page describes it there, and what tasks are open:
+
+```text
+claude-atlas: project webapp at ~/code/webapp (git, main)
+Knowledge: product-x · The thermal fire-detection product line … · 140 pages · ~/Vaults/product-x
+This project has no page in product-x; the describe skill writes it.
+Search the knowledge base (the wiki-query skill) before answering from the code alone. Change wiki pages only through the atlas MCP tools (plan, then apply).
+Open tasks: 4 (active 1, blocked 0, planned 1, planted 2) in 2 phases. Continue one with the task-run skill; see them all with the tasks tool.
+- [active] Filter vehicle false alarms (task-20260917-3f2a) · Alarm quality · high · updated 2026-09-17
+```
+
+A session started in the knowledge base sees every project that uses it:
+
+```text
+claude-atlas: knowledge base product-x (generic mode) at ~/Vaults/product-x
+Projects: webapp (~/code/webapp, 4 open tasks), firmware (~/code/fw, 0 open tasks). Plant into one with the task tools; read its work through its path.
+Not yet described here: firmware; the describe skill writes the page.
+Inbox: 2 sources waiting; the wiki-ingest skill files them.
 ```
 
 In the session, the skills are on the slash menu:
 
 | Skill | What it does |
 |---|---|
-| `/claude-atlas:wiki` | orient in the vault and route to the right skill |
-| `/claude-atlas:work` | take a change from a sentence to commits: the facts, the repositories, the plan, then the task |
-| `/claude-atlas:task` | list open tasks, move one between statuses, route |
-| `/claude-atlas:task-plant` | plant a task from a sentence or the notes in `inbox/tasks/` |
+| `/claude-atlas:wiki` | orient and route to the right skill |
+| `/claude-atlas:work` | take a change from a sentence to a task with a plan; from a knowledge base, one per project it touches |
+| `/claude-atlas:task` | list open tasks by phase, move one, create or change a phase, review the list |
+| `/claude-atlas:task-plant` | plant a task from a sentence, the notes in `atlas/inbox/`, or into any project from its knowledge base |
 | `/claude-atlas:task-plan` | ask what matters, choose an approach, write the plan |
 | `/claude-atlas:task-run` | work the plan and write progress |
-| `/claude-atlas:task-finish` | close as done or cancelled and archive |
+| `/claude-atlas:task-finish` | close as done or cancelled, archive, offer the knowledge base what was learned |
+| `/claude-atlas:describe` | describe a project in its knowledge base from a snapshot, or bring its page up to date |
 | `/claude-atlas:wiki-ingest` | read what is in the inbox and write cited pages |
-| `/claude-atlas:repo-map` | describe a repository in a knowledge base from a snapshot, or bring its page up to date |
-| `/claude-atlas:wiki-query` | answer from the vault, with citations |
+| `/claude-atlas:wiki-query` | answer from the knowledge base, with citations |
 | `/claude-atlas:save` | keep an answer or decision as a page |
-| `/claude-atlas:wiki-lint` | check the wiki's health |
+| `/claude-atlas:wiki-lint` | check the knowledge base's health |
 | `/claude-atlas:wiki-mode` | read or change the filing mode |
 | `/claude-atlas:wiki-fold` | roll up log entries |
 | `/claude-atlas:canvas` | create and update Obsidian Canvas boards |
 | `/claude-atlas:obsidian-bases` | draft Bases `.base` views |
 | `/claude-atlas:obsidian-markdown` | Obsidian syntax help |
 | `/claude-atlas:think` | a structured review before a consequential change |
+| `/claude-atlas:atlas` | every knowledge base and project, refresh, settings |
+| `/claude-atlas:atlas-project` | make this folder a project; link, unlink, rename, forget |
+| `/claude-atlas:atlas-knowledge` | create a knowledge base, change its scope, adopt a vault |
 
-Claude shows a preview of every change before it applies it. Each applied
-change is one git commit in the vault.
+Claude shows a preview of every change to the knowledge base before it
+applies it. Each applied change is one git commit there. In a project
+session, the wiki tools act on the project's knowledge base, and a source
+captured from there records the project as provenance. In a knowledge base
+session, `plant`, `tasks`, `task`, `phase`, and `stage` take `project` to
+reach any project that uses it.
 
-In a project, the tools see its mounts. Ingest into a knowledge base still
-runs in the project session: `capture` with `vault` set to the knowledge
-base's root takes a file from the project's inbox and records `via`, the
-project it came through; `plan` and `apply` with that `vault` and kind
-`ingest` or `save` need the mount to be effectively `write` — a read mount
-refuses with "cs566 mounts ai-ml read-only". A title's `target` set to a
-mount's name tells `stub` to seed the page inside that knowledge base; `stub`
-with `vault` set to the knowledge base's root stubs its own wanted pages
-instead. The `mounts` tool lists a project's mounts with their effective
-access and page counts.
+## Ingest sources
 
-## Tasks
-
-A task is a page in the vault, `wiki/tasks/<Title>.md`, with a status that
-moves from `planted` through `planned`, `active`, and `blocked` to `done` or
-`cancelled`. Finished tasks move to `wiki/tasks/archive/`. The core keeps the
-task ledger and `wiki/tasks/tasks.md` from the pages; a session started in the
-vault sees the open tasks at its start, so a task lives across sessions.
-
-Plant a task without ceremony, from anywhere:
+Put a source in the knowledge base's inbox and start Claude Code there:
 
 ```bash
-claude-atlas plant sensor-triage "Check the trust dialog on resume"
-claude-atlas plant sensor-triage "Write the fault taxonomy" --priority high --workdir ~/code/sensor-triage
+cp ~/Downloads/paper.pdf ~/Vaults/product-x/inbox/
+claude-atlas open-claude product-x
 ```
 
-Or drop a note into the vault's `inbox/tasks/` folder; the next session's
-`/claude-atlas:task-plant` turns each note into a task and removes the note.
-
-See what is open, in one vault or in every project:
-
-```bash
-claude-atlas tasks sensor-triage
-claude-atlas tasks                       # every project, outside a vault
-claude-atlas tasks sensor-triage --all   # with the archive
-```
-
-Work a task in a session. The skills carry the ceremony: `task` lists and
-routes, `task-plan` asks what changes the plan and writes it, `task-run`
-works the plan and writes progress at every stopping point, `task-finish`
-closes the task and archives it. `open-claude --task` starts the session in
-the task's workdir, with the vault selected and `task-run` as the first
-message:
+Or point the atlas at a file or folder outside the knowledge base. What is
+new is copied into `inbox/`; the originals stay where they are. A file whose
+bytes the knowledge base already holds is skipped, so a folder that grows
+over time can be ingested again and only its new files cost anything. The
+knowledge base remembers the folders it staged from, and an `ingest` with no
+path stages what is new in every one of them.
 
 ```bash
-claude-atlas open-claude sensor-triage --task task-20260913-3f2a
-claude-atlas open-claude sensor-triage --task "Write the fault"   # a title prefix works
-```
-
-In `view`, `t` on a project shows its open tasks as boxes: `p` plants one,
-`c` continues the selected task in Claude Code, `o` opens its page in
-Obsidian. `T` shows every project's open tasks on one board. `show` counts a
-project's tasks and signals the blocked ones and the stale ones, active but
-untouched for 14 days.
-
-`upgrade` brings a vault made by an older version to the current layout. It
-adds the task folders, the task index, and the vault's CSS snippet, and it
-moves the task index from `wiki/tasks/index.md` to `wiki/tasks/tasks.md`:
-
-```bash
-claude-atlas upgrade sensor-triage
-claude-atlas upgrade --all
-```
-
-The snippet, `.obsidian/snippets/claude-atlas.css`, colors the file explorer
-by kind of place: the wiki and each of its folders, `inbox/`, `ideas/`, and
-every linked repository beside the wiki in its own color, so the split
-between memory and deliverables shows at a glance. Upgrade enables it in the
-vault's appearance settings; reload Obsidian to see it.
-
-## A repo reaches its vault
-
-A session started in a repository that a project links uses that project's
-vault: the atlas tools resolve it, and
-the session hook says so and lists the open tasks, the ones whose workdir is
-that folder first. Nothing is written into the repository. If two projects
-link the same folder, pass `vault` to the tools or set `CLAUDE_ATLAS_VAULT`.
-
-## Ingest a folder of sources
-
-Point a project at a file or folder outside its vault. What is new is copied
-into the vault's `inbox/`; the originals stay where they are. A file whose
-bytes the vault already holds, ingested earlier or still waiting in the inbox,
-is skipped, so a folder that grows over time can be ingested again and only its
-new files cost anything. The vault remembers the folders it staged from, and an
-`ingest` with no path stages what is new in every one of them. A source folder
-is not a linked repository; the atlas records nothing about it.
-
-```bash
-claude-atlas ingest sensor-triage ~/Papers
-claude-atlas ingest sensor-triage ~/Papers/dinov2.pdf
-claude-atlas ingest sensor-triage                # every folder ingested before
-claude-atlas ingest sensor-triage ~/Papers --dry-run
-claude-atlas ingest sensor-triage ~/Papers --no-claude
+claude-atlas ingest product-x ~/Papers
+claude-atlas ingest product-x ~/Papers/paper.pdf
+claude-atlas ingest product-x                # every folder ingested before
+claude-atlas ingest product-x ~/Papers --dry-run
+claude-atlas ingest product-x ~/Papers --no-claude
 ```
 
 After staging, the command offers to start Claude Code with
 `/claude-atlas:wiki-ingest` as its first message, so the review and the
 apply happen in the session. `--no-claude` stages and stops. Nothing is
-ingested until that session runs the skill; files stay in `inbox/` until then,
-and an `ingest` with nothing new still offers to start the session on them.
+ingested until that session runs the skill.
 
-The first time Claude Code opens a vault it asks whether you trust the folder,
-with `No, exit` selected. Choose `Yes`; pressing Enter on the default quits.
+The first time Claude Code opens a folder it asks whether you trust it, with
+`No, exit` selected. Choose `Yes`; pressing Enter on the default quits.
 
 ## History and undo
 
 ```bash
-claude-atlas history sensor-triage
-claude-atlas undo sensor-triage ingest-20260912-150405-ab12
+claude-atlas history product-x
+claude-atlas undo product-x ingest-20260912-150405-ab12
 ```
 
-Inside a vault, the vault argument can be omitted:
+Inside a knowledge base or a project, the name can be omitted; a project
+resolves to its knowledge base:
 
 ```bash
-cd ~/Documents/Vaults/projects/sensor-triage
+cd ~/Vaults/product-x
 claude-atlas history
 claude-atlas lint
 ```
@@ -266,141 +284,137 @@ claude-atlas lint
 ## Health check
 
 ```bash
-claude-atlas lint sensor-triage
-claude-atlas lint sensor-triage --json
-claude-atlas lint sensor-triage --strict     # exit 1 when there are findings
+claude-atlas lint product-x
+claude-atlas lint product-x --json
+claude-atlas lint product-x --strict     # exit 1 when there are findings
 ```
 
 ## Stubs and wanted pages
 
-A **wanted page** is a title one or more pages link to that nobody has written
-yet. Lint reports it, and a session's start line names a few and counts the
-rest:
+A **wanted page** is a title one or more pages link to that nobody has
+written yet. Lint reports it, and a session's start line names a few and
+counts the rest:
 
 ```text
-Stubs: 2 pages to fill (Backpropagation, Loss Landscape). Wanted: 1 linked
-page does not exist yet (Contrastive Learning). Fill or stub them with the
-wiki-lint skill.
+Stubs: 2 pages to fill (Backpropagation, Loss Landscape). Wanted: 1 linked page does not exist yet (Contrastive Learning). Fill or stub them with the wiki-lint skill.
 ```
 
 `stub` creates a seed page for each: frontmatter and the section headings its
 type usually carries, left for a session or a person to fill in.
 
 ```bash
-claude-atlas stub sensor-triage
-claude-atlas stub sensor-triage "Backpropagation" "Loss Landscape" --type concept
+claude-atlas stub product-x
+claude-atlas stub product-x "Backpropagation" "Loss Landscape" --type concept
 ```
 
 With no title, `stub` seeds every wanted page and every empty page a link
 already points to. `--type` sets the type for a title that names none:
-concept or entity; in a project also question or session; in `lyt` mode note
-or moc as well. The default is concept, or note in `lyt` mode.
-
-The `stub` tool takes the same arguments in a session. A title's `target`
-names a mount: the stub lands in that knowledge base instead of the
-project's own wiki, and the tool returns its path through the mount,
-`kb/<name>/<path inside the knowledge base>`. A stub never lands in a
-read-only mount.
+concept or entity; in `lyt` mode note or moc as well. The default is concept,
+or note in `lyt` mode.
 
 ## Filing mode
 
-`generic` files pages by type into `wiki/sources/`, `entities/`, `concepts/`,
-`questions/`, and `sessions/`. `lyt` keeps atomic notes in `wiki/notes/` and
-navigates them through Maps of Content in `wiki/mocs/`.
+`generic` files pages by type into `wiki/sources/`, `entities/`, and
+`concepts/`. `lyt` keeps atomic notes in `wiki/notes/` and navigates them
+through Maps of Content in `wiki/mocs/`.
 
 ```bash
-claude-atlas mode sensor-triage
-claude-atlas mode sensor-triage lyt
+claude-atlas mode product-x
+claude-atlas mode product-x lyt
 ```
 
 Changing the mode affects future pages only.
 
-## Recover
+## Recover and upgrade
 
-If an operation was interrupted, the vault says so at the next session start.
-Restore it:
+If an operation was interrupted, the knowledge base says so at the next
+session start. Restore it:
 
 ```bash
-claude-atlas recover sensor-triage
+claude-atlas recover product-x
+```
+
+`upgrade` brings a knowledge base made by an older version to the current
+layout: it raises a v2 identity file to v3, dropping access and grants, and
+adds the template files the vault lacks, `inbox/` and `ideas/` among them.
+
+```bash
+claude-atlas upgrade product-x
+claude-atlas upgrade --all
 ```
 
 ## Open in Obsidian
 
-Opens a vault by name or path, or the vault you are in with no argument. If
-Obsidian does not know the folder yet, the command offers to register it;
-Obsidian quits and relaunches so it sees the new entry.
+Opens a knowledge base by name or path, or the one you are in with no
+argument. If Obsidian does not know the folder yet, the command offers to
+register it; Obsidian quits and relaunches so it sees the new entry.
 
 ```bash
-claude-atlas open-vault sensor-triage
+claude-atlas open-vault product-x
 claude-atlas open-vault
 ```
 
 ## The atlas
 
-`claude-atlas` with no command, or `claude-atlas view`, is one screen with a
-tab per kind. The Projects tab lists every project as a box with a dashed line
-to each knowledge base it mounts and the access it has there. The Knowledge tab
-lists every knowledge base with how many projects mount it; Enter turns the
-count into one line per project. The arrow always points at the knowledge
-base. The row under the cursor is the colored one; every other row is plain. A
-cluster stands apart: it wears a ◈ before its name in its own color, takes a
-double rule and a wider box, and the tab files every cluster above the rest
-under a `Clusters` header, with the plain ones under `Knowledge bases`.
-The Tasks tab is every project's open tasks. A Problems tab appears when
-the scan found a vault it could not read. Enter on any vault expands it in
-place: path, created, a knowledge base's scope, access, and grants, the vault
-check, the last touch, open threads, open tasks, and a project's repositories
-with their remotes; `show NAME` prints the rest. One sentence under the tab
-bar says what the tab holds. The footer names only the tab's own keys; `h`
-shows every key, and again hides them.
+`claude-atlas` with no command, or `claude-atlas view`, is one screen with
+two tabs. The Knowledge tab lists every knowledge base with its scope, page
+count, inbox count, and the projects that use it. The Projects tab lists
+every project grouped by knowledge base, with its path, open task count,
+current phase, and a mark when the path is missing. Enter expands an entry
+in place with what `show` prints. The view is for seeing what exists and
+getting there; creating and changing things is the CLI's and the session's
+job.
 
 | Key | What it does |
 |---|---|
-| `h` | show every key; again to hide them |
 | `←` `→` | previous tab, next tab |
 | `↑` `↓` | move |
-| Enter | expand the vault under the cursor, or collapse it |
-| Esc | collapse what is expanded; on the Tasks tab, back to Projects; otherwise quit |
-| `n` `N` `C` | create a project, a knowledge base, or a cluster |
-| `a` | adopt a folder as a vault; on the Problems tab, the folder under the cursor |
-| `o` `c` | open the vault in Obsidian, start Claude Code in it |
-| `i` `t` `l` | on a project: ingest sources, tasks, repositories (`i` there snapshots one for the wiki) |
-| `T` | the Tasks tab |
-| `e` | edit the vault; `s` saves, `r` forgets it |
-| `m` | mounts: mount and unmount on a project; grants on a knowledge base |
-| `M` | members, on a knowledge base: add and drop |
+| Enter | expand the entry under the cursor, or collapse it |
+| `o` | open the knowledge base in Obsidian |
+| `c` | start Claude Code in the knowledge base or the project |
+| `p` | plant a task on the project |
 | `R` | refresh in the background |
+| `h` | show every key; again to hide them |
 | `q` | quit |
-
-Forgetting a vault never touches the folder on disk, and it works only for a
-vault outside the vaults directory.
-
-Every field that takes a path completes it as a shell does: Tab accepts the
-match shown in grey, the arrow keys cycle the others.
 
 ```bash
 claude-atlas
 claude-atlas view
 ```
 
-### How the atlas finds vaults
+### How the atlas finds things
 
-The atlas keeps no list of your vaults. It walks the vaults directory for
-identity files (`.claude-atlas.json`), at most five levels deep, skipping
-folders whose name starts with a dot and folders named `node_modules`, and
-never looking inside a vault it has found. To that it adds the paths under
-`vaults` in the config, for the vaults you keep elsewhere. Every command scans
-afresh before it acts.
+The atlas walks the vaults directory for knowledge base identity files
+(`.claude-atlas.json`), at most five levels deep, skipping folders whose name
+starts with a dot and folders named `node_modules`, and never looking inside
+a vault it has found. To that it adds the knowledge bases listed under
+`knowledge` in the config. Projects are never scanned for: every project's
+work folder is listed under `projects`, because projects live wherever your
+work lives. `init` writes the entry, `forget` removes it, and a session in a
+moved or cloned project heals it. Every command scans afresh before it acts.
 
-`refresh` runs the scan, reads each vault, and rewrites
-`~/.claude-atlas/state/registry.json`: kind, id, name, path, mode, page count,
-heat, last operation, unfinished work, open tasks, and what git says about each
-repository. Everything in that file is derived, so deleting it costs one
+`refresh` runs the scan, reads each entry, and rewrites
+`~/.claude-atlas/state/registry.json`: every knowledge base with its page
+count, heat, inbox count, and projects; every project with its knowledge
+base, task counts, phases, the page that describes it, and what git says
+about the work. Everything in that file is derived, so deleting it costs one
 refresh.
 
 ```bash
 claude-atlas refresh
 ```
+
+`list` prints every entry: kind, heat, name, and path. `show` prints
+everything the atlas holds about one, with the signals that need attention.
+
+```bash
+claude-atlas list
+claude-atlas show webapp
+```
+
+A command names a knowledge base or a project by its name, by its id or an id
+prefix of eight characters or more, or by its path. Two entries with one name
+make the command ask for the path or the id instead.
 
 ### Move the vaults somewhere else
 
@@ -408,305 +422,45 @@ claude-atlas refresh
 at it follow.
 
 ```bash
-claude-atlas relocate ~/Vaults
+claude-atlas relocate ~/Documents/Vaults
 ```
 
 It shows what moves, what `config.json` will say afterwards, and what holds
 the old path that the atlas will not change; then it asks. On the same volume
-the move is a rename. On another volume it copies, checks every file and
-symlink arrived, saves the config, and only then removes the old folder, so
-the vaults are never in one place only. Afterwards it refreshes, which
-rewrites the registry and recreates each project's `kb/` symlinks at the new
-root.
+the move is a rename. On another volume it copies, checks every file arrived,
+saves the config, and only then removes the old folder. Afterwards it
+refreshes. Projects live in your work, never under the vaults directory, so
+their entries stand.
 
-Nothing inside a vault changes: an identity file holds no path, and no page
-cites one. What changes is `vaults_dir`, plus any `vaults` or `repos` entry
-that sat under the old root.
-
-It refuses a target inside the vaults directory or holding it, a target inside
-another vault, a folder that already holds files, and a move while a vault has
-an interrupted operation to recover. Three kinds of state it reports rather
-than repairs: Obsidian's vault list, which drops a missing entry at its next
-launch and which `open-vault` fills again; Claude Code's per-project session
-history, permissions, and memory, which it keys by absolute path; and build
-state inside your repositories that holds the old path, such as a Python
-virtual environment, a CMake cache, or installed packages.
-
-`list` prints every vault: kind, heat, name, and path. `show` prints
-everything the atlas holds about one, with the signals that need attention.
-
-```bash
-claude-atlas list
-claude-atlas show sensor-triage
-```
-
-A command names a vault by its name, by its id or an id prefix of eight
-characters or more, or by its path. Two vaults with one name make the command
-ask for the path or the id instead.
-
-### Link repositories
-
-A project has two kinds of place. The vault is memory: the wiki, the hot
-cache, the tasks. A repository is where the deliverables are made: the code,
-the paper, the slides, the report, in whatever structure the work needs.
-Linking a repository to a project copies nothing. The project's identity file
-records the repository's name, its remote, and how changes land there; the
-atlas config holds the path of a repository that sits outside the project's
-own `repos/` folder. `refresh` reports the branch, uncommitted changes, and
-last commit, and a commit counts as touching the project. A session started
-inside a linked repository uses the project's vault.
-
-Create a repository for a project, clone one from GitHub, or link one that
-exists:
-
-```bash
-claude-atlas new-repo sensor-triage paper                      # in the project's repos/ folder
-claude-atlas new-repo sensor-triage firmware --at ~/code/sensor-firmware
-claude-atlas link sensor-triage https://github.com/you/sensor-app        # cloned into repos/
-claude-atlas link sensor-triage git@github.com:you/sensor-app.git --at ~/code/sensor-app
-claude-atlas link sensor-triage ~/code/sensor-app              # an existing repository
-claude-atlas link sensor-triage ~/Documents/cs566-work --init  # a plain folder becomes one first
-claude-atlas repos sensor-triage
-claude-atlas repos                                             # every project's repositories
-claude-atlas unlink sensor-triage sensor-app
-```
-
-A repository takes the name of its folder, and a project cannot link two of
-one name. It goes under the project's `repos/` folder or outside the vault;
-anywhere else inside the vault is refused, because the vault's git would take
-it in.
-
-**Moving a repository in links it.** A git repository that sits under a
-project's `repos/` folder is a repository of that project. `refresh`, which
-`view` and every command that rewrites the registry run, links each one the
-identity file does not already name, and reports it as `linked`. So moving a
-folder into `repos/` is the whole gesture; no `link` command follows. A folder
-there that is not a git repository is left alone, and so is one whose name a
-repository already has. Because the folder decides membership, `unlink` on a
-repository still under `repos/` is refused: move the folder out first, or the
-next refresh links it again.
-
-**How changes land.** Every repository gets a change policy, kept in the
-project's identity file as `changes`: `pr` means a session works on a branch
-and opens a pull request, never pushing to the default branch; `commit` means
-it commits on the current branch. A new repository takes the atlas-wide
-default, `commit`, whether it was created, linked, cloned, or found under
-`repos/`; `claude-atlas config repo-changes pr` changes that default for every
-repository linked afterwards. `link` takes `--changes pr|commit` to override
-it once, and asks when it clones a repository with a remote. An identity file
-that records no policy at all falls back to `pr` when the repository has a
-remote and `commit` when it has none. A session started inside the repository
-is told the policy at its start, and the `repos` tool repeats it. Change it
-later, or point the project at a repository that moved:
-
-```bash
-claude-atlas edit-repo sensor-triage sensor-app --changes commit
-claude-atlas edit-repo sensor-triage sensor-app --remote https://github.com/you/sensor-app
-claude-atlas edit-repo sensor-triage sensor-app --path ~/code/sensor-app
-```
-
-**What a session is told.** A session that starts in the project's vault gets
-one line per repository from the session-start hook, and the `repos` tool and
-`claude-atlas repos` say the same:
-
-```text
-Repository: sensor-app · changes: pr · repos/sensor-app (main) · described in sensors (wiki/entities/sensor-app.md) at fc70d93, 12 commits behind · CLAUDE.md: repos/sensor-app/CLAUDE.md
-Repository: paper · changes: commit · ~/code/paper (main) · not described in the wiki or a knowledge base
-```
-
-The page that describes a repository is an entity page with
-`entity_type: repository` whose `repo` property is the repository's remote or
-its name, in the project's wiki or in a knowledge base the project mounts;
-its `commit` property is the commit it was written from, and the count is how
-far the current branch has moved since. A page in a knowledge base wins over
-one in the project, and the nearest to HEAD wins among several. The CLAUDE.md
-is named because Claude Code loads it on its own only for a repository under
-the vault; a session working in a repository elsewhere reads it first. The
-repositories screen in `view` shows the same page and count as the last
-refresh found them.
-
-**A repository in the knowledge base.** A mature repository added to a
-project is invisible to the knowledge bases until a page describes it. The
-`repo-map` skill writes that page from a snapshot the core takes:
-
-```bash
-claude-atlas ingest sensor-triage --repo sensor-app    # inbox/sensor-app-<commit>.md, then /claude-atlas:repo-map
-```
-
-The snapshot holds the repository's CLAUDE.md and README, its tracked files
-(folders only past 2000), the first heading of every markdown file under
-`docs/`, and, once a page describes the repository, the log since that page's
-commit. It is captured like any source, so the repository page cites a commit
-through the ledger. `i` on the repositories screen and the `stage` tool with
-`repo` do the same. When the count behind grows, the same skill updates the
-page from the log; `task-finish` offers that for every repository a task
-changed, and the `status` tool names the repositories no page describes and
-those whose page fell more than 20 commits behind, next to the stale tasks.
-
-A repository created in the project's folder gets its own git history, and the
-vault's `.gitignore` names it, so the vault's commits never include it;
-Obsidian still shows it. A plain folder is refused until you agree to
-initialize a repository there, which commits what the folder holds. Unlinking
-leaves the folder alone.
-
-In `view`, `l` on a project shows its repositories, one box each with the
-name, the path, how changes land, and what the last refresh found. `n` creates
-one: a name, then a location that defaults to the project's `repos/` folder.
-`a` links one that exists, by path with Tab completion, or by a URL, which is
-cloned to a location you confirm; it asks before initializing git in a plain
-folder, and asks how changes should land when the repository has a remote. `e`
-edits the remote, the folder, and the change policy. `u` unlinks after asking.
-Each action takes effect at once and refreshes in the background.
-
-### Mount a knowledge base
-
-A project reaches a knowledge base through a mount: `kb/<name>` in the
-project, a symlink to the knowledge base's `wiki/`. `mount`, `unmount`,
-`grant`, and `revoke` manage it:
-
-```bash
-claude-atlas mount cs566 ai-ml
-claude-atlas mount cs566 ai-ml --read
-claude-atlas mount cs566 field-optics --as optics   # two knowledge bases of one name
-claude-atlas unmount cs566 ai-ml
-claude-atlas grant ai-ml cs566 --write
-claude-atlas grant field-optics cs566 --read
-claude-atlas revoke field-optics cs566
-```
-
-`mount` creates the symlink and records the mount, by id, in the project's
-identity file. `--read` mounts it read-only; the default is write. `--as`
-names the mount folder, for a knowledge base whose name collides with an
-existing mount. `unmount` drops the record; the knowledge base is untouched.
-`refresh` recreates a missing or wrong symlink from the identity file and the
-atlas config; `doctor` reports one that needs it.
-
-### Clusters
-
-A cluster is a knowledge base that gathers others. A project mounts the
-cluster and reaches every member, and a member added later reaches every
-project that mounts it at the next refresh.
-
-```bash
-claude-atlas new-cluster p3 --scope "The moviTHERM ecosystem."
-claude-atlas cluster add p3 p3-software
-claude-atlas cluster add p3 p3-people
-claude-atlas mount vision-algorithms p3
-claude-atlas cluster p3
-claude-atlas cluster remove p3 p3-people
-```
-
-In `view`, `C` makes one: the add screen opens with its kind on `cluster` and
-asks the same questions a knowledge base does, plus a `Members` step that
-lists every knowledge base, where `↑` `↓` move and space picks. The kind step
-cycles through project, knowledge base, and cluster, so `N` reaches it too.
-
-To change what a cluster gathers afterwards, press `e` on it and Enter on the
-`Members` row, or press `M` on it; both open the members screen, where `a`
-adds one from a list and `x` drops the one under the cursor. A cluster is an
-ordinary knowledge base until it has a member, so a knowledge base becomes one
-the same way.
-
-The project's identity file records the cluster, once. The symlinks under
-`kb/` are derived, so `mount` and `refresh` make one per member beside the
-cluster's own:
-
-```text
-kb/p3           -> …/p3/wiki
-kb/p3-software  -> …/p3-software/wiki
-kb/p3-people    -> …/p3-people/wiki
-```
-
-Each member decides what a project may do in it, exactly as if the project
-mounted it directly: one guarded member with no grant stays read-only while
-the rest allow write. A knowledge base a project mounts directly keeps that
-mount, and a member whose name is already taken takes the cluster's name as a
-prefix. A member is not unmounted on its own; unmount the cluster.
-
-A cluster does not hold another cluster yet. The cluster's own wiki is an
-ordinary one: it is where a note about which member covers what belongs.
-
-`doctor` reports a member the scan cannot find and a member that is not a
-knowledge base. `cluster remove NAME KB|ID` drops such a member by the name
-the cluster recorded or by its id, without the knowledge base itself needing
-to be reachable.
-
-A knowledge base sets `access`, `open` or `guarded`, at `new-knowledge` or
-with `edit --access`. `open` lets every project that mounts it write; a
-`guarded` knowledge base lets only a project `grant` names write, and every
-other project reads. The access a project gets is the lesser of the mount's
-own access and the grant: a write mount on a guarded knowledge base with no
-grant still reads only.
-
-In `view`, `m` on a vault opens its mounts screen. On a project, `a` lists the
-knowledge bases it does not mount yet and mounts the one you choose, `w` and
-`r` change what the mount under the cursor asks for, and `u` unmounts after
-asking. The picker names a cluster with its member count, so mounting one is
-the same two keystrokes as mounting a knowledge base. On a knowledge base,
-`w` grants write, `r` grants read, `x` revokes a grant, and `a` lists the
-projects and grants the one you choose. Nothing is typed by name, so a typo
-cannot pick the wrong vault. Creating a project offers the same list: the
-`Mounts` step mounts one knowledge base with write access, and `none` is the
-default.
-
-When a grant's project is gone, `revoke KB PROJECT` cannot find it by name;
-`revoke KB ID` drops it by its id instead. A knowledge base that moved out of
-reach still unmounts: the mount is named by id, and the symlink that leads
-nowhere goes with it. An empty folder where the symlink belongs goes too; a
-folder holding files is left alone and named.
-
-A `[[link]]` in a project page resolves to a knowledge base page through the
-mount, in Obsidian, in the graph, in backlinks, and in lint.
-
-### A project inside a repository
-
-`new-project NAME --in REPO` creates the project at `REPO/atlas/`, tracked by
-the repository's own git instead of a history of its own. Every wiki commit
-records only files under `atlas/`. It lands on the current branch. Under a
-`changes: pr` policy, set with `edit-repo NAME REPO --changes pr`, the wiki
-rides the same pull request as the code. `link` and `unlink` do not apply to
-the host repository: it is already the project's first repository, and neither
-command changes it.
-
-`adopt REPO/atlas --as project` registers a clone: the folder must already hold
-the project's identity file. A folder named `atlas` that is not a project yet
-is refused, because its pages would join the repository's history; make one
-with `new-project NAME --in REPO`.
-
-A session that commits code in the repository should leave the vault out, for
-example `git add -- . ':!atlas'`. A page waiting for its operation then stays
-out of the code commit.
-
-```bash
-claude-atlas new-project --in ~/code/webapp        # the project takes the repository's name
-claude-atlas edit-repo webapp webapp --changes pr
-claude-atlas adopt ~/code/webapp/atlas --as project   # a clone, on another machine
-```
+It refuses a target inside the vaults directory or holding it, a target
+inside a knowledge base, a folder that already holds files, and a move while
+a knowledge base has an interrupted operation to recover. Two kinds of state
+it reports rather than repairs: Obsidian's vault list, which drops a missing
+entry at its next launch and which `open-vault` fills again, and Claude
+Code's per-folder session history, permissions, and memory, which it keys by
+absolute path.
 
 ## Adopt an existing vault
 
-Turn a folder into a v2 vault: an Obsidian vault, a vault made with
-claude-obsidian, or a vault from v1. It gains an identity file and git
-history; nothing in it is replaced. A vault outside the vaults directory is
-listed in the config, so the atlas finds it again.
+Turn a folder into a knowledge base: an Obsidian vault, a vault made with
+claude-obsidian, or a knowledge base from v1 or v2. It gains an identity file
+and git history; nothing in it is replaced. A vault outside the vaults
+directory is listed in the config, so the atlas finds it again.
 
 ```bash
-claude-atlas adopt                                   # step by step
-claude-atlas adopt ~/Documents/MyKnowledgeVault --as knowledge
-claude-atlas adopt ~/Documents/OldVault --name "Old Vault" --mode lyt
+claude-atlas adopt ~/Documents/MyKnowledgeVault
+claude-atlas adopt ~/Documents/OldVault --name "Old Vault" --mode lyt --scope "…"
 ```
 
-`--as` chooses the kind, `project` by default; a vault that already has one
-keeps it. Adopting as a knowledge base removes the inbox, the ideas folder,
-the tasks, and the task ledger. It commits a baseline of the vault as it is
-first, so git holds everything it removes.
+A v2 project vault is refused. v3 projects are folders in the work: run
+`init` there, and delete the old vault by hand once nothing in it is wanted.
 
 ## Setup and health
 
 ```bash
 claude-atlas setup
-claude-atlas setup --vaults-dir ~/Documents/Vaults --first-vault research
-claude-atlas setup --plugin-source ~/SoftwareProjects/claude-atlas   # install the plugin from a checkout
+claude-atlas setup --vaults-dir ~/Vaults --first-vault notes
+claude-atlas setup --plugin-source ~/projects/software/claude-atlas   # install the plugin from a checkout
 claude-atlas setup --no-plugin
 claude-atlas doctor
 claude-atlas info
@@ -714,11 +468,10 @@ claude-atlas version
 ```
 
 Setup shows its plan and asks before it acts: the atlas home, the plugin in
-Claude Code, and your first project. `doctor` checks git, Claude Code, the
-plugin's version against the binary's, and every vault the scan found. It also
-checks a knowledge base's grants: a grant whose project is gone fails, and a
-grant on an already open knowledge base is a note, since the grant applies
-only once the knowledge base turns guarded.
+Claude Code, and your first knowledge base. `doctor` checks git, Claude Code,
+the plugin's version against the binary's, every knowledge base the scan
+found, and every project the config lists, naming the ones whose folder is
+gone or whose knowledge base is not on this machine.
 
 ## Scripts
 
@@ -726,7 +479,7 @@ Apply a plan file without Claude. The file holds the `plan` tool's arguments;
 `content_file` may replace `content`.
 
 ```bash
-claude-atlas apply sensor-triage plan.json
+claude-atlas apply product-x plan.json
 ```
 
 ## Configuration
@@ -735,12 +488,10 @@ claude-atlas apply sensor-triage plan.json
 
 ```json
 {
-  "schema": "claude-atlas.config.v2",
-  "vaults_dir": "/Users/you/Documents/Vaults",
-  "vaults": ["/Users/you/SoftwareProjects/foo/atlas"],
-  "repos": {
-    "b3e0f5a2-0c11-4d8e-9a77-2e6d4f0b1c93/sensor-app": "/Users/you/code/sensor-app"
-  },
+  "schema": "claude-atlas.config.v3",
+  "vaults_dir": "/Users/you/Vaults",
+  "knowledge": ["/Users/you/elsewhere/papers"],
+  "projects": ["/Users/you/code/webapp", "/Users/you/code/fw"],
   "plugin": {
     "id": "claude-atlas@nathanaday-claude-atlas",
     "source": "nathanaday/claude-atlas"
@@ -751,25 +502,23 @@ claude-atlas apply sensor-triage plan.json
   },
   "heat": {
     "new_days": 7
-  },
-  "default_repo_changes": "commit"
+  }
 }
 ```
 
 `claude-atlas config` prints the settings; `claude-atlas config new-days 14`
-and `claude-atlas config repo-changes pr` set one and refresh.
+sets one and refreshes.
 
 | Setting | Effect |
 |---|---|
-| `vaults_dir` | the folder the scan walks, and where a new vault goes under `projects/` or `knowledge/`. `claude-atlas relocate PATH` moves the vaults and changes it; `config` only prints it |
-| `vaults` | vault folders outside `vaults_dir`; the scan cannot find them, so they are listed. `new-project`, `adopt`, `remove`, and a rename that moves a folder keep this list |
-| `repos` | the path of a repository outside its project's `repos/` folder, keyed by the project's id and the repository's name |
+| `vaults_dir` | the folder the scan walks, and where a new knowledge base goes. `claude-atlas relocate PATH` moves the vaults and changes it; `config` only prints it |
+| `knowledge` | knowledge bases outside `vaults_dir`; the scan cannot find them, so they are listed. `new-knowledge`, `adopt`, `remove`, and a rename that moves a folder keep this list |
+| `projects` | every project's work folder. `init`, `forget`, and the session hook keep this list |
 | `claude_code.prompt` | a first message sent on every `open-claude`, for example `/claude-atlas:wiki` |
 | `claude_code.args` | flags for `claude`, such as `--model` |
-| `claude_code.session_context` | whether the session-start hook hands Claude the vault's `hot.md` |
+| `claude_code.session_context` | whether the session-start hook hands Claude a knowledge base's `hot.md` |
 | `plugin.source` | where `claude plugin marketplace add` gets the plugin: a GitHub slug or a local path |
-| `heat.new_days` | how many days after its creation a vault shows as ✨ new whatever its activity; 7 by default, 0 turns it off |
-| `default_repo_changes` | how a newly linked repository lands its changes, `commit` or `pr`; `commit` by default. It applies when the repository is linked, so changing it leaves the existing ones alone |
+| `heat.new_days` | how many days after its creation an entry shows as new whatever its activity; 7 by default, 0 turns it off |
 | `--home DIR`, `CLAUDE_ATLAS_HOME` | use a different home instead of `~/.claude-atlas` |
 | `-y`, `--yes` | answer yes to every prompt |
 

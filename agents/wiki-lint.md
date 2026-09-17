@@ -1,9 +1,9 @@
 ---
 name: wiki-lint
 description: >
-  Read-only interpreter for the deterministic vault linter. Runs the lint tool
-  against the vault, validates surprising findings against the pages, and
-  returns a structured health report. It never repairs the vault.
+  Read-only interpreter for the deterministic knowledge base linter. Runs the
+  lint tool against the knowledge base, validates surprising findings against
+  the pages, and returns a structured health report. It never repairs it.
 model: sonnet
 maxTurns: 30
 tools: Read, Grep, Glob, mcp__plugin_claude-atlas_atlas__lint, mcp__plugin_claude-atlas_atlas__status
@@ -14,13 +14,15 @@ for deterministic findings; do not replace it with an improvised scan.
 
 ## Inputs
 
-The parent supplies the vault root and an optional scope. Fail closed if the
-root is missing or the `status` tool does not resolve it.
+The parent supplies the knowledge base's root and an optional scope. Fail
+closed if the root is missing or the `status` tool does not resolve a
+knowledge base.
 
 ## Procedure
 
 1. Call `status`, then `lint` (with `exclude` globs when the parent asks for a
-   narrower scope). Keep the exact report.
+   narrower scope). The tools act on the knowledge base in scope, the
+   session's own or the project's. Keep the exact report.
 2. Summarize page and link counts plus findings by category. Wanted pages and
    stubs are counts to report, not findings: the `stub` tool and the wiki-lint
    skill handle them.
@@ -29,15 +31,16 @@ root is missing or the `status` tool does not resolve it.
    frontmatter, empty sections, and stale index entries. Separate likely tool
    defects from vault defects.
 4. If the requested scope is narrower than the report, filter only what you
-   return; say that the tool scanned the whole vault.
+   return; say that the tool scanned the whole knowledge base.
 5. Suggest bounded repairs as proposals. Never apply them, write a report into
-   the vault, or build a plan. Repair is the parent's separate operation.
+   the knowledge base, or build a plan. Repair is the parent's separate
+   operation.
 
 ## Output
 
 ```text
 LINT STATUS: CLEAN | FINDINGS | TOOL-ERROR
-VAULT: <resolved vault>
+KNOWLEDGE BASE: <resolved root>
 SUMMARY: <pages, links, findings by category>
 
 FINDINGS
@@ -54,4 +57,4 @@ LIMITATIONS
 
 Return `CLEAN` only when the tool succeeds and reports no findings. Return
 `TOOL-ERROR` for resolution or invocation errors; do not reinterpret those as a
-clean vault.
+clean knowledge base.

@@ -7,64 +7,51 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/describe"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-// RepoStage is what staging a repository did.
-type RepoStage struct {
-	Repo     registry.Repo     `json:"repo"`
-	Snapshot *repomap.Snapshot `json:"-"`
-	Commit   string            `json:"commit"`
-	Since    string            `json:"since,omitempty"`
-	To       string            `json:"to"` // vault-relative inbox path
+// ProjectStage is what staging a project's snapshot did.
+type ProjectStage struct {
+	Project  registry.Entry     `json:"project"`
+	Snapshot *describe.Snapshot `json:"-"`
+	Commit   string             `json:"commit,omitempty"`
+	Since    string             `json:"since,omitempty"`
+	To       string             `json:"to"` // vault-relative inbox path
 	// New is false when the same snapshot already waits in the inbox or its bytes were
 	// captured before; nothing was written then.
 	New bool `json:"new"`
-	// Described is the page that describes the repository today, when one does.
-	Described *registry.RepoDescription `json:"described,omitempty"`
+	// Described is the page that describes the project today, when one does.
+	Described *registry.Description `json:"described,omitempty"`
 }
 
-// StageRepo writes a snapshot of one of the project's repositories into its inbox, with
-// the log since the commit the page describing it was written from. The snapshot is a
-// source like any file; nothing is remembered for a later stage with no paths.
-func StageRepo(v *vault.Vault, project registry.Entry, name string, now time.Time) (*RepoStage, error) {
-	var repo *registry.Repo
-	for i := range project.Repos {
-		if strings.EqualFold(project.Repos[i].Name, name) {
-			repo = &project.Repos[i]
-		}
+// StageProject writes a snapshot of project e into the inbox of its knowledge base v,
+// with the log since the commit the page describing it was written from. The snapshot
+// is a source like any file; nothing is remembered for a later stage with no paths.
+func StageProject(v *vault.Vault, e registry.Entry, now time.Time) (*ProjectStage, error) {
+	if e.Kind != registry.Project {
+		return nil, fmt.Errorf("%s is not a project", e.Name)
 	}
-	if repo == nil {
-		names := make([]string, 0, len(project.Repos))
-		for _, r := range project.Repos {
-			names = append(names, r.Name)
-		}
-		if len(names) == 0 {
-			return nil, fmt.Errorf("%s has no repositories", project.Name)
-		}
-		return nil, fmt.Errorf("%s has no repository named %s; it has %s", project.Name, name, strings.Join(names, ", "))
+	if e.KnowledgePath() != v.Root {
+		return nil, fmt.Errorf("%s does not use the knowledge base %s", e.Name, v.Name())
 	}
-	if repo.Error != "" {
-		return nil, fmt.Errorf("repository %s: %s", repo.Name, repo.Error)
-	}
-	described := repomap.Describe(project, *repo)
+	described := describe.Page(e)
 	since := ""
 	if described != nil {
 		since = described.Commit
 	}
-	snap, err := repomap.TakeSnapshot(*repo, since, now)
+	snap, err := describe.TakeSnapshot(e, since, now)
 	if err != nil {
 		return nil, err
 	}
-	out := &RepoStage{Repo: *repo, Snapshot: snap, Commit: snap.Commit, Since: snap.Since, Described: described}
+	out := &ProjectStage{Project: e, Snapshot: snap, Commit: snap.Commit, Since: snap.Since, Described: described}
 	known, err := knownHashes(v, now)
 	if err != nil {
 		return nil, err
 	}
 	taken := map[string]bool{}
-	files, _ := ListInbox(v, nil, now)
+	files, _ := ListInbox(v, now)
 	for _, f := range files {
 		taken[strings.ToLower(f.Path)] = true
 	}

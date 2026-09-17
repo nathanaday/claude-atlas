@@ -1,15 +1,14 @@
 ---
 name: atlas-knowledge
-description: "Create a knowledge base or a cluster step by step: name, location, a scope written well, open or guarded, members. Also change scope, access, or members. Use for new knowledge base, create a knowledge base, new cluster, make a cluster, knowledge base for papers, change the scope, make it guarded, add a member, drop a member."
+description: "Create a knowledge base step by step: name, location, a scope written well, the filing mode. Also change a scope, rename, adopt an existing Obsidian vault, or forget one. Use for new knowledge base, create a knowledge base, knowledge base for papers, change the scope, adopt this vault, forget this knowledge base."
 ---
 
 # Create or change a knowledge base
 
-Tools: `atlas`, `vault`, `cluster` on the atlas MCP server. A knowledge base
-holds sources, entities, and concepts, and nothing else: no inbox, no
-tasks. Knowledge enters through a project that mounts it. A cluster is a
-knowledge base with members; a project that mounts the cluster reaches every
-member.
+Tools: `atlas`, `vault` on the atlas MCP server. A knowledge base holds
+sources, entities, and concepts, an inbox for sources to ingest, and the
+user's `ideas/`. It is the Obsidian vault the user opens. Projects use it;
+a project uses one, a knowledge base serves many.
 
 Call `atlas` first: the knowledge bases that exist, their scopes, and the
 names already taken.
@@ -17,40 +16,46 @@ names already taken.
 ## Ask, in this order
 
 1. **Name.** It becomes the folder's name.
-2. **Location.** Default `<vaults dir>/knowledge/<name>`, or a path.
-3. **Scope.** Two sentences: what it holds, and what it does not. The ingest
-   skill reads every mounted scope to decide where a source belongs, so a
-   scope that overlaps another's sends sources to the wrong place. Draft one
-   from the user's words, read the existing scopes back, and adjust until
-   each is distinct. For a cluster, the scope names the whole domain; the
-   members' scopes name the parts.
-4. **Access.** `open` (default): every project that mounts it may write.
-   `guarded`: a project writes only with a grant, which `atlas-mount` gives.
-   Suggest guarded for a knowledge base several projects share and one
-   person curates.
-5. **Members**, for a cluster: which knowledge bases it gathers. A member is
-   a knowledge base, never a project and never another cluster.
+2. **Location.** Default `<vaults dir>/<name>`, or a path.
+3. **Scope.** Two sentences: what it holds, and what it does not. A project
+   session and its ingest read the scope to know what belongs here, so a
+   scope that overlaps another knowledge base's sends sources to the wrong
+   place. Draft one from the user's words, read the existing scopes back,
+   and adjust until each is distinct. Split a knowledge base only at a trust
+   boundary: work and personal, or one that must stay private and one that
+   may be shared. Few and large beats many and small.
+4. **Mode.** `generic` files pages by type; `lyt` keeps atomic notes and Maps
+   of Content. Default `generic`.
 
 ## Confirm and create
 
 One line, then yes:
 
-> Create knowledge base `ai-ml` at `~/Documents/Vaults/knowledge/ai-ml`, guarded, scope "Machine learning: models, training, evaluation, agents. Not the projects that use them."?
+> Create knowledge base `product-x` at `~/Vaults/product-x`, scope "The thermal fire-detection product line: cameras, firmware, alarm pipeline, false-alarm sources and mitigations. Not personal projects."?
 
-On yes: `vault` with `action: create`, `kind: knowledge`, `scope`, `access`,
-and for a cluster `members`. Report the result. Then say what comes next:
-a project mounts it (`atlas-mount`), and sources reach it through that
-project's inbox.
+On yes: `vault` with `action: create`, `name`, `path` when not the default,
+`scope`, and `mode`. Report the result. Then say what comes next: `init` in
+a work folder makes a project, `link` connects it here, and sources go in
+this knowledge base's `inbox/`.
+
+## Adopt an existing vault
+
+An Obsidian vault, a claude-obsidian vault, or a v1 or v2 knowledge base
+becomes a knowledge base with `vault` and `action: adopt`, `path`, and a
+`scope`. Nothing in it is replaced. A v2 project vault is refused: v3
+projects are folders in the work; `atlas-project` makes one with `init`, and
+the old vault is deleted by hand once nothing in it is wanted.
 
 ## Change a knowledge base
 
-- Scope or access: `vault` with `action: edit`, `target`, and the field. An
-  empty `scope` clears it. Changing to `guarded` cuts every mount without a
-  grant to read; list the projects `atlas` shows under `mounted_by` before
-  the user says yes.
-- Members: `cluster` with `action: add` or `remove`. A removed member's
-  knowledge base is untouched; the projects that mount the cluster lose it
-  at their next refresh.
-- Rename or forget: as in `atlas-project`, with the same tools and refusals.
+- Scope: `vault` with `action: edit`, `target` (the knowledge base by name,
+  id, or path), and `scope`. An empty scope clears it.
+- Rename: `vault` with `action: edit`, `target`, and `name`, the new name.
+  The folder moves with the name; say so.
+- Mode: the `wiki-mode` skill, in the knowledge base's session.
+- Forget: `vault` with `action: forget` and `target`. The folder stays. A knowledge base
+  inside the vaults directory cannot be forgotten, because the scan finds it
+  there; the tool says so, and the answer is to move or delete the folder by
+  hand.
 
 The tool call comes after a yes. Never make the folder or its files yourself.

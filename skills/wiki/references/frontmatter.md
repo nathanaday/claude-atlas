@@ -1,6 +1,6 @@
 # Frontmatter conventions
 
-Preserve an existing vault's valid property vocabulary. For a new page, use flat
+Preserve an existing knowledge base's valid property vocabulary. For a new page, use flat
 YAML properties, block lists, and explicit evidence fields where they apply. The
 core refuses a wiki page whose frontmatter lacks `title`, `type`, `status`,
 `created`, `updated`, or `tags`.
@@ -25,16 +25,14 @@ sources:
 ---
 ```
 
-Types: `source`, `entity`, `concept`, `question`, `session`, `comparison`,
-`overview`, `meta`, `fold`, `task`, and in lyt mode `note` and `moc`.
-`question` and `session` exist only in a project; a knowledge base holds
-`source`, `entity`, and `concept` pages. The `route` tool returns a skeleton
-with the right properties for a type; a task's properties are in
-[tasks.md](tasks.md).
+Types: `source`, `entity`, `concept`, `comparison`, `overview`, `meta`,
+`fold`, and in lyt mode `note` and `moc`. The `route` tool returns a skeleton
+with the right properties for a type. A project's `task` and `phase` pages
+live outside the knowledge base; their properties are in [tasks.md](tasks.md).
 
-Statuses commonly progress `seed`, `developing`, `evergreen`; a question uses
-`answered` or `provisional`; anything can be `contested`, `deprecated`, or
-`archived`. Keep the values a vault already uses.
+Statuses commonly progress `seed`, `developing`, `evergreen`; anything can be
+`contested`, `deprecated`, or `archived`. Keep the values a knowledge base
+already uses.
 
 ## Source page properties
 
@@ -57,14 +55,10 @@ inventing it.
 entity_type: organization
 first_mentioned: "[[Source page]]"
 
-# entity describing a repository (repo-map)
-entity_type: repository
-repo: github.com/you/app        # the remote, or the repository's name
-commit: fc70d93a…               # the commit the page was written from, in full
-
-# question
-question: "What is being asked?"
-assessment: unsupported
+# entity describing a project (describe)
+entity_type: project
+project: b3e0f5a2-9c14-4d6e-8a7b-2f1e0c9d8b7a   # the project's id
+commit: fc70d93a…               # the commit the page was written from, in full; omitted for a folder that is not a repository
 
 # note (lyt)
 mocs:

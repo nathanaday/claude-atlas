@@ -22,32 +22,19 @@ type Route struct {
 }
 
 var genericFolders = map[string]string{
-	"source":   "wiki/sources",
-	"entity":   "wiki/entities",
-	"concept":  "wiki/concepts",
-	"question": QuestionsDir,
-	"session":  SessionsDir,
+	"source":  "wiki/sources",
+	"entity":  "wiki/entities",
+	"concept": "wiki/concepts",
 }
 
-// RoutableTypes lists the page types a vault of a kind files in a mode. A knowledge base
-// holds sources, entities, and concepts; a project adds questions and sessions.
-func RoutableTypes(kind Kind, mode Mode) []string {
+// RoutableTypes lists the page types a knowledge base files in a mode: sources,
+// entities, and concepts, plus notes and MOCs in LYT mode.
+func RoutableTypes(mode Mode) []string {
 	types := []string{"source", "entity", "concept"}
-	if kind == Project {
-		types = append(types, "question", "session")
-	}
 	if mode == LYT {
 		types = append([]string{"note", "moc"}, types...)
 	}
 	return types
-}
-
-// Noun is the kind as a person says it.
-func (k Kind) Noun() string {
-	if k == Knowledge {
-		return "knowledge base"
-	}
-	return string(k)
 }
 
 var (
@@ -89,7 +76,7 @@ func lastRune(s string) (rune, int) {
 // skeleton with the vault's frontmatter conventions. It reads nothing but the target path.
 func (v *Vault) RouteFor(pageType, title string, now time.Time) (*Route, error) {
 	mode := v.Config.Mode
-	folder, err := folderFor(v.Config.Kind, mode, pageType)
+	folder, err := folderFor(mode, pageType)
 	if err != nil {
 		return nil, err
 	}
@@ -102,8 +89,8 @@ func (v *Vault) RouteFor(pageType, title string, now time.Time) (*Route, error) 
 	return route, nil
 }
 
-func folderFor(kind Kind, mode Mode, pageType string) (string, error) {
-	types := RoutableTypes(kind, mode)
+func folderFor(mode Mode, pageType string) (string, error) {
+	types := RoutableTypes(mode)
 	found := false
 	for _, t := range types {
 		if t == pageType {
@@ -111,7 +98,7 @@ func folderFor(kind Kind, mode Mode, pageType string) (string, error) {
 		}
 	}
 	if !found {
-		return "", fmt.Errorf("type %q is not filed in a %s in %s mode; use one of %s", pageType, kind.Noun(), mode, strings.Join(types, ", "))
+		return "", fmt.Errorf("type %q is not filed in a knowledge base in %s mode; use one of %s", pageType, mode, strings.Join(types, ", "))
 	}
 	if mode == LYT {
 		if pageType == "moc" {
@@ -121,7 +108,7 @@ func folderFor(kind Kind, mode Mode, pageType string) (string, error) {
 	}
 	folder, ok := genericFolders[pageType]
 	if !ok {
-		return "", fmt.Errorf("type %q is not filed in a %s in %s mode; use one of %s", pageType, kind.Noun(), mode, strings.Join(types, ", "))
+		return "", fmt.Errorf("type %q is not filed in a knowledge base in %s mode; use one of %s", pageType, mode, strings.Join(types, ", "))
 	}
 	return folder, nil
 }

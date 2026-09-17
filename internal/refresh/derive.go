@@ -7,22 +7,30 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/capture"
+	"github.com/nathanaday/claude-atlas/internal/describe"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
-	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
-// Derive observes one vault and returns what refresh records for it.
+// Derive observes one entry and returns what refresh records for it.
 func Derive(e registry.Entry, today time.Time, generatedAt string, newDays int) *registry.State {
 	if e.Error != "" {
-		return &registry.State{GeneratedAt: generatedAt, VaultError: e.Error, OpenThreads: []string{}}
+		return &registry.State{GeneratedAt: generatedAt, Error: e.Error}
 	}
+	if e.Kind == registry.Project {
+		return deriveProject(e, today, generatedAt, newDays)
+	}
+	return deriveKnowledge(e, today, generatedAt, newDays)
+}
+
+func deriveKnowledge(e registry.Entry, today time.Time, generatedAt string, newDays int) *registry.State {
 	state := &registry.State{GeneratedAt: generatedAt, OpenThreads: []string{}}
 	root := e.Path
 
@@ -35,41 +43,7 @@ func Derive(e registry.Entry, today time.Time, generatedAt string, newDays int) 
 	if mt, ok := NewestWikiMtime(root); ok && (!touchedFound || mt.After(touched)) {
 		touched, touchedFound = mt, true
 	}
-	var repoFacts map[string]links.Link
-	for _, r := range e.Repos {
-		if r.Path == "" {
-			continue
-		}
-		fact := links.Inspect(links.Repo, r.Path)
-		if repoFacts == nil {
-			repoFacts = map[string]links.Link{}
-		}
-		repoFacts[r.Name] = fact
-		if t, ok := fact.Touched(); ok && (!touchedFound || t.After(touched)) {
-			touched, touchedFound = t, true
-		}
-	}
-	state.RepoFacts = repoFacts
-	for _, r := range e.Repos {
-		if d := repomap.Describe(e, r); d != nil {
-			if state.RepoDescriptions == nil {
-				state.RepoDescriptions = map[string]registry.RepoDescription{}
-			}
-			state.RepoDescriptions[r.Name] = *d
-		}
-	}
-
-	var daysOld *int
-	if created, ok := parseDate(e.Created); ok {
-		days := int(dateOf(today).Sub(dateOf(created)).Hours() / 24)
-		daysOld = &days
-	}
-	if touchedFound {
-		state.LastTouched = touched.Format("2006-01-02")
-		days := int(dateOf(today).Sub(dateOf(touched)).Hours() / 24)
-		state.DaysIdle = &days
-		state.Heat = Heat(state.DaysIdle, daysOld, newDays)
-	}
+	setHeat(state, e.Created, touched, touchedFound, today, newDays)
 	state.OpenThreads = ActiveThreads(root)
 	if state.OpenThreads == nil {
 		state.OpenThreads = []string{}
@@ -77,7 +51,7 @@ func Derive(e registry.Entry, today time.Time, generatedAt string, newDays int) 
 
 	report, err := lint.Run(root, lint.Options{AsOf: today})
 	if err != nil {
-		state.VaultError = err.Error()
+		state.Error = err.Error()
 		return state
 	}
 	state.Pages = ptr(report.Summary.PagesScanned)
@@ -88,50 +62,94 @@ func Derive(e registry.Entry, today time.Time, generatedAt string, newDays int) 
 
 	v, err := vault.Open(e.Path)
 	if err != nil {
-		state.VaultError = err.Error()
+		state.Error = err.Error()
 		return state
 	}
-	if e.Kind == vault.Project {
-		state.Tasks = taskSummaryFor(v, today)
+	if files, err := capture.ListInbox(v, today); err == nil {
+		waiting := 0
+		for _, f := range files {
+			if !f.Captured {
+				waiting++
+			}
+		}
+		state.Inbox = ptr(waiting)
 	}
 	if pending, _ := txn.Pending(v); pending != nil {
 		state.PendingRecovery = true
 	}
-	state.VaultOK = true
+	state.OK = true
 	return state
 }
 
-// taskSummaryFor reads the vault's task ledger; nil only when the ledger cannot be read.
-func taskSummaryFor(v *vault.Vault, today time.Time) *registry.TaskSummary {
-	led, err := tasks.Current(v, today)
+func deriveProject(e registry.Entry, today time.Time, generatedAt string, newDays int) *registry.State {
+	state := &registry.State{GeneratedAt: generatedAt}
+	p, err := project.Open(e.Path)
+	if err != nil {
+		state.Error = err.Error()
+		return state
+	}
+	var touched time.Time
+	touchedFound := false
+	if fact := links.Inspect(links.Repo, e.Path); fact.OK {
+		state.Git = &fact
+		if t, ok := fact.Touched(); ok {
+			touched, touchedFound = t, true
+		}
+	}
+	state.Tasks = taskSummaryFor(p, today)
+	if state.Tasks != nil {
+		for _, t := range state.Tasks.Open {
+			if u, ok := parseDate(t.Updated); ok && (!touchedFound || u.After(touched)) {
+				touched, touchedFound = u, true
+			}
+		}
+	}
+	setHeat(state, e.Created, touched, touchedFound, today, newDays)
+	state.Described = describe.Page(e)
+	state.OK = true
+	return state
+}
+
+// setHeat records when the entry was last touched and how warm that makes it.
+func setHeat(state *registry.State, created string, touched time.Time, touchedFound bool, today time.Time, newDays int) {
+	var daysOld *int
+	if c, ok := parseDate(created); ok {
+		days := int(dateOf(today).Sub(dateOf(c)).Hours() / 24)
+		daysOld = &days
+	}
+	if touchedFound {
+		state.LastTouched = touched.Format("2006-01-02")
+		days := int(dateOf(today).Sub(dateOf(touched)).Hours() / 24)
+		state.DaysIdle = &days
+		state.Heat = Heat(state.DaysIdle, daysOld, newDays)
+	}
+}
+
+// taskSummaryFor reads the project's task pages; nil only when the folder cannot be
+// read.
+func taskSummaryFor(p *project.Project, today time.Time) *registry.TaskSummary {
+	board, err := tasks.Load(p)
 	if err != nil {
 		return nil
 	}
-	sum := &registry.TaskSummary{Counts: led.Counts(today), Open: []registry.TaskLine{}}
-	sum.Counts.Notes = len(tasks.Notes(v))
-	for _, r := range led.Open() {
+	sum := &registry.TaskSummary{Counts: board.Counts(today), Open: []registry.TaskLine{}}
+	sum.Counts.Notes = len(tasks.Notes(p))
+	for _, t := range board.Open() {
 		sum.Open = append(sum.Open, registry.TaskLine{
-			ID: r.ID, Title: r.Title, Status: r.Status, Priority: r.Priority, Due: r.Due, Workdir: r.Workdir, Repos: r.Repos,
-			LastTouched: r.LastTouched, Path: v.Path(r.Path), Stale: tasks.Stale(r, today),
+			ID: t.ID, Title: t.Title, Status: t.Status, Priority: t.Priority, Phase: t.Phase, Due: t.Due,
+			Updated: t.Updated, Path: p.Path(t.Path), Stale: tasks.Stale(t, today),
 		})
 	}
+	var open, finished []string
+	for _, ph := range board.Phases {
+		if board.Finished(ph.Title) {
+			finished = append(finished, ph.Title)
+		} else {
+			open = append(open, ph.Title)
+		}
+	}
+	sum.Phases = append(open, finished...)
 	return sum
-}
-
-// ProjectChange is what one project needed to bring its local state up to date: the
-// mount symlinks the repair touched, the repositories adoption linked, and Error for
-// what stopped one of them.
-type ProjectChange struct {
-	Project string
-	vaults.MountRepair
-	// Adopted names the repositories found under repos/ and written to the identity file.
-	Adopted []string
-	Error   string
-}
-
-// any reports whether the change is worth a line.
-func (c ProjectChange) any() bool {
-	return len(c.Created)+len(c.Repaired)+len(c.Removed)+len(c.Missing)+len(c.Adopted) > 0 || c.Error != ""
 }
 
 // deriveStates fills in every entry's derived state, as one pass over the scan.
@@ -145,54 +163,20 @@ func deriveStates(ix *registry.Index, cfg *home.Config, today time.Time) string 
 }
 
 // Registry scans, derives every readable entry, writes the registry file, and returns the
-// entries. With ensure, it first links every git repository waiting under a project's
-// repos/ and recreates its mount symlinks, then reports what each project needed; one
-// project's failure does not stop the others. Adoption changes identity files, so the
-// scan runs again afterwards and the caller sees the repositories it just linked.
-func Registry(h home.Home, cfg *home.Config, stateDir string, today time.Time, ensure bool) ([]registry.Entry, *registry.Index, []ProjectChange, error) {
+// entries.
+func Registry(h home.Home, cfg *home.Config, stateDir string, today time.Time) ([]registry.Entry, *registry.Index, error) {
 	ix, err := registry.Scan(cfg)
 	if err != nil {
-		return nil, nil, nil, err
-	}
-	var changes []ProjectChange
-	if ensure {
-		adopted := false
-		for _, e := range ix.Entries {
-			if e.Error != "" || e.Kind != vault.Project {
-				continue
-			}
-			change := ProjectChange{Project: e.Name}
-			repos, adoptErr := vaults.AdoptRepos(h, cfg, e, today)
-			for _, r := range repos {
-				change.Adopted = append(change.Adopted, r.Name)
-				adopted = true
-			}
-			if adoptErr != nil {
-				change.Error = adoptErr.Error()
-			}
-			rep, err := vaults.EnsureMounts(e, ix)
-			change.MountRepair = rep
-			if err != nil && change.Error == "" {
-				change.Error = err.Error()
-			}
-			if change.any() {
-				changes = append(changes, change)
-			}
-		}
-		if adopted {
-			if ix, err = registry.Scan(cfg); err != nil {
-				return nil, nil, nil, err
-			}
-		}
+		return nil, nil, err
 	}
 	generatedAt := deriveStates(ix, cfg, today)
 	if err := os.RemoveAll(stateDir); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	if err := registry.Write(stateDir, ix.Entries, generatedAt); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	return ix.Entries, ix, changes, nil
+	return ix.Entries, ix, nil
 }
 
 // Signals lists what needs attention on one entry.
@@ -205,39 +189,21 @@ func Signals(e registry.Entry, today time.Time) []string {
 		return []string{"not refreshed"}
 	}
 	var notes []string
-	if !state.VaultOK {
-		notes = append(notes, "vault unreachable: "+state.VaultError)
+	if !state.OK {
+		notes = append(notes, "unreachable: "+state.Error)
 	}
 	if state.PendingRecovery {
 		notes = append(notes, "an operation was interrupted; run `claude-atlas recover "+e.Path+"`")
 	}
-	for _, m := range e.Mounts {
-		if m.Error != "" {
-			notes = append(notes, fmt.Sprintf("mount %s: %s", m.Name, m.Error))
-			continue
+	if e.Kind == registry.Project {
+		if e.Knowledge != nil && e.Knowledge.Error != "" {
+			notes = append(notes, fmt.Sprintf("knowledge base %s: %s", e.Knowledge.Name, e.Knowledge.Error))
 		}
-		switch vaults.MountState(e, m) {
-		case vaults.MountMissing:
-			notes = append(notes, fmt.Sprintf("mount %s: symlink missing; run `claude-atlas refresh`", m.Name))
-		case vaults.MountWrong:
-			notes = append(notes, fmt.Sprintf("mount %s: symlink points elsewhere; run `claude-atlas refresh`", m.Name))
+		if e.Knowledge != nil && e.Knowledge.Error == "" && state.Described == nil {
+			notes = append(notes, registry.NotDescribed+"; the describe skill writes the page")
 		}
-	}
-	for _, r := range e.Repos {
-		if r.Error != "" {
-			notes = append(notes, fmt.Sprintf("repo %s: %s", r.Name, r.Error))
-			continue
-		}
-		if fact, ok := state.RepoFacts[r.Name]; ok && !fact.OK {
-			notes = append(notes, fmt.Sprintf("repo %s: %s", r.Name, fact.Error))
-		}
-	}
-	if e.Kind == vault.Knowledge {
-		for _, g := range e.Grants {
-			if g.Error == "" {
-				continue
-			}
-			notes = append(notes, fmt.Sprintf("grant %s (%s): %s; run `claude-atlas revoke %s %s`", g.Name, g.ID, g.Error, e.Name, g.ID))
+		if d := state.Described; d != nil && d.Behind > describe.BehindThreshold {
+			notes = append(notes, fmt.Sprintf("its page in the knowledge base is %d commits behind; the describe skill brings it up to date", d.Behind))
 		}
 	}
 	if state.Tasks != nil {
@@ -260,17 +226,16 @@ func Signals(e registry.Entry, today time.Time) []string {
 	return notes
 }
 
-// All rebuilds the registry from a scan and brings every project's local state up to
-// date: the CLI runs it after every change.
-func All(h home.Home, cfg *home.Config, today time.Time) ([]registry.Entry, *registry.Index, []ProjectChange, error) {
-	return Registry(h, cfg, h.StateDir(), today, true)
+// All rebuilds the registry from a scan: the CLI runs it after every change.
+func All(h home.Home, cfg *home.Config, today time.Time) ([]registry.Entry, *registry.Index, error) {
+	return Registry(h, cfg, h.StateDir(), today)
 }
 
 // Entries reads the registry the last refresh wrote, writing one first when none exists.
 func Entries(h home.Home, cfg *home.Config, today time.Time) ([]registry.Entry, error) {
 	entries, _, err := registry.Read(h.StateDir())
 	if errors.Is(err, os.ErrNotExist) {
-		entries, _, _, err = All(h, cfg, today)
+		entries, _, err = All(h, cfg, today)
 	}
 	return entries, err
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
-// oneVault builds an atlas home whose vaults directory holds one project.
+// oneVault builds an atlas home whose vaults directory holds one knowledge base.
 func oneVault(t *testing.T) (home.Home, *home.Config) {
 	t.Helper()
 	if !gitx.Available() {
@@ -29,7 +29,7 @@ func oneVault(t *testing.T) (home.Home, *home.Config) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
-	if _, err := vault.Init(vaults.PathFor(cfg.VaultsDir, vault.Project, "p"), vault.Options{Kind: vault.Project, Name: "p"}, now); err != nil {
+	if _, err := vault.Init(vaults.PathFor(cfg.VaultsDir, "kb"), vault.Options{Name: "kb"}, now); err != nil {
 		t.Fatal(err)
 	}
 	return h, cfg
@@ -64,13 +64,10 @@ func TestEntriesWritesTheRegistryOnceThenReadsIt(t *testing.T) {
 	}
 }
 
-func TestAllReturnsTheIndexAndTheChanges(t *testing.T) {
+func TestAllReturnsTheIndex(t *testing.T) {
 	h, cfg := oneVault(t)
-	entries, ix, changes, err := All(h, cfg, time.Now())
+	entries, ix, err := All(h, cfg, time.Now())
 	if err != nil || len(entries) != 1 || ix == nil || len(ix.Entries) != 1 {
 		t.Fatalf("all: %d entries, ix %v, err %v", len(entries), ix, err)
-	}
-	if len(changes) != 0 {
-		t.Fatalf("a fresh project needs no change, got %+v", changes)
 	}
 }

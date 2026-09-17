@@ -10,15 +10,16 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 var now = time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 
-// fixture makes a vaults directory with two knowledge bases and two projects, one vault
-// outside it, one v1 vault, and one unreadable identity file.
-func fixture(t *testing.T) (*home.Config, map[string]*vault.Vault) {
+// fixture makes a vaults directory with two knowledge bases, one knowledge base outside
+// it, a v1 vault, a v2 project vault, and an unreadable identity file; and three
+// projects: two on ai-ml, one that names a knowledge base the machine does not have.
+func fixture(t *testing.T) (*home.Config, map[string]*vault.Vault, map[string]*project.Project) {
 	t.Helper()
 	if !gitx.Available() {
 		t.Skip("git is not installed")
@@ -34,25 +35,42 @@ func fixture(t *testing.T) (*home.Config, map[string]*vault.Vault) {
 		v, _ := vault.Open(path)
 		vs[opts.Name] = v
 	}
-	mk("Vaults/knowledge/ai-ml", vault.Options{Kind: vault.Knowledge, Name: "ai-ml"})
-	mk("Vaults/knowledge/deep/nested/robotics", vault.Options{Kind: vault.Knowledge, Name: "robotics"})
-	mk("Vaults/projects/cs566", vault.Options{Kind: vault.Project, Name: "cs566"})
-	mk("Vaults/projects/self-study", vault.Options{Kind: vault.Project, Name: "self-study"})
-	mk("Elsewhere/side", vault.Options{Kind: vault.Project, Name: "side"})
-	cfg.Vaults = []string{filepath.Join(root, "Elsewhere", "side")}
+	mk("Vaults/ai-ml", vault.Options{Name: "ai-ml", Scope: "Machine learning."})
+	mk("Vaults/deep/nested/robotics", vault.Options{Name: "robotics"})
+	mk("Elsewhere/side", vault.Options{Name: "side"})
+	cfg.Knowledge = []string{filepath.Join(root, "Elsewhere", "side")}
 	old := filepath.Join(root, "Vaults", "old")
 	os.MkdirAll(filepath.Join(old, "wiki"), 0o755)
 	os.WriteFile(filepath.Join(old, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
+	v2project := filepath.Join(root, "Vaults", "projects", "cs566")
+	os.MkdirAll(filepath.Join(v2project, "wiki"), 0o755)
+	os.WriteFile(filepath.Join(v2project, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v2","id":"p-old","kind":"project","name":"cs566","mode":"generic"}`), 0o644)
 	bad := filepath.Join(root, "Vaults", "bad")
 	os.MkdirAll(bad, 0o755)
 	os.WriteFile(filepath.Join(bad, vault.Marker), []byte(`{not json`), 0o644)
 	os.MkdirAll(filepath.Join(root, "Vaults", ".hidden", "v"), 0o755)
 	os.WriteFile(filepath.Join(root, "Vaults", ".hidden", "v", vault.Marker), []byte(`{}`), 0o644)
-	return cfg, vs
+
+	ps := map[string]*project.Project{}
+	mkp := func(rel string, opts project.Options) {
+		work := filepath.Join(root, filepath.FromSlash(rel))
+		os.MkdirAll(work, 0o755)
+		p, _, err := project.Init(work, opts, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ps[p.Name()] = p
+		cfg.Projects = append(cfg.Projects, work)
+	}
+	aiml := &project.Knowledge{ID: vs["ai-ml"].Config.ID, Name: "ai-ml"}
+	mkp("Code/webapp", project.Options{Description: "The web app.", Knowledge: aiml})
+	mkp("Code/firmware", project.Options{Knowledge: aiml})
+	mkp("Docs/thesis", project.Options{Knowledge: &project.Knowledge{ID: "gone-0000", Name: "papers"}})
+	return cfg, vs, ps
 }
 
-func TestScanFindsEveryVaultAndSortsThem(t *testing.T) {
-	cfg, vs := fixture(t)
+func TestScanFindsEveryEntryAndSortsThem(t *testing.T) {
+	cfg, vs, ps := fixture(t)
 	ix, err := Scan(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -64,170 +82,157 @@ func TestScanFindsEveryVaultAndSortsThem(t *testing.T) {
 		}
 		names = append(names, string(e.Kind)+":"+e.Name)
 	}
-	if got := strings.Join(names, ","); got != "project:cs566,project:self-study,project:side,knowledge:ai-ml,knowledge:robotics" {
+	if got := strings.Join(names, ","); got != "knowledge:ai-ml,knowledge:robotics,knowledge:side,project:firmware,project:thesis,project:webapp" {
 		t.Fatalf("entries %s", got)
 	}
-	if len(ix.Problems) != 2 {
-		t.Fatalf("problems %+v", ix.Problems)
+	if len(ix.Problems) != 3 || len(ix.Entries) != 9 {
+		t.Fatalf("problems %+v entries %d", ix.Problems, len(ix.Entries))
 	}
-	if len(ix.Entries) != 7 {
-		t.Fatalf("entries len %d: %+v", len(ix.Entries), ix.Entries)
+	reasons := map[string]string{}
+	for _, e := range ix.Entries {
+		if e.Error != "" {
+			reasons[filepath.Base(e.Path)] = e.Reason
+		}
 	}
-	last := ix.Entries[len(ix.Entries)-2:]
-	if last[0].Error == "" || last[1].Error == "" || filepath.Base(last[0].Path) != "bad" || filepath.Base(last[1].Path) != "old" {
-		t.Fatalf("error entries %+v", last)
+	if reasons["bad"] != ReasonUnreadable || reasons["old"] != ReasonV1 || reasons["cs566"] != ReasonV2Project {
+		t.Fatalf("reasons %v", reasons)
 	}
-	if last[0].Reason != ReasonUnreadable || last[1].Reason != ReasonV1 {
-		t.Fatalf("reasons %q %q", last[0].Reason, last[1].Reason)
+	for _, e := range ix.Entries {
+		if e.Reason == ReasonV2Project && (!strings.Contains(e.Error, "claude-atlas init") || e.Rel() != "problems/cs566") {
+			t.Fatalf("v2 project entry %+v", e)
+		}
 	}
-	if last[1].Rel() != "problems/old" {
-		t.Fatalf("rel of an unreadable vault %q", last[1].Rel())
-	}
-	if _, err := ix.Find("old"); !errors.Is(err, ErrNotFound) {
+	if _, err := ix.Find("old", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("find old: %v", err)
 	}
-	for _, e := range ix.Projects() {
+	for _, e := range append(ix.Projects(), ix.Knowledge()...) {
 		if e.Error != "" {
-			t.Fatalf("projects contains an error entry: %+v", e)
+			t.Fatalf("a listing contains an error entry: %+v", e)
 		}
 	}
-	for _, e := range ix.Knowledge() {
-		if e.Error != "" {
-			t.Fatalf("knowledge contains an error entry: %+v", e)
-		}
+	if len(ix.Projects()) != 3 || len(ix.Knowledge()) != 3 {
+		t.Fatalf("projects %d knowledge %d", len(ix.Projects()), len(ix.Knowledge()))
 	}
-	for _, p := range ix.Problems {
-		switch filepath.Base(p.Path) {
-		case "old":
-			if !strings.Contains(p.Reason, "v1") {
-				t.Errorf("old: %s", p.Reason)
-			}
-		case "bad":
-			if !strings.Contains(p.Reason, "not JSON") && !strings.Contains(p.Reason, "unreadable") {
-				t.Errorf("bad: %s", p.Reason)
-			}
-		default:
-			t.Errorf("unexpected problem %+v", p)
-		}
-	}
-	if e := ix.ByID(vs["ai-ml"].Config.ID); e == nil || e.Path != vs["ai-ml"].Root || e.Access != vault.AccessOpen {
-		t.Fatalf("by id %+v", e)
+	aiml := ix.ByID(vs["ai-ml"].Config.ID)
+	if aiml == nil || aiml.Path != vs["ai-ml"].Root || aiml.Scope != "Machine learning." || aiml.Mode != vault.Generic || aiml.Kind != Knowledge {
+		t.Fatalf("by id %+v", aiml)
 	}
 	if e := ix.ByPath(vs["side"].Root); e == nil || e.Name != "side" {
 		t.Fatalf("by path %+v", e)
 	}
-	if e, err := ix.Find("CS566"); err != nil || e.Name != "cs566" {
+	webapp := ix.ByPath(ps["webapp"].Root)
+	if webapp == nil || webapp.Kind != Project || webapp.ID != ps["webapp"].Config.ID || webapp.Description != "The web app." || webapp.Created != "2026-09-15" {
+		t.Fatalf("project entry %+v", webapp)
+	}
+	if webapp.Atlas() != filepath.Join(webapp.Path, "atlas") || aiml.Wiki() != filepath.Join(aiml.Path, "wiki") {
+		t.Fatal("Atlas and Wiki")
+	}
+}
+
+func TestScanResolvesKnowledgeAndProjects(t *testing.T) {
+	cfg, vs, ps := fixture(t)
+	ix, _ := Scan(cfg)
+	aiml := ix.ByID(vs["ai-ml"].Config.ID)
+	var users []string
+	for _, r := range aiml.Projects {
+		users = append(users, r.Name+"@"+r.Path)
+	}
+	if strings.Join(users, ",") != "firmware@"+ps["firmware"].Root+",webapp@"+ps["webapp"].Root {
+		t.Fatalf("projects of ai-ml %v", users)
+	}
+	if len(ix.ByID(vs["robotics"].Config.ID).Projects) != 0 {
+		t.Fatal("robotics has no projects")
+	}
+	webapp := ix.ByPath(ps["webapp"].Root)
+	if webapp.Knowledge == nil || webapp.Knowledge.ID != aiml.ID || webapp.Knowledge.Name != "ai-ml" || webapp.Knowledge.Path != aiml.Path || webapp.Knowledge.Error != "" {
+		t.Fatalf("webapp's knowledge base %+v", webapp.Knowledge)
+	}
+	if webapp.KnowledgePath() != aiml.Path || webapp.Rel() != "projects/ai-ml/webapp" {
+		t.Fatalf("path %q rel %q", webapp.KnowledgePath(), webapp.Rel())
+	}
+	thesis := ix.ByPath(ps["thesis"].Root)
+	if thesis.Knowledge == nil || thesis.Knowledge.Name != "papers" || !strings.Contains(thesis.Knowledge.Error, "gone-0000") || thesis.KnowledgePath() != "" || thesis.Rel() != "projects/thesis" {
+		t.Fatalf("thesis's knowledge base %+v rel %q", thesis.Knowledge, thesis.Rel())
+	}
+	of := ix.ProjectsOf(aiml.ID)
+	if len(of) != 2 || of[0].Name != "firmware" || of[1].Name != "webapp" {
+		t.Fatalf("ProjectsOf %+v", of)
+	}
+	if aiml.Rel() != "knowledge/ai-ml" || Knowledge.Noun() != "knowledge base" || Project.Noun() != "project" {
+		t.Fatal("rel and nouns")
+	}
+	// A project without a knowledge base.
+	none := filepath.Join(t.TempDir(), "solo")
+	os.MkdirAll(none, 0o755)
+	if _, _, err := project.Init(none, project.Options{}, now); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Projects = append(cfg.Projects, none)
+	ix, _ = Scan(cfg)
+	if e := ix.ByPath(none); e == nil || e.Knowledge != nil || e.KnowledgePath() != "" {
+		t.Fatalf("solo %+v", e)
+	}
+}
+
+func TestFindByNameIDPathAndKind(t *testing.T) {
+	cfg, vs, ps := fixture(t)
+	ix, _ := Scan(cfg)
+	if e, err := ix.Find("WEBAPP", ""); err != nil || e.Name != "webapp" {
 		t.Fatalf("find by name %+v %v", e, err)
 	}
-	if e, err := ix.Find(vs["robotics"].Config.ID[:8]); err != nil || e.Name != "robotics" {
+	if e, err := ix.Find(vs["robotics"].Config.ID[:8], Knowledge); err != nil || e.Name != "robotics" {
 		t.Fatalf("find by id prefix %+v %v", e, err)
 	}
-	if e, err := ix.Find(vs["self-study"].Root); err != nil || e.Name != "self-study" {
+	if e, err := ix.Find(ps["firmware"].Root, Project); err != nil || e.Name != "firmware" {
 		t.Fatalf("find by path %+v %v", e, err)
 	}
-	if _, err := ix.Find("nope"); !errors.Is(err, ErrNotFound) {
+	if _, err := ix.Find("webapp", Knowledge); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a project is not a knowledge base: %v", err)
+	}
+	if _, err := ix.Find(ps["firmware"].Root, Knowledge); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a project's path is not a knowledge base: %v", err)
+	}
+	if _, err := ix.Find("nope", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("find missing: %v", err)
 	}
-	if e := ix.ByID(vs["cs566"].Config.ID); e.Rel() != "projects/cs566" || e.Wiki() != filepath.Join(e.Path, "wiki") || e.RepoDir("hw") != filepath.Join(e.Path, "repos", "hw") {
-		t.Fatalf("rel %q wiki %q repodir %q", e.Rel(), e.Wiki(), e.RepoDir("hw"))
+	// A knowledge base and a project may share a name; the kind tells them apart.
+	twin := filepath.Join(t.TempDir(), "ai-ml")
+	os.MkdirAll(twin, 0o755)
+	if _, _, err := project.Init(twin, project.Options{}, now); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Projects = append(cfg.Projects, twin)
+	ix, _ = Scan(cfg)
+	if _, err := ix.Find("ai-ml", ""); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("two entries named ai-ml: %v", err)
+	}
+	if e, err := ix.Find("ai-ml", Project); err != nil || e.Path != twin {
+		t.Fatalf("the project named ai-ml: %+v %v", e, err)
+	}
+	if e, err := ix.Find("ai-ml", Knowledge); err != nil || e.Path != vs["ai-ml"].Root {
+		t.Fatalf("the knowledge base named ai-ml: %+v %v", e, err)
 	}
 }
 
-func TestScanResolvesMountsReposAndGrants(t *testing.T) {
-	cfg, vs := fixture(t)
-	kb, p := vs["ai-ml"], vs["cs566"]
-	// A guarded knowledge base that grants cs566 read; cs566 asks for write; self-study asks for write with no grant.
-	if err := vault.UpdateConfig(kb.Root, "guard", now, func(c *vault.Config) error {
-		c.Access = vault.AccessGuarded
-		c.Grants = []vault.Grant{{ID: p.Config.ID, Name: "cs566", Access: vault.AccessRead}}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := vault.UpdateConfig(p.Root, "mount", now, func(c *vault.Config) error {
-		c.Mounts = []vault.Mount{{ID: kb.Config.ID, Name: "ai-ml", Access: vault.AccessWrite}, {ID: "00000000-0000-4000-8000-000000000009", Name: "gone", Access: vault.AccessRead}}
-		c.Repos = []vault.Repo{{Name: "hw", Changes: "commit"}, {Name: "paper", Remote: "git@x:y/paper.git"}, {Name: "lost"}}
-		c.Tags = []string{"usc", "fall"}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	self := vs["self-study"]
-	if err := vault.UpdateConfig(self.Root, "mount", now, func(c *vault.Config) error {
-		c.Mounts = []vault.Mount{{ID: kb.Config.ID, Name: "ai-ml", Access: vault.AccessWrite}}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	os.MkdirAll(filepath.Join(p.Root, "repos", "hw"), 0o755)
-	elsewhere := t.TempDir()
-	cfg.Repos = map[string]string{p.Config.ID + "/paper": elsewhere}
-	ix, err := Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := ix.ByID(p.Config.ID)
-	if e.Rel() != "projects/usc/cs566" {
-		t.Fatalf("rel %q", e.Rel())
-	}
-	if len(e.Mounts) != 2 || e.Mounts[0].Effective != vault.AccessRead || e.Mounts[0].Path != filepath.Join(kb.Root, "wiki") || e.Mounts[1].Error == "" || e.Mounts[1].Effective != "" {
-		t.Fatalf("mounts %+v", e.Mounts)
-	}
-	if len(e.Repos) != 3 || e.Repos[0].Path != filepath.Join(p.Root, "repos", "hw") || e.Repos[1].Path != elsewhere || e.Repos[2].Path != "" || e.Repos[2].Error == "" {
-		t.Fatalf("repos %+v", e.Repos)
-	}
-	k := ix.ByID(kb.Config.ID)
-	if len(k.MountedBy) != 2 || k.MountedBy[0].Name != "cs566" || k.MountedBy[0].Access != vault.AccessRead || k.MountedBy[1].Name != "self-study" || k.MountedBy[1].Access != vault.AccessRead {
-		t.Fatalf("mounted by %+v", k.MountedBy)
-	}
-	open := ix.ByID(vs["robotics"].Config.ID)
-	if len(open.MountedBy) != 0 {
-		t.Fatalf("robotics mounted by %+v", open.MountedBy)
-	}
-}
-
-func TestAGrantForAnUnknownProjectCarriesAnError(t *testing.T) {
-	cfg, vs := fixture(t)
-	kb, p, other := vs["ai-ml"], vs["cs566"], vs["robotics"]
-	if err := vault.UpdateConfig(kb.Root, "guard", now, func(c *vault.Config) error {
-		c.Access = vault.AccessGuarded
-		c.Grants = []vault.Grant{
-			{ID: p.Config.ID, Name: "old name", Access: vault.AccessRead},
-			{ID: "gone-0000", Name: "gone", Access: vault.AccessWrite},
-			{ID: other.Config.ID, Name: "robotics", Access: vault.AccessRead},
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ix, err := Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := ix.ByID(kb.Config.ID)
-	if len(e.Grants) != 3 {
-		t.Fatalf("grants %+v", e.Grants)
-	}
-	if e.Grants[0].Name != p.Config.Name || e.Grants[0].Error != "" {
-		t.Fatalf("grant for a scanned project: %+v", e.Grants[0])
-	}
-	if e.Grants[1].Error != "no project with id gone-0000" {
-		t.Fatalf("grant for an unknown project: %+v", e.Grants[1])
-	}
-	if e.Grants[2].Error != "no project with id "+other.Config.ID {
-		t.Fatalf("a grant whose id belongs to a knowledge base is stale: %+v", e.Grants[2])
+func TestFindAmbiguousIDPrefix(t *testing.T) {
+	ix := &Index{Entries: []Entry{
+		{ID: "abcdefgh1111", Kind: Project, Name: "one", Path: "/vaults/one"},
+		{ID: "abcdefgh2222", Kind: Project, Name: "two", Path: "/vaults/two"},
+	}}
+	if _, err := ix.Find("abcdefgh", ""); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("find ambiguous id prefix: %v", err)
 	}
 }
 
 func TestStateFileRoundTrips(t *testing.T) {
-	cfg, _ := fixture(t)
+	cfg, _, _ := fixture(t)
 	ix, _ := Scan(cfg)
 	dir := filepath.Join(t.TempDir(), "state")
 	if _, _, err := Read(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read before write: %v", err)
 	}
 	four := 4
-	ix.Entries[0].State = &State{GeneratedAt: "2026-09-15T12:00:00Z", VaultOK: true, Pages: &four, Heat: "new", OpenThreads: []string{}}
+	ix.Entries[0].State = &State{GeneratedAt: "2026-09-15T12:00:00Z", OK: true, Pages: &four, Heat: "new", OpenThreads: []string{}}
 	if err := Write(dir, ix.Entries, "2026-09-15T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
@@ -236,127 +241,70 @@ func TestStateFileRoundTrips(t *testing.T) {
 		t.Fatalf("round trip %v %s %+v", err, generated, entries)
 	}
 	data, _ := os.ReadFile(File(dir))
-	if !strings.Contains(string(data), `"schema": "claude-atlas.registry.v1"`) {
+	if !strings.Contains(string(data), `"schema": "claude-atlas.registry.v2"`) {
 		t.Fatalf("file:\n%s", data)
 	}
-	os.WriteFile(File(dir), []byte(`{"schema":"claude-atlas.registry.v9","entries":[]}`), 0o644)
-	if _, _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "claude-atlas.registry.v9") {
+	os.WriteFile(File(dir), []byte(`{"schema":"claude-atlas.registry.v1","entries":[]}`), 0o644)
+	if _, _, err := Read(dir); err == nil || !strings.Contains(err.Error(), "claude-atlas.registry.v1") {
 		t.Fatalf("read another schema: %v", err)
 	}
 }
 
-// TestScanMakesAMissingRegisteredVaultAnEntry proves a registered path whose folder is
-// gone is an entry like every other unreadable vault, so list, doctor, and remove see it.
-func TestScanMakesAMissingRegisteredVaultAnEntry(t *testing.T) {
-	cfg, _ := fixture(t)
+// A registered path whose folder is gone, and a registered work folder with no project
+// in it, are entries like every other unreadable one, so list, doctor, and forget see
+// them.
+func TestScanMakesMissingEntries(t *testing.T) {
+	cfg, _, _ := fixture(t)
 	gone := filepath.Join(t.TempDir(), "gone")
-	cfg.Vaults = append(cfg.Vaults, gone)
+	cfg.Knowledge = append(cfg.Knowledge, gone)
+	goneWork := filepath.Join(t.TempDir(), "gone-work")
+	plain := filepath.Join(t.TempDir(), "plain")
+	os.MkdirAll(plain, 0o755)
+	broken := filepath.Join(t.TempDir(), "broken")
+	os.MkdirAll(filepath.Join(broken, project.Dir), 0o755)
+	os.WriteFile(project.MarkerPath(broken), []byte("{not json"), 0o644)
+	future := filepath.Join(t.TempDir(), "future")
+	os.MkdirAll(filepath.Join(future, project.Dir), 0o755)
+	os.WriteFile(project.MarkerPath(future), []byte(`{"schema":"claude-atlas.project.v9","id":"x"}`), 0o644)
+	noID := filepath.Join(t.TempDir(), "noid")
+	os.MkdirAll(filepath.Join(noID, project.Dir), 0o755)
+	os.WriteFile(project.MarkerPath(noID), []byte(`{"schema":"`+project.Schema+`","name":"x"}`), 0o644)
+	cfg.Projects = append(cfg.Projects, goneWork, plain, broken, future, noID)
 	ix, err := Scan(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := ix.ByPath(gone)
-	if e == nil || e.Reason != ReasonMissing || !strings.Contains(e.Error, "not found") || !strings.Contains(e.Error, "remove") {
-		t.Fatalf("missing entry %+v", e)
-	}
-	matched := false
-	for _, p := range ix.Problems {
-		if p.Path == gone && p.Reason == e.Error {
-			matched = true
+	want := map[string]string{gone: ReasonMissing, goneWork: ReasonMissing, plain: ReasonNotProject, broken: ReasonUnreadable, future: ReasonSchema, noID: ReasonUnreadable}
+	for path, reason := range want {
+		e := ix.ByPath(path)
+		if e == nil || e.Reason != reason || e.Error == "" {
+			t.Errorf("%s: %+v, want reason %s", path, e, reason)
+			continue
+		}
+		matched := false
+		for _, p := range ix.Problems {
+			if p.Path == path && p.Reason == e.Error {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("%s keeps its problem with the same reason: %+v", path, ix.Problems)
 		}
 	}
-	if !matched {
-		t.Fatalf("a missing vault keeps its problem, with the same reason: %+v", ix.Problems)
+	if e := ix.ByPath(gone); !strings.Contains(e.Error, "remove") {
+		t.Fatalf("a gone knowledge base names remove: %s", e.Error)
 	}
-	if _, err := ix.Find(gone); !errors.Is(err, ErrNotFound) {
+	if e := ix.ByPath(goneWork); !strings.Contains(e.Error, "forget") {
+		t.Fatalf("a gone project names forget: %s", e.Error)
+	}
+	if e := ix.ByPath(plain); !strings.Contains(e.Error, "claude-atlas init") {
+		t.Fatalf("a plain folder names init: %s", e.Error)
+	}
+	if _, err := ix.Find(gone, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("find a missing vault: %v", err)
 	}
-	if e.Rel() != "problems/gone" {
-		t.Fatalf("rel %q", e.Rel())
-	}
 }
 
-// TestEffectiveAndKbDir covers what phase 3 reuses: the access two vaults agree on, and
-// where a mounted knowledge base's folder sits.
-func TestEffectiveAndKbDir(t *testing.T) {
-	cases := []struct{ request, grant, want string }{
-		{vault.AccessWrite, vault.AccessWrite, vault.AccessWrite},
-		{vault.AccessWrite, vault.AccessRead, vault.AccessRead},
-		{vault.AccessRead, vault.AccessWrite, vault.AccessRead},
-		{vault.AccessRead, vault.AccessRead, vault.AccessRead},
-		// A value neither side recognizes reads only: a hand-edited identity file is not
-		// validated on the way in, so Effective must fail closed.
-		{"", vault.AccessWrite, vault.AccessRead},
-		{vault.AccessWrite, "", vault.AccessRead},
-		{"WRITE", vault.AccessWrite, vault.AccessRead},
-		{vault.AccessWrite, "readwrite", vault.AccessRead},
-	}
-	for _, c := range cases {
-		if got := Effective(c.request, c.grant); got != c.want {
-			t.Errorf("Effective(%q, %q) = %q, want %q", c.request, c.grant, got, c.want)
-		}
-	}
-	kb := Entry{Path: filepath.FromSlash("/vaults/knowledge/ai-ml")}
-	if got := GrantedAccess(kb, "p1"); got != vault.AccessRead {
-		t.Errorf("a knowledge base with no access grants read, got %q", got)
-	}
-	open := Entry{Access: vault.AccessOpen}
-	if got := GrantedAccess(open, "p1"); got != vault.AccessWrite {
-		t.Errorf("an open knowledge base grants write, got %q", got)
-	}
-	guarded := Entry{Access: vault.AccessGuarded, Grants: []Grant{{ID: "p1", Access: vault.AccessWrite}}}
-	if got := GrantedAccess(guarded, "p1"); got != vault.AccessWrite {
-		t.Errorf("a guarded knowledge base grants what it granted, got %q", got)
-	}
-	if got := GrantedAccess(guarded, "p2"); got != vault.AccessRead {
-		t.Errorf("a project with no grant gets read, got %q", got)
-	}
-	e := Entry{Path: filepath.FromSlash("/vaults/projects/cs566")}
-	if got, want := e.KbDir("ai-ml"), filepath.Join(e.Path, "kb", "ai-ml"); got != want {
-		t.Errorf("KbDir = %q, want %q", got, want)
-	}
-}
-
-// TestScanMountedByFollowsSortedOrder proves MountedBy comes out in the entries' final
-// sorted order, not the order the walk happened to visit them in. "z/apple" and
-// "a/zebra" put the walk in the opposite order of the projects' names.
-func TestScanMountedByFollowsSortedOrder(t *testing.T) {
-	if !gitx.Available() {
-		t.Skip("git is not installed")
-	}
-	root := t.TempDir()
-	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
-	mk := func(rel string, opts vault.Options) *vault.Vault {
-		path := filepath.Join(root, filepath.FromSlash(rel))
-		if _, err := vault.Init(path, opts, now); err != nil {
-			t.Fatal(err)
-		}
-		v, _ := vault.Open(path)
-		return v
-	}
-	kb := mk("Vaults/knowledge/kb", vault.Options{Kind: vault.Knowledge, Name: "kb"})
-	apple := mk("Vaults/z/apple", vault.Options{Kind: vault.Project, Name: "apple"})
-	zebra := mk("Vaults/a/zebra", vault.Options{Kind: vault.Project, Name: "zebra"})
-	for _, p := range []*vault.Vault{apple, zebra} {
-		if err := vault.UpdateConfig(p.Root, "mount", now, func(c *vault.Config) error {
-			c.Mounts = []vault.Mount{{ID: kb.Config.ID, Name: "kb", Access: vault.AccessRead}}
-			return nil
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	ix, err := Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k := ix.ByID(kb.Config.ID)
-	if len(k.MountedBy) != 2 || k.MountedBy[0].Name != "apple" || k.MountedBy[1].Name != "zebra" {
-		t.Fatalf("mounted by order %+v", k.MountedBy)
-	}
-}
-
-// TestScanDepthLimit proves the boundary: a vault root five directory levels below the
-// vaults directory is found, one six levels down is not.
 func TestScanDepthLimit(t *testing.T) {
 	if !gitx.Available() {
 		t.Skip("git is not installed")
@@ -364,11 +312,11 @@ func TestScanDepthLimit(t *testing.T) {
 	root := t.TempDir()
 	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
 	five := filepath.Join(cfg.VaultsDir, "d1", "d2", "d3", "d4", "d5")
-	if _, err := vault.Init(five, vault.Options{Kind: vault.Knowledge, Name: "five"}, now); err != nil {
+	if _, err := vault.Init(five, vault.Options{Name: "five"}, now); err != nil {
 		t.Fatal(err)
 	}
 	six := filepath.Join(cfg.VaultsDir, "e1", "e2", "e3", "e4", "e5", "d6")
-	if _, err := vault.Init(six, vault.Options{Kind: vault.Knowledge, Name: "six"}, now); err != nil {
+	if _, err := vault.Init(six, vault.Options{Name: "six"}, now); err != nil {
 		t.Fatal(err)
 	}
 	ix, err := Scan(cfg)
@@ -383,25 +331,13 @@ func TestScanDepthLimit(t *testing.T) {
 	}
 }
 
-// TestFindAmbiguousIDPrefix proves Find reports every entry an id prefix matches,
-// not just the first.
-func TestFindAmbiguousIDPrefix(t *testing.T) {
-	ix := &Index{Entries: []Entry{
-		{ID: "abcdefgh1111", Kind: vault.Project, Name: "one", Path: "/vaults/one"},
-		{ID: "abcdefgh2222", Kind: vault.Project, Name: "two", Path: "/vaults/two"},
-	}}
-	if _, err := ix.Find("abcdefgh"); !errors.Is(err, ErrAmbiguous) {
-		t.Fatalf("find ambiguous id prefix: %v", err)
-	}
-}
-
-// TestByPathFollowsASymlinkedAncestor proves a session that reached the vault through a
-// symlinked parent still finds its entry, and with it its mounts. On macOS /tmp is such
-// a link, and Claude Code hands the hooks and the server the resolved path.
+// TestByPathFollowsASymlinkedAncestor proves a session that reached a folder through a
+// symlinked parent still finds its entry. On macOS /tmp is such a link, and Claude Code
+// hands the hooks and the server the resolved path.
 func TestByPathFollowsASymlinkedAncestor(t *testing.T) {
 	root := t.TempDir()
-	real := filepath.Join(root, "Vaults")
-	if err := os.MkdirAll(filepath.Join(real, "projects", "cs566"), 0o755); err != nil {
+	real := filepath.Join(root, "Code")
+	if err := os.MkdirAll(filepath.Join(real, "webapp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(root, "link")
@@ -409,423 +345,83 @@ func TestByPathFollowsASymlinkedAncestor(t *testing.T) {
 		t.Skipf("symlinks are not available: %v", err)
 	}
 	ix := &Index{Entries: []Entry{
-		{ID: "abcdefgh1111", Kind: vault.Project, Name: "cs566", Path: filepath.Join(real, "projects", "cs566")},
+		{ID: "abcdefgh1111", Kind: Project, Name: "webapp", Path: filepath.Join(real, "webapp")},
 	}}
-	e := ix.ByPath(filepath.Join(link, "projects", "cs566"))
-	if e == nil {
-		t.Fatal("ByPath through a symlinked parent found nothing")
+	e := ix.ByPath(filepath.Join(link, "webapp"))
+	if e == nil || e.Name != "webapp" {
+		t.Fatalf("ByPath through a symlinked parent: %+v", e)
 	}
-	if e.Name != "cs566" {
-		t.Fatalf("ByPath found %q", e.Name)
-	}
-	// The other direction: the scan recorded the path through the link, and the session
-	// asks with the resolved one.
 	linked := &Index{Entries: []Entry{
-		{ID: "abcdefgh1111", Kind: vault.Project, Name: "cs566", Path: filepath.Join(link, "projects", "cs566")},
+		{ID: "abcdefgh1111", Kind: Project, Name: "webapp", Path: filepath.Join(link, "webapp")},
 	}}
-	if linked.ByPath(filepath.Join(real, "projects", "cs566")) == nil {
+	if linked.ByPath(filepath.Join(real, "webapp")) == nil {
 		t.Fatal("ByPath with a resolved path found nothing")
 	}
-	if ix.ByPath(filepath.Join(link, "projects", "other")) != nil {
-		t.Fatal("ByPath matched a path that is no vault")
+	if ix.ByPath(filepath.Join(link, "other")) != nil {
+		t.Fatal("ByPath matched a path that is no entry")
 	}
 }
 
-// A vault the scan finds and the config also lists, under a spelling that reaches it
-// through a symlink, is one vault: the scan dedupes on the resolved path, so ByPath can
-// never find two entries for one folder.
-func TestScanDedupesAVaultRegisteredThroughASymlink(t *testing.T) {
+// An entry the scan finds and the config also lists, under a spelling that reaches it
+// through a symlink, is one entry.
+func TestScanDedupesAnEntryRegisteredThroughASymlink(t *testing.T) {
 	if !gitx.Available() {
 		t.Skip("git is not installed")
 	}
 	root := t.TempDir()
 	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
-	real := filepath.Join(cfg.VaultsDir, "projects", "cs566")
-	if _, err := vault.Init(real, vault.Options{Kind: vault.Project, Name: "cs566"}, now); err != nil {
+	real := filepath.Join(cfg.VaultsDir, "ai-ml")
+	if _, err := vault.Init(real, vault.Options{Name: "ai-ml"}, now); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(root, "cs566-link")
+	link := filepath.Join(root, "ai-ml-link")
 	if err := os.Symlink(real, link); err != nil {
 		t.Skipf("symlinks are not available: %v", err)
 	}
-	cfg.Vaults = []string{link}
+	cfg.Knowledge = []string{link}
+	work := filepath.Join(root, "work")
+	os.MkdirAll(work, 0o755)
+	if _, _, err := project.Init(work, project.Options{}, now); err != nil {
+		t.Fatal(err)
+	}
+	workLink := filepath.Join(root, "work-link")
+	if err := os.Symlink(work, workLink); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	cfg.Projects = []string{work, workLink}
 	ix, err := Scan(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ix.Entries) != 1 {
-		t.Fatalf("one vault, %d entries: %+v", len(ix.Entries), ix.Entries)
+	if len(ix.Entries) != 2 {
+		t.Fatalf("two entries, got %d: %+v", len(ix.Entries), ix.Entries)
 	}
-	if ix.Entries[0].Path != real {
-		t.Fatalf("the entry keeps the scanned path: %s", ix.Entries[0].Path)
+	if ix.Entries[0].Path != real || ix.Entries[1].Path != work {
+		t.Fatalf("the entries keep the first spelling: %s %s", ix.Entries[0].Path, ix.Entries[1].Path)
 	}
 	for _, path := range []string{real, link} {
-		if e := ix.ByPath(path); e == nil || e.Name != "cs566" {
+		if e := ix.ByPath(path); e == nil || e.Name != "ai-ml" {
 			t.Fatalf("ByPath(%s): %+v", path, e)
 		}
 	}
 }
 
-// initRepo makes a git repository at dir with one commit, the way a code repository a
-// project moves into looks.
-func initRepo(t *testing.T, dir string) string {
-	t.Helper()
-	if !gitx.Available() {
-		t.Skip("git is not installed")
+func TestDescriptionSummaryAndUnfinished(t *testing.T) {
+	cases := map[Description]string{
+		{Page: "wiki/entities/x.md"}:                                   "described in wiki/entities/x.md",
+		{Page: "wiki/entities/x.md", Commit: "abcdef0123", Behind: -1}: "described in wiki/entities/x.md at abcdef0, not in the repository's history",
+		{Page: "wiki/entities/x.md", Commit: "abcdef0123", Behind: 0}:  "described in wiki/entities/x.md at abcdef0, current",
+		{Page: "wiki/entities/x.md", Commit: "abcdef0123", Behind: 1}:  "described in wiki/entities/x.md at abcdef0, 1 commit behind",
+		{Page: "wiki/entities/x.md", Commit: "abcdef0123", Behind: 12}: "described in wiki/entities/x.md at abcdef0, 12 commits behind",
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	repo := gitx.Repo{Dir: dir}
-	if err := repo.Init(); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.AddAll(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.Commit("initial"); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
-// TestAProjectInsideARepositoryListsItsHost proves the scan derives the host repository
-// from the folder: the project lists it first, and an identity entry of the same name
-// only lends it a change policy and a remote.
-func TestAProjectInsideARepositoryListsItsHost(t *testing.T) {
-	root := t.TempDir()
-	code := initRepo(t, filepath.Join(root, "code"))
-	res, err := vault.InitIn(code, vault.Options{Kind: vault.Project, Name: "Notes"}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults"), Vaults: []string{res.Root}}
-
-	ix, err := Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := ix.ByPath(res.Root)
-	if e == nil || e.Error != "" {
-		t.Fatalf("the project was not scanned: %+v", e)
-	}
-	if e.Host != code {
-		t.Fatalf("host %q, want %q", e.Host, code)
-	}
-	if len(e.Repos) != 1 {
-		t.Fatalf("repos %+v", e.Repos)
-	}
-	if e.Repos[0].Name != "code" || e.Repos[0].Path != code || e.Repos[0].Changes != links.ChangesCommit || e.Repos[0].Error != "" {
-		t.Fatalf("the host repository: %+v", e.Repos[0])
-	}
-
-	if err := vault.UpdateConfig(res.Root, "edit repository code", now, func(c *vault.Config) error {
-		c.Repos = []vault.Repo{{Name: "code", Changes: links.ChangesPR, Remote: "git@example.com:me/code.git"}}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ix, err = Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e = ix.ByPath(res.Root)
-	if e == nil || len(e.Repos) != 1 {
-		t.Fatalf("the identity entry must not add a second repository: %+v", e)
-	}
-	if e.Repos[0].Changes != links.ChangesPR || e.Repos[0].Remote != "git@example.com:me/code.git" || e.Repos[0].Path != code {
-		t.Fatalf("the host repository after the edit: %+v", e.Repos[0])
-	}
-
-	// A project that is its own repository has no host and lists only what it records.
-	plain := filepath.Join(cfg.VaultsDir, "projects", "cs566")
-	if _, err := vault.Init(plain, vault.Options{Kind: vault.Project, Name: "cs566"}, now); err != nil {
-		t.Fatal(err)
-	}
-	if err := vault.UpdateConfig(plain, "add repository hw", now, func(c *vault.Config) error {
-		c.Repos = []vault.Repo{{Name: "hw"}}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ix, err = Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	standalone := ix.ByPath(plain)
-	if standalone == nil || standalone.Host != "" {
-		t.Fatalf("a standalone project has no host: %+v", standalone)
-	}
-	if len(standalone.Repos) != 1 || standalone.Repos[0].Name != "hw" || standalone.Repos[0].Error == "" {
-		t.Fatalf("a standalone project's repositories are unchanged: %+v", standalone.Repos)
-	}
-}
-
-// TestTheHostsNameIsCleanedLikeALinkedOne holds the host's name to the rule every linked
-// repository's name follows: a folder whose name carries a character Obsidian refuses
-// takes the cleaned name, so nothing can name the same folder twice.
-func TestTheHostsNameIsCleanedLikeALinkedOne(t *testing.T) {
-	root := t.TempDir()
-	code := initRepo(t, filepath.Join(root, "code#1"))
-	res, err := vault.InitIn(code, vault.Options{Kind: vault.Project, Name: "Notes"}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults"), Vaults: []string{res.Root}}
-	ix, err := Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := ix.ByPath(res.Root)
-	if e == nil || len(e.Repos) != 1 {
-		t.Fatalf("the project was not scanned: %+v", e)
-	}
-	if e.Repos[0].Name != "code-1" || e.Repos[0].Path != code {
-		t.Fatalf("the host repository: %+v", e.Repos[0])
-	}
-	if got := HostName(code); got != "code-1" {
-		t.Fatalf("HostName %q", got)
-	}
-	if got := HostName(filepath.Join(root, "...")); got != "..." {
-		t.Fatalf("a name that cleaning leaves nothing of stands: %q", got)
-	}
-}
-
-// clusterVault names one vault a cluster test builds.
-type clusterVault struct {
-	rel  string
-	kind vault.Kind
-	name string
-}
-
-// buildVaults makes a vaults directory holding one vault per entry and returns the atlas
-// config and the vaults keyed by their relative path.
-func buildVaults(t *testing.T, want ...clusterVault) (*home.Config, map[string]*vault.Vault) {
-	t.Helper()
-	if !gitx.Available() {
-		t.Skip("git is not installed")
-	}
-	root := t.TempDir()
-	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
-	out := map[string]*vault.Vault{}
-	for _, w := range want {
-		path := filepath.Join(cfg.VaultsDir, filepath.FromSlash(w.rel))
-		if _, err := vault.Init(path, vault.Options{Kind: w.kind, Name: w.name}, now); err != nil {
-			t.Fatal(err)
-		}
-		v, err := vault.Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out[w.rel] = v
-	}
-	return cfg, out
-}
-
-// edit rewrites one vault's identity file and fails the test when it cannot.
-func edit(t *testing.T, root, summary string, change func(*vault.Config) error) {
-	t.Helper()
-	if err := vault.UpdateConfig(root, summary, now, change); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A project that mounts a cluster reaches every member: the scan adds one derived mount
-// per member, names the cluster it came through, and gives each member the access its own
-// grant allows.
-func TestScanExpandsAClusterMount(t *testing.T) {
-	cfg, vs := buildVaults(t,
-		clusterVault{"knowledge/p3", vault.Knowledge, "p3"},
-		clusterVault{"knowledge/software", vault.Knowledge, "software"},
-		clusterVault{"knowledge/people", vault.Knowledge, "people"},
-		clusterVault{"projects/vision", vault.Project, "vision"},
-	)
-	p3, software, people, vision := vs["knowledge/p3"], vs["knowledge/software"], vs["knowledge/people"], vs["projects/vision"]
-	edit(t, people.Root, "guard", func(c *vault.Config) error {
-		c.Access = vault.AccessGuarded
-		return nil
-	})
-	edit(t, p3.Root, "members", func(c *vault.Config) error {
-		// Stale names, so the scan has to resolve them.
-		c.Members = []vault.Member{{ID: software.Config.ID, Name: "old-software"}, {ID: people.Config.ID, Name: "old-people"}}
-		return nil
-	})
-	edit(t, vision.Root, "mount", func(c *vault.Config) error {
-		c.Mounts = []vault.Mount{{ID: p3.Config.ID, Name: "p3", Access: vault.AccessWrite}}
-		return nil
-	})
-	ix, err := Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := ix.ByID(vision.Config.ID)
-	if len(e.Mounts) != 3 {
-		t.Fatalf("mounts %+v", e.Mounts)
-	}
-	want := []Mount{
-		{ID: p3.Config.ID, Name: "p3", Through: "", Effective: vault.AccessWrite, Path: filepath.Join(p3.Root, "wiki")},
-		{ID: software.Config.ID, Name: "software", Through: "p3", Effective: vault.AccessWrite, Path: filepath.Join(software.Root, "wiki")},
-		{ID: people.Config.ID, Name: "people", Through: "p3", Effective: vault.AccessRead, Path: filepath.Join(people.Root, "wiki")},
-	}
-	for i, w := range want {
-		got := e.Mounts[i]
-		if got.ID != w.ID || got.Name != w.Name || got.Through != w.Through || got.Effective != w.Effective || got.Path != w.Path {
-			t.Fatalf("mount %d: %+v, want %+v", i, got, w)
+	for d, want := range cases {
+		if got := d.Summary(); got != want {
+			t.Errorf("%+v: %q", d, got)
 		}
 	}
-	cluster := ix.ByID(p3.Config.ID)
-	if len(cluster.Members) != 2 {
-		t.Fatalf("members %+v", cluster.Members)
-	}
-	if cluster.Members[0].Name != "software" || cluster.Members[0].Error != "" {
-		t.Fatalf("a member resolves to its current name: %+v", cluster.Members[0])
-	}
-	if cluster.Members[1].Name != "people" || cluster.Members[1].Error != "" {
-		t.Fatalf("a member resolves to its current name: %+v", cluster.Members[1])
-	}
-	for _, m := range []*vault.Vault{software, people} {
-		member := ix.ByID(m.Config.ID)
-		if len(member.Clusters) != 1 || member.Clusters[0].ID != p3.Config.ID || member.Clusters[0].Name != "p3" {
-			t.Fatalf("%s clusters %+v", m.Config.Name, member.Clusters)
-		}
-	}
-	sw := ix.ByID(software.Config.ID)
-	if len(sw.MountedBy) != 1 || sw.MountedBy[0].Name != "vision" || sw.MountedBy[0].Access != vault.AccessWrite {
-		t.Fatalf("a member knows it is reached: %+v", sw.MountedBy)
-	}
-	pe := ix.ByID(people.Config.ID)
-	if len(pe.MountedBy) != 1 || pe.MountedBy[0].Name != "vision" || pe.MountedBy[0].Access != vault.AccessRead {
-		t.Fatalf("a guarded member is reached for reading: %+v", pe.MountedBy)
-	}
-}
-
-// An explicit mount wins over the one a cluster would derive, and a derived mount whose
-// name is taken takes the cluster's name as a prefix.
-func TestExplicitMountWinsAndNamesDoNotCollide(t *testing.T) {
-	cfg, vs := buildVaults(t,
-		clusterVault{"knowledge/p3", vault.Knowledge, "p3"},
-		clusterVault{"knowledge/software", vault.Knowledge, "software"},
-		clusterVault{"knowledge/p3-people", vault.Knowledge, "people"},
-		clusterVault{"knowledge/own-people", vault.Knowledge, "people"},
-		clusterVault{"projects/vision", vault.Project, "vision"},
-	)
-	p3, software := vs["knowledge/p3"], vs["knowledge/software"]
-	member, own, vision := vs["knowledge/p3-people"], vs["knowledge/own-people"], vs["projects/vision"]
-	edit(t, p3.Root, "members", func(c *vault.Config) error {
-		c.Members = []vault.Member{{ID: software.Config.ID, Name: "software"}, {ID: member.Config.ID, Name: "people"}}
-		return nil
-	})
-	edit(t, vision.Root, "mount", func(c *vault.Config) error {
-		c.Mounts = []vault.Mount{
-			{ID: p3.Config.ID, Name: "p3", Access: vault.AccessWrite},
-			{ID: software.Config.ID, Name: "software", Access: vault.AccessRead},
-			{ID: own.Config.ID, Name: "people", Access: vault.AccessRead},
-		}
-		return nil
-	})
-	ix, err := Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := ix.ByID(vision.Config.ID)
-	if len(e.Mounts) != 4 {
-		t.Fatalf("mounts %+v", e.Mounts)
-	}
-	var forSoftware []Mount
-	for _, m := range e.Mounts {
-		if m.ID == software.Config.ID {
-			forSoftware = append(forSoftware, m)
-		}
-	}
-	if len(forSoftware) != 1 || forSoftware[0].Through != "" || forSoftware[0].Access != vault.AccessRead {
-		t.Fatalf("the project's own mount stands: %+v", forSoftware)
-	}
-	derived := e.Mounts[3]
-	if derived.ID != member.Config.ID || derived.Name != "p3-people" || derived.Through != "p3" {
-		t.Fatalf("a derived mount whose name is taken: %+v", derived)
-	}
-	for _, m := range e.Mounts {
-		if m.ID == own.Config.ID && (m.Name != "people" || m.Through != "") {
-			t.Fatalf("the explicit mount keeps its name: %+v", m)
-		}
-	}
-}
-
-// Every candidate name taken, a member still gets a folder of its own: the last name
-// counts up until it is free.
-func TestAMemberNameCountsUpWhenEveryCandidateIsTaken(t *testing.T) {
-	cfg, vs := buildVaults(t,
-		clusterVault{"knowledge/p3", vault.Knowledge, "p3"},
-		clusterVault{"knowledge/software", vault.Knowledge, "software"},
-		clusterVault{"knowledge/f1", vault.Knowledge, "f1"},
-		clusterVault{"knowledge/f2", vault.Knowledge, "f2"},
-		clusterVault{"knowledge/f3", vault.Knowledge, "f3"},
-		clusterVault{"knowledge/f4", vault.Knowledge, "f4"},
-		clusterVault{"projects/vision", vault.Project, "vision"},
-	)
-	p3, software, vision := vs["knowledge/p3"], vs["knowledge/software"], vs["projects/vision"]
-	short := software.Config.ID[:8]
-	edit(t, p3.Root, "members", func(c *vault.Config) error {
-		c.Members = []vault.Member{{ID: software.Config.ID, Name: "software"}}
-		return nil
-	})
-	// The project's own mounts take every name memberName would try.
-	edit(t, vision.Root, "mount", func(c *vault.Config) error {
-		c.Mounts = []vault.Mount{
-			{ID: p3.Config.ID, Name: "p3", Access: vault.AccessWrite},
-			{ID: vs["knowledge/f1"].Config.ID, Name: "software", Access: vault.AccessRead},
-			{ID: vs["knowledge/f2"].Config.ID, Name: "p3-software", Access: vault.AccessRead},
-			{ID: vs["knowledge/f3"].Config.ID, Name: "p3-" + short, Access: vault.AccessRead},
-			{ID: vs["knowledge/f4"].Config.ID, Name: "kb-" + short, Access: vault.AccessRead},
-		}
-		return nil
-	})
-	ix, err := Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := ix.ByID(vision.Config.ID)
-	if len(e.Mounts) != 6 {
-		t.Fatalf("mounts %+v", e.Mounts)
-	}
-	derived := e.Mounts[5]
-	if derived.ID != software.Config.ID || derived.Through != "p3" {
-		t.Fatalf("the derived mount: %+v", derived)
-	}
-	if derived.Name != "kb-"+short+"-2" {
-		t.Fatalf("the last name should count up past the one that is taken: %q", derived.Name)
-	}
-}
-
-// A member the scan does not hold is reported, not dropped.
-func TestAMemberTheScanLost(t *testing.T) {
-	cfg, vs := buildVaults(t,
-		clusterVault{"knowledge/p3", vault.Knowledge, "p3"},
-		clusterVault{"projects/vision", vault.Project, "vision"},
-	)
-	p3, vision := vs["knowledge/p3"], vs["projects/vision"]
-	const gone = "00000000-0000-4000-8000-000000000009"
-	edit(t, p3.Root, "members", func(c *vault.Config) error {
-		c.Members = []vault.Member{{ID: gone, Name: "gone"}}
-		return nil
-	})
-	edit(t, vision.Root, "mount", func(c *vault.Config) error {
-		c.Mounts = []vault.Mount{{ID: p3.Config.ID, Name: "p3", Access: vault.AccessWrite}}
-		return nil
-	})
-	ix, err := Scan(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cluster := ix.ByID(p3.Config.ID)
-	if len(cluster.Members) != 1 || cluster.Members[0].Error != "no knowledge base with id "+gone {
-		t.Fatalf("members %+v", cluster.Members)
-	}
-	e := ix.ByID(vision.Config.ID)
-	if len(e.Mounts) != 1 || e.Mounts[0].ID != p3.Config.ID {
-		t.Fatalf("a member the scan lost derives no mount: %+v", e.Mounts)
+	one, two := 1, 2
+	u := Unfinished{Stubs: &one, DeadLinks: &two}
+	if u.Text() != "1 stubs · 2 dead links" || *u.Total() != 3 || (Unfinished{}).Total() != nil {
+		t.Fatalf("unfinished %q %v", u.Text(), u.Total())
 	}
 }

@@ -17,12 +17,12 @@ Keep the source, the page, and the claim distinguishable.
   "captured_at": "2026-09-12",
   "ingested_at": "2026-09-12",
   "pages": ["wiki/sources/DINOv2.md"],
-  "via": { "id": "proj-cs566", "name": "cs566" }
+  "via": { "id": "b3e0f5a2-9c14-4d6e-8a7b-2f1e0c9d8b7a", "name": "webapp" }
 }
 ```
 
-`via` names the project a source came through, and appears only on a record
-captured into a knowledge base through a mount. It is provenance, not a link.
+`via` names the project whose session captured the source, and appears only
+on a record captured from a project session. It is provenance, not a link.
 
 The core writes the ledger. `capture` creates records; the `sources` field of a
 plan updates them:
@@ -58,6 +58,6 @@ Pages carry claims; the ledger carries sources. On a page:
 - Preserve contradictions between sources; do not pick a winner silently.
 - Unsupported is a valid state. Write "no source in the vault supports this"
   rather than inventing a quotation, page number, date, or confidence.
-- A `question` page's frontmatter `assessment` is `accepted`, `provisional`,
-  `contested`, or `unsupported`. Accepted needs at least one active,
-  non-synthetic source in the ledger.
+- A page's frontmatter `assessment`, when it carries one, is `accepted`,
+  `provisional`, `contested`, or `unsupported`. Accepted needs at least one
+  active, non-synthetic source in the ledger.

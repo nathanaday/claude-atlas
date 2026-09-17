@@ -1,8 +1,11 @@
+// Package tui is the atlas view: every knowledge base and project on one screen, as
+// two tabs, with the keys that open one in Obsidian or start Claude Code in it. It
+// lists and launches; creating and changing things is the CLI's and the session's job.
 package tui
 
 import (
 	"fmt"
-	"os/exec"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,18 +15,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nathanaday/claude-atlas/internal/actions"
-	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/vault"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 )
 
-// Item is one vault in the view: what the scan found, with the state the last refresh
+// Item is one entry in the view: what the scan found, with the state the last refresh
 // derived (nil when none has run).
 type Item struct {
 	Entry registry.Entry
 }
 
-// Items wraps the entries the hooks loaded.
+// Items wraps the entries the CLI loaded.
 func Items(entries []registry.Entry) []Item {
 	items := make([]Item, 0, len(entries))
 	for _, e := range entries {
@@ -32,7 +34,7 @@ func Items(entries []registry.Entry) []Item {
 	return items
 }
 
-// entryName is the name to show: a vault the scan could not read has only its folder.
+// entryName is the name to show: an entry the scan could not read has only its folder.
 func entryName(e registry.Entry) string {
 	if e.Error != "" || e.Name == "" {
 		return filepath.Base(e.Path)
@@ -40,18 +42,13 @@ func entryName(e registry.Entry) string {
 	return e.Name
 }
 
-// Opener connects the view to Obsidian and Claude Code without the screen doing the work itself.
+// Opener connects the view to Obsidian and Claude Code without the screen doing the
+// work itself. Obsidian opens a knowledge base at path. Claude runs a Claude Code
+// session in a knowledge base or a project's work folder at path, holding the terminal
+// until the session ends; the CLI decides how to launch in each.
 type Opener struct {
-	Status          func(vault string) (registered, running bool, err error)
-	Open            func(vault string) error
-	RegisterAndOpen func(vault string) error
-	// Claude builds the Claude Code process for a vault, with prompt as the first
-	// message when not empty; the view hands it the terminal. ClaudeIn starts it in
-	// another folder, such as a task's workdir, with the vault still selected.
-	Claude   func(vault, prompt string) (*exec.Cmd, error)
-	ClaudeIn func(vault, dir, prompt string) (*exec.Cmd, error)
-	// OpenPath opens one page of a vault in Obsidian.
-	OpenPath func(path string) error
+	Obsidian func(path string) error
+	Claude   func(path string) error
 }
 
 // now is the clock the screens use; tests may replace it.
@@ -74,88 +71,72 @@ type refreshedMsg struct {
 	err error
 }
 
+// launch adapts an Opener.Claude call to what Bubble Tea hands the terminal to.
+type launch struct {
+	run func() error
+}
+
+func (l launch) Run() error        { return l.run() }
+func (launch) SetStdin(io.Reader)  {}
+func (launch) SetStdout(io.Writer) {}
+func (launch) SetStderr(io.Writer) {}
+
 // tab is one screen of the tab bar.
 type tab int
 
 const (
-	tabProjects tab = iota
-	tabKnowledge
-	tabTasks
+	tabKnowledge tab = iota
+	tabProjects
 	tabProblems
 )
 
-var tabNames = map[tab]string{tabProjects: "Projects", tabKnowledge: "Knowledge", tabTasks: "Tasks", tabProblems: "Problems"}
+var tabNames = map[tab]string{tabKnowledge: "Knowledge", tabProjects: "Projects", tabProblems: "Problems"}
 
 // captions say what each tab holds, for a user who is new to the two kinds.
 var captions = map[tab]string{
-	tabProjects:  "A project holds tasks, questions, and an inbox. It mounts the knowledge bases it reads and writes.",
-	tabKnowledge: "A knowledge base is a wiki. Projects mount it, and sources reach it through a project's inbox. A guarded one grants write access per project.",
-	tabTasks:     "Every project's open tasks.",
-	tabProblems:  "Vaults the atlas found but could not read.",
+	tabKnowledge: "A knowledge base is the wiki you open and work from. Projects use it; sources enter through its inbox.",
+	tabProjects:  "A project is an atlas/ folder inside your work: its tasks and phases, and the one knowledge base it uses.",
+	tabProblems:  "Entries the atlas found but could not read.",
 }
 
 // empties is what a tab says when it lists nothing.
 var empties = map[tab]string{
-	tabProjects:  "no projects yet; press n to make one, or run `claude-atlas new-project NAME`",
-	tabKnowledge: "no knowledge bases yet; press N to make one, or run `claude-atlas new-knowledge NAME`",
+	tabKnowledge: "no knowledge bases yet; run `claude-atlas new-knowledge NAME`",
+	tabProjects:  "no projects yet; run `claude-atlas init` in a work folder",
 }
 
-// boardOf is the index of the board behind a tab; the Tasks tab has none and maps to 0.
-func boardOf(t tab) int {
-	switch t {
-	case tabKnowledge:
-		return 1
-	case tabProblems:
-		return 2
-	}
-	return 0
-}
+// boardOf is the index of the board behind a tab.
+func boardOf(t tab) int { return int(t) }
 
 // boardTab is the tab a board sits on.
-func boardTab(i int) tab {
-	switch i {
-	case 1:
-		return tabKnowledge
-	case 2:
-		return tabProblems
-	}
-	return tabProjects
-}
+func boardTab(i int) tab { return tab(i) }
 
 type view struct {
-	items     []Item
-	opener    Opener
-	hooks     actions.Atlas
-	tab       tab
-	boards    [3]board     // projects, knowledge, problems
-	tasksTab  *tasksScreen // the hosted board, built on the first visit to the Tasks tab
-	edit      *editor
-	add       *model // the add-vault or adopt screen while open
-	ingest    *ingestScreen
-	links     *linksScreen
-	mounts    *mountsScreen
-	cluster   *clusterScreen
-	tasks     *tasksScreen
-	changed   bool
-	ask       *Item  // vault awaiting a register-and-open confirmation
-	askRun    bool   // Obsidian was running when we asked, so it will restart
-	busy      string // message while an open runs in the background
+	items   []Item
+	opener  Opener
+	acts    actions.Atlas
+	tab     tab
+	boards  [3]board // knowledge, projects, problems
+	changed bool
+	// plant is the one-line prompt for a new task, open while not nil, and the project
+	// it plants into.
+	plant     *textinput.Model
+	plantInto *Item
+	busy      string // message while an open or a refresh runs in the background
 	status    string
 	errMsg    string
 	width     int
 	height    int
 	refreshed string
-	// focus is the vault the next refresh should land on, after a write.
-	focus string
 	// help shows every key in the footer; off, the footer names only the tab's keys.
 	help bool
 }
 
-func newView(items []Item, opener Opener, hooks actions.Atlas) view {
-	v := view{items: items, opener: opener, hooks: hooks, width: 100, height: 40}
+func newView(items []Item, opener Opener, acts actions.Atlas) view {
+	v := view{items: items, opener: opener, acts: acts, width: 100, height: 40}
 	v.boards = [3]board{
-		newBoard(boardProjects, items, v.width),
 		newBoard(boardKnowledge, items, v.width),
+		newBoard(boardProjects, items, v.width),
 		newBoard(boardProblems, items, v.width),
 	}
 	v.stamp()
@@ -171,26 +152,15 @@ func (v *view) stamp() {
 	}
 }
 
-// board is the active tab's board; nil on the Tasks tab.
-func (v *view) board() *board {
-	if v.tab == tabTasks {
-		return nil
-	}
-	return &v.boards[boardOf(v.tab)]
-}
+// board is the active tab's board.
+func (v *view) board() *board { return &v.boards[boardOf(v.tab)] }
 
-// current is the vault under the cursor; nil on the end marker, an empty board, or the
-// Tasks tab.
-func (v *view) current() *Item {
-	if b := v.board(); b != nil {
-		return b.current()
-	}
-	return nil
-}
+// current is the entry under the cursor; nil on the end marker or an empty board.
+func (v *view) current() *Item { return v.board().current() }
 
 // tabs lists the tabs the bar shows: Problems only while there is one.
 func (v view) tabs() []tab {
-	out := []tab{tabProjects, tabKnowledge, tabTasks}
+	out := []tab{tabKnowledge, tabProjects}
 	if len(v.boards[boardOf(tabProblems)].items) > 0 {
 		out = append(out, tabProblems)
 	}
@@ -209,28 +179,19 @@ func (v *view) switchTab(delta int) {
 	v.goTo(tabs[max(0, min(len(tabs)-1, at+delta))])
 }
 
-// goTo shows a tab. The first visit to Tasks builds the board, when tasks are available.
+// goTo shows a tab.
 func (v *view) goTo(t tab) {
 	v.tab = t
-	if t == tabTasks && v.tasksTab == nil && v.hooks.Tasks != nil {
-		s := newTasks(v.hooks, v.opener, nil, v.items, v.width)
-		s.hosted = true
-		s.quiet = !v.help
-		s.avail = v.bodyHeight()
-		s.ensureVisible()
-		v.tasksTab = &s
-	}
-	if b := v.board(); b != nil {
-		b.layout()
-		b.ensureVisible(v.bodyHeight())
-	}
+	b := v.board()
+	b.layout()
+	b.ensureVisible(v.bodyHeight())
 }
 
-// reload re-reads the registry when the hooks can, then rebuilds every board with the
-// cursor on the vault at path, on its tab.
+// reload re-reads the registry when the actions can, then rebuilds every board with
+// the cursor on the entry at path, on its tab.
 func (v *view) reload(path string) {
-	if v.hooks.Load != nil {
-		entries, err := v.hooks.Load()
+	if v.acts.Load != nil {
+		entries, err := v.acts.Load()
 		if err != nil {
 			v.errMsg = err.Error()
 			return
@@ -247,23 +208,18 @@ func (v *view) rebuild(path string) {
 		v.boards[i].width = v.width
 		v.boards[i].reload(v.items)
 	}
-	if v.tasksTab != nil {
-		v.tasksTab.reload(v.items)
-	}
 	for i := range v.boards {
 		if path != "" && v.boards[i].moveTo(path) {
 			v.tab = boardTab(i)
 		}
 	}
 	if v.tab == tabProblems && len(v.boards[boardOf(tabProblems)].items) == 0 {
-		v.tab = tabProjects
+		v.tab = tabKnowledge
 	}
 	for i := range v.boards {
 		v.boards[i].layout()
 	}
-	if b := v.board(); b != nil {
-		b.ensureVisible(v.bodyHeight())
-	}
+	v.board().ensureVisible(v.bodyHeight())
 }
 
 func (v view) Init() tea.Cmd { return nil }
@@ -286,7 +242,7 @@ func (v view) bodyHeight() int {
 	return max(5, v.height-chrome)
 }
 
-// lines counts the screen lines a rendered block takes.
+// countLines counts the screen lines a rendered block takes.
 func countLines(block string) int { return strings.Count(strings.TrimSuffix(block, "\n"), "\n") + 1 }
 
 func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -297,28 +253,7 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.boards[i].width = msg.Width
 			v.boards[i].layout()
 		}
-		if v.tasksTab != nil {
-			v.tasksTab.width = msg.Width
-			v.tasksTab.avail = v.bodyHeight()
-			v.tasksTab.ensureVisible()
-		}
-		if v.links != nil {
-			v.links.width = msg.Width
-		}
-		if v.mounts != nil {
-			v.mounts.width = msg.Width
-		}
-		if v.cluster != nil {
-			v.cluster.width = msg.Width
-		}
-		if v.tasks != nil {
-			v.tasks.width = msg.Width
-			v.tasks.avail = v.bodyHeight()
-			v.tasks.ensureVisible()
-		}
-		if b := v.board(); b != nil {
-			b.ensureVisible(v.bodyHeight())
-		}
+		v.board().ensureVisible(v.bodyHeight())
 		return v, nil
 	case claudeDoneMsg:
 		if msg.err != nil {
@@ -326,17 +261,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			v.status = "back from Claude Code in " + msg.name
 		}
-		if v.tasks != nil {
-			v.tasks.reload(v.items)
-			v.tasks.status = "back from Claude Code"
-			return v, v.refreshCmd()
-		}
-		if v.tab == tabTasks && v.tasksTab != nil {
-			v.tasksTab.reload(v.items)
-			v.tasksTab.status = "back from Claude Code"
-			return v, v.refreshCmd()
-		}
-		return v, nil
+		// A session may have planted or finished tasks; read everything again.
+		return v.refresh()
 	case openedMsg:
 		v.busy = ""
 		if msg.err != nil {
@@ -351,79 +277,26 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.errMsg = msg.err.Error()
 			return v, nil
 		}
-		path := v.focus
-		v.focus = ""
-		if path == "" {
-			if it := v.current(); it != nil {
-				path = it.Entry.Path
-			}
+		path := ""
+		if it := v.current(); it != nil {
+			path = it.Entry.Path
 		}
 		v.reload(path)
-		v.status = "refreshed"
-		if v.links != nil {
-			v.links.reload(v.items)
-			v.links.status = "refreshed"
-		}
-		if v.mounts != nil {
-			v.mounts.reload(v.items)
-			v.mounts.status = "refreshed"
-		}
-		if v.cluster != nil {
-			v.cluster.reload(v.items)
-			v.cluster.status = "refreshed"
-		}
-		if v.tasks != nil {
-			v.tasks.reload(v.items)
-			v.tasks.status = "refreshed"
-		}
-		if v.tasksTab != nil {
-			v.tasksTab.status = "refreshed"
+		if v.status == "" {
+			v.status = "refreshed"
 		}
 		return v, nil
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
 			return v, tea.Quit
 		}
-		if v.edit != nil {
-			return v.updateEdit(msg)
-		}
-		if v.add != nil {
-			return v.updateAdd(msg)
-		}
-		if v.ingest != nil {
-			return v.updateIngest(msg)
-		}
-		if v.links != nil {
-			return v.updateLinks(msg)
-		}
-		if v.mounts != nil {
-			return v.updateMounts(msg)
-		}
-		if v.cluster != nil {
-			return v.updateCluster(msg)
-		}
-		if v.tasks != nil {
-			return v.updateTasks(msg)
-		}
-		// The board's idea field takes every key while it is open, q included.
-		if v.tab == tabTasks && v.tasksTab != nil && v.tasksTab.mode != tasksList {
-			return v.updateTasksTab(msg)
+		if v.plant != nil {
+			return v.updatePlant(msg)
 		}
 		if msg.String() == "q" {
 			return v, tea.Quit
 		}
 		if v.busy != "" {
-			return v, nil
-		}
-		if v.ask != nil {
-			switch strings.ToLower(msg.String()) {
-			case "y":
-				item := v.ask
-				v.ask = nil
-				return v.openAsync(item, true)
-			case "n", "esc":
-				v.ask = nil
-			}
 			return v, nil
 		}
 		v.status, v.errMsg = "", ""
@@ -436,56 +309,26 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 		switch msg.String() {
-		case "n":
-			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Project).withKnowledge(v.items))
-		case "N":
-			return v.openAdd(newModel(v.hooks.VaultsDir, vault.Knowledge).withKnowledge(v.items))
-		case "C":
-			return v.openAdd(newClusterModel(v.hooks.VaultsDir).withKnowledge(v.items))
-		case "a":
-			return v.openAdd(v.adoptModel())
 		case "R":
 			return v.refresh()
-		case "T":
-			v.goTo(tabTasks)
-			return v, nil
 		case "h":
 			v.help = !v.help
-			if v.tasksTab != nil {
-				v.tasksTab.quiet = !v.help
-			}
-			if b := v.board(); b != nil {
-				b.ensureVisible(v.bodyHeight())
-			}
+			v.board().ensureVisible(v.bodyHeight())
 			return v, nil
-		}
-		if v.tab == tabTasks {
-			return v.updateTasksTab(msg)
-		}
-		if key := msg.String(); key == "o" || key == "c" || key == "e" || key == "i" || key == "l" || key == "m" || key == "M" || key == "t" {
+		case "o", "c", "p":
 			item := v.current()
 			if item == nil {
 				return v, nil
 			}
-			if item.Entry.Error != "" && key != "o" && key != "e" {
+			if item.Entry.Error != "" {
 				v.errMsg = item.Entry.Error
 				return v, nil
 			}
-			switch key {
+			switch msg.String() {
 			case "c":
-				return v.claude(item, "")
-			case "e":
-				return v.openEditor(item)
-			case "l":
-				return v.openLinks(item)
-			case "m":
-				return v.openMounts(item)
-			case "M":
-				return v.openCluster(item)
-			case "t":
-				return v.openTasks(item)
-			case "i":
-				return v.openIngest(item)
+				return v.claude(item)
+			case "p":
+				return v.openPlant(item)
 			}
 			return v.open(item)
 		}
@@ -510,421 +353,109 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-// adoptModel is the adopt screen. On the Problems tab it starts on the folder under the
-// cursor, unless that folder is gone.
-func (v *view) adoptModel() model {
-	m := newAdoptModel()
-	if it := v.current(); v.tab == tabProblems && it != nil && it.Entry.Reason != registry.ReasonMissing {
-		m.path.setValue(it.Entry.Path)
-	}
-	return m
-}
-
-// refreshCmd rebuilds the registry in the background; nil when no hook does it.
+// refreshCmd rebuilds the registry in the background; nil when no action does it.
 func (v view) refreshCmd() tea.Cmd {
-	if v.hooks.Refresh == nil {
+	if v.acts.Refresh == nil {
 		return nil
 	}
-	fn := v.hooks.Refresh
+	fn := v.acts.Refresh
 	return func() tea.Msg {
-		_, _, err := fn()
+		_, err := fn()
 		return refreshedMsg{err: err}
 	}
 }
 
-// openAdd starts the add-vault screen, or the adopt screen, in place.
-func (v view) openAdd(m model) (tea.Model, tea.Cmd) {
-	if v.hooks.Create == nil || v.hooks.Load == nil {
-		v.errMsg = "creating vaults is not available here"
-		return v, nil
-	}
-	v.add = &m
-	return v, m.Init()
-}
-
-// updateAdd forwards keys to the add screen and creates the vault once confirmed.
-func (v view) updateAdd(msg tea.Msg) (tea.Model, tea.Cmd) {
-	next, cmd := v.add.Update(msg)
-	m := next.(model)
-	if m.cancelled {
-		v.add = nil
-		return v, nil
-	}
-	choice := m.result()
-	if choice == nil {
-		v.add = &m
-		return v, cmd
-	}
-	v.add = nil
-	path, err := v.hooks.Create(*choice)
-	if err != nil {
-		v.errMsg = err.Error()
-		return v, nil
-	}
-	verb := "created "
-	if choice.Adopt {
-		verb = "adopted "
-	}
-	cmd = v.wrote(path, verb+choice.Name)
-	v.reload(path)
-	return v, cmd
-}
-
-// wrote records a write: the boards reload now, and a background refresh brings the
-// derived state up to date and lands the cursor back on this vault.
-func (v *view) wrote(path, status string) tea.Cmd {
-	v.changed = true
-	v.status = status
-	v.focus = path
-	return v.refreshCmd()
-}
-
 // refresh rebuilds derived state in the background, then reloads the boards.
 func (v view) refresh() (tea.Model, tea.Cmd) {
-	if v.hooks.Refresh == nil || v.hooks.Load == nil {
+	if v.acts.Refresh == nil || v.acts.Load == nil {
 		v.errMsg = "refresh is not available here"
 		return v, nil
 	}
-	v.busy = "reading every vault…"
+	v.changed = true
+	v.busy = "reading every knowledge base and project…"
 	return v, v.refreshCmd()
 }
 
-// openEditor starts editing a vault's identity file in place.
-func (v view) openEditor(item *Item) (tea.Model, tea.Cmd) {
-	if v.hooks.Load == nil || v.hooks.Edit == nil {
-		v.errMsg = "editing is not available here"
+// openPlant opens the one-line prompt that plants a task in a project.
+func (v view) openPlant(item *Item) (tea.Model, tea.Cmd) {
+	if item.Entry.Kind != registry.Project {
+		v.errMsg = "a knowledge base has no tasks; plant into a project"
 		return v, nil
 	}
-	ed := newEditor(v.hooks, item.Entry)
-	v.edit = &ed
-	return v, nil
+	if v.acts.Plant == nil {
+		v.errMsg = "planting is not available here"
+		return v, nil
+	}
+	in := textinput.New()
+	in.Prompt = "  task for " + entryName(item.Entry) + ": "
+	in.Width = max(20, v.width-lipgloss.Width(in.Prompt)-4)
+	in.Focus()
+	v.plant, v.plantInto = &in, item
+	return v, textinput.Blink
 }
 
-// updateEdit forwards keys to the editor and folds its outcome back into the view.
-func (v view) updateEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
-	ed, cmd := v.edit.update(msg)
-	path := ed.entry.Path
-	switch ed.outcome {
-	case editOpen:
-		v.edit = &ed
-		return v, cmd
-	case editSaved:
-		// A rename moves the folder, so follow the vault to its new path; the cursor
-		// and the expanded block stay on it.
-		if ed.path != "" && ed.path != path {
-			for i := range v.boards {
-				v.boards[i].rekey(path, ed.path)
-			}
-			path = ed.path
+// updatePlant forwards keys to the prompt; Enter plants, Esc cancels.
+func (v view) updatePlant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		v.plant, v.plantInto = nil, nil
+		return v, nil
+	case tea.KeyEnter:
+		text := strings.TrimSpace(v.plant.Value())
+		item := v.plantInto
+		v.plant, v.plantInto = nil, nil
+		if text == "" {
+			return v, nil
 		}
-		cmd = v.wrote(path, "saved "+ed.draft.Name)
-		v.reload(path)
-	case editRemoved:
-		cmd = v.wrote("", fmt.Sprintf("forgot %s; the vault is still on disk", ed.entry.Name))
-		v.reload("")
-	case editMembers:
-		v.edit = nil
-		return v.openCluster(&Item{Entry: ed.entry})
-	}
-	v.edit = nil
-	return v, cmd
-}
-
-// openLinks shows a project's mounted repositories.
-func (v view) openLinks(item *Item) (tea.Model, tea.Cmd) {
-	if v.hooks.Load == nil || v.hooks.AddRepo == nil {
-		v.errMsg = "repositories are not available here"
-		return v, nil
-	}
-	if item.Entry.Kind != vault.Project {
-		v.errMsg = "a knowledge base has no repositories"
-		return v, nil
-	}
-	s := newLinks(v.hooks, item.Entry, v.width)
-	v.links = &s
-	return v, nil
-}
-
-// updateLinks forwards keys to the repositories screen; after an action it refreshes
-// every vault in the background so the facts catch up, and keeps the screen open.
-func (v view) updateLinks(msg tea.Msg) (tea.Model, tea.Cmd) {
-	s, cmd := v.links.update(msg)
-	if s.closed {
-		v.links = nil
-		v.reload(s.entry.Path)
-		return v, nil
-	}
-	v.links = &s
-	if s.changed {
-		v.links.changed = false
-		v.changed = true
-		v.focus = s.entry.Path
-		v.reload(s.entry.Path)
-		v.links.reload(v.items)
-		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
-			v.links.status += " · refreshing…"
-			return v, tea.Batch(cmd, refreshCmd)
-		}
-	}
-	return v, cmd
-}
-
-// openMounts shows what a project mounts, or which projects mount a knowledge base.
-func (v view) openMounts(item *Item) (tea.Model, tea.Cmd) {
-	if item.Entry.Error != "" {
-		v.errMsg = item.Entry.Error
-		return v, nil
-	}
-	ready := v.hooks.Mount != nil
-	if item.Entry.Kind == vault.Knowledge {
-		ready = v.hooks.Grant != nil
-	}
-	if v.hooks.Load == nil || !ready {
-		v.errMsg = "mounts are not available here"
-		return v, nil
-	}
-	s := newMounts(v.hooks, item.Entry, v.items, v.width)
-	v.mounts = &s
-	return v, nil
-}
-
-// updateMounts forwards keys to the mounts screen; after an action it refreshes every
-// vault in the background so the facts catch up, and keeps the screen open.
-func (v view) updateMounts(msg tea.Msg) (tea.Model, tea.Cmd) {
-	s, cmd := v.mounts.update(msg)
-	if s.closed {
-		v.mounts = nil
-		v.reload(s.entry.Path)
-		return v, nil
-	}
-	v.mounts = &s
-	if s.changed {
-		v.mounts.changed = false
-		v.changed = true
-		v.focus = s.entry.Path
-		v.reload(s.entry.Path)
-		v.mounts.reload(v.items)
-		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
-			v.mounts.status += " · refreshing…"
-			return v, tea.Batch(cmd, refreshCmd)
-		}
-	}
-	return v, cmd
-}
-
-// openCluster shows the knowledge bases a knowledge base gathers.
-func (v view) openCluster(item *Item) (tea.Model, tea.Cmd) {
-	if item.Entry.Error != "" {
-		v.errMsg = item.Entry.Error
-		return v, nil
-	}
-	if item.Entry.Kind != vault.Knowledge {
-		v.errMsg = "a project holds no members"
-		return v, nil
-	}
-	if v.hooks.Load == nil || v.hooks.AddMember == nil || v.hooks.RemoveMember == nil {
-		v.errMsg = "members are not available here"
-		return v, nil
-	}
-	s := newCluster(v.hooks, item.Entry, v.items, v.width)
-	v.cluster = &s
-	return v, nil
-}
-
-// updateCluster forwards keys to the members screen; after an action it refreshes every
-// vault in the background so the projects that mount the cluster catch up, and keeps the
-// screen open.
-func (v view) updateCluster(msg tea.Msg) (tea.Model, tea.Cmd) {
-	s, cmd := v.cluster.update(msg)
-	if s.closed {
-		v.cluster = nil
-		v.reload(s.entry.Path)
-		return v, nil
-	}
-	v.cluster = &s
-	if s.changed {
-		v.cluster.changed = false
-		v.changed = true
-		v.focus = s.entry.Path
-		v.reload(s.entry.Path)
-		v.cluster.reload(v.items)
-		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
-			v.cluster.status += " · refreshing…"
-			return v, tea.Batch(cmd, refreshCmd)
-		}
-	}
-	return v, cmd
-}
-
-// openTasks shows a project's open tasks.
-func (v view) openTasks(item *Item) (tea.Model, tea.Cmd) {
-	if v.hooks.Tasks == nil {
-		v.errMsg = "tasks are not available here"
-		return v, nil
-	}
-	if item.Entry.Kind != vault.Project {
-		v.errMsg = "a knowledge base has no tasks"
-		return v, nil
-	}
-	s := newTasks(v.hooks, v.opener, item, v.items, v.width)
-	s.avail = v.bodyHeight()
-	s.ensureVisible()
-	v.tasks = &s
-	return v, nil
-}
-
-// updateTasks forwards keys to a project's tasks screen.
-func (v view) updateTasks(msg tea.Msg) (tea.Model, tea.Cmd) {
-	s, cmd := v.tasks.update(msg)
-	if s.closed {
-		v.tasks = nil
-		v.reload(s.item.Entry.Path)
-		return v, nil
-	}
-	v.tasks = &s
-	return v, v.afterTasks(v.tasks, cmd)
-}
-
-// updateTasksTab forwards keys to the hosted board. Esc there returns to the Projects tab.
-func (v view) updateTasksTab(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if v.tasksTab == nil {
-		return v, nil
-	}
-	s, cmd := v.tasksTab.update(msg)
-	if s.closed {
-		s.closed = false
-		v.tasksTab = &s
-		v.goTo(tabProjects)
-		return v, nil
-	}
-	v.tasksTab = &s
-	return v, v.afterTasks(v.tasksTab, cmd)
-}
-
-// afterTasks does what a tasks board asked for after a key: starts Claude Code, or
-// refreshes after a plant.
-func (v *view) afterTasks(s *tasksScreen, cmd tea.Cmd) tea.Cmd {
-	if l := s.launch; l != nil {
-		s.launch = nil
-		c, err := v.opener.ClaudeIn(l.vault, l.dir, l.prompt)
+		t, err := v.acts.Plant(item.Entry, tasks.Plant{Text: text})
 		if err != nil {
-			s.err = err.Error()
-			return nil
+			v.errMsg = err.Error()
+			return v, nil
 		}
-		name := l.name
-		return tea.ExecProcess(c, func(err error) tea.Msg { return claudeDoneMsg{name: name, err: err} })
-	}
-	if s.changed {
-		s.changed = false
 		v.changed = true
-		if refreshCmd := v.refreshCmd(); refreshCmd != nil {
-			s.status += " · refreshing…"
-			return tea.Batch(cmd, refreshCmd)
+		v.status = fmt.Sprintf("planted %s in %s (%s)", t.Title, entryName(item.Entry), t.ID)
+		if cmd := v.refreshCmd(); cmd != nil {
+			v.busy = "reading every knowledge base and project…"
+			return v, cmd
 		}
+		return v, nil
 	}
-	return cmd
+	in, cmd := v.plant.Update(msg)
+	v.plant = &in
+	return v, cmd
 }
 
-// openIngest starts the ingest screen for a project.
-func (v view) openIngest(item *Item) (tea.Model, tea.Cmd) {
-	if v.hooks.StagePlan == nil || v.hooks.Stage == nil {
-		v.errMsg = "ingesting is not available here"
-		return v, nil
-	}
-	if item.Entry.Kind != vault.Project {
-		v.errMsg = "a knowledge base has no inbox; knowledge enters through a project that mounts it"
-		return v, nil
-	}
-	s := newIngest(v.hooks, item.Entry)
-	v.ingest = &s
-	return v, tea.Batch(textinput.Blink, s.source.focus())
-}
-
-// updateIngest forwards keys to the ingest screen and acts on how it ended.
-func (v view) updateIngest(msg tea.Msg) (tea.Model, tea.Cmd) {
-	s, cmd := v.ingest.update(msg)
-	switch s.outcome {
-	case ingestOpen:
-		v.ingest = &s
-		return v, cmd
-	case ingestCancelled:
-		v.ingest = nil
-		return v, nil
-	case ingestNothing:
-		v.ingest = nil
-		v.status = fmt.Sprintf("nothing to ingest: %d file%s already ingested, nothing waiting in inbox/", len(s.plan.Unchanged), plural(len(s.plan.Unchanged)))
-		return v, nil
-	}
-	v.ingest = nil
-	waiting := s.plan.Waiting
-	if s.result != nil {
-		waiting += len(s.result.Staged)
-	}
-	if s.outcome == ingestStartNow {
-		return v.claude(&Item{Entry: s.entry}, claudecode.IngestPrompt)
-	}
-	v.status = fmt.Sprintf("%d file%s waiting in inbox/; press c and run /claude-atlas:wiki-ingest when ready", waiting, plural(waiting))
-	return v, nil
-}
-
-// claude hands the terminal to a Claude Code session in the vault and resumes after.
-func (v view) claude(item *Item, prompt string) (tea.Model, tea.Cmd) {
+// claude hands the terminal to a Claude Code session in the entry's folder and
+// resumes after.
+func (v view) claude(item *Item) (tea.Model, tea.Cmd) {
 	if v.opener.Claude == nil {
 		v.errMsg = "starting Claude Code is not available here"
 		return v, nil
 	}
-	cmd, err := v.opener.Claude(item.Entry.Path, prompt)
-	if err != nil {
-		v.errMsg = err.Error()
-		return v, nil
-	}
-	name := entryName(item.Entry)
-	return v, tea.ExecProcess(cmd, func(err error) tea.Msg { return claudeDoneMsg{name: name, err: err} })
+	name, path, run := entryName(item.Entry), item.Entry.Path, v.opener.Claude
+	return v, tea.Exec(launch{run: func() error { return run(path) }}, func(err error) tea.Msg { return claudeDoneMsg{name: name, err: err} })
 }
 
-// open starts opening a vault in Obsidian, asking first when Obsidian does not know it.
+// open starts opening a knowledge base in Obsidian in the background.
 func (v view) open(item *Item) (tea.Model, tea.Cmd) {
-	if v.opener.Status == nil {
-		v.errMsg = "opening vaults is not available here"
+	if item.Entry.Kind != registry.Knowledge {
+		v.errMsg = "a project is not an Obsidian vault; open its knowledge base"
 		return v, nil
 	}
-	registered, running, err := v.opener.Status(item.Entry.Path)
-	if err != nil {
-		v.errMsg = err.Error()
+	if v.opener.Obsidian == nil {
+		v.errMsg = "opening in Obsidian is not available here"
 		return v, nil
 	}
-	if registered {
-		return v.openAsync(item, false)
-	}
-	v.ask = item
-	v.askRun = running
-	return v, nil
-}
-
-func (v view) openAsync(item *Item, register bool) (tea.Model, tea.Cmd) {
-	name, path := entryName(item.Entry), item.Entry.Path
-	fn := v.opener.Open
+	name, path, fn := entryName(item.Entry), item.Entry.Path, v.opener.Obsidian
 	v.busy = "opening " + name + " in Obsidian…"
-	if register {
-		fn = v.opener.RegisterAndOpen
-		v.busy = "registering " + name + " with Obsidian…"
-		if v.askRun {
-			v.busy = "registering " + name + " and restarting Obsidian…"
-		}
-	}
 	return v, func() tea.Msg { return openedMsg{name: name, err: fn(path)} }
 }
 
 // footer renders the prompt, progress, or status lines under a screen.
 func (v view) footer(hints ...string) string {
 	switch {
-	case v.ask != nil:
-		question := "Register it as a vault?"
-		if v.askRun {
-			question += " Obsidian will quit and relaunch."
-		}
-		return fmt.Sprintf("  %s Obsidian does not know %s.\n  %s\n  %s / %s\n",
-			errSt.Render("▲"), entryName(v.ask.Entry), question, title.Render("y"), title.Render("n"))
+	case v.plant != nil:
+		return v.plant.View() + "\n" + v.wrapped(dim, "Enter plant · Esc cancel")
 	case v.busy != "":
 		return "  " + okSt.Render(v.busy) + "\n"
 	}
@@ -956,21 +487,19 @@ func tabColor(t tab) lipgloss.Color {
 	switch t {
 	case tabKnowledge:
 		return knowledgeColor
-	case tabTasks:
-		return muted
 	case tabProblems:
 		return lipgloss.Color("9")
 	}
 	return projectColor
 }
 
-// tabs renders the tab boxes, with their counts when there is room for them.
+// tabRow renders the tab boxes, with their counts when there is room for them.
 func (v view) tabRow(counts bool) string {
 	var parts []string
 	for _, t := range v.tabs() {
 		text := tabNames[t]
-		if n, ok := v.count(t); ok && counts {
-			text += fmt.Sprintf(" (%d)", n)
+		if counts {
+			text += fmt.Sprintf(" (%d)", len(v.boards[boardOf(t)].items))
 		}
 		parts = append(parts, tabStyle(tabColor(t), t == v.tab).Render(text))
 	}
@@ -1001,27 +530,10 @@ func (v view) tabBar() string {
 	return v.tabRow(false)
 }
 
-// count is the number after a tab's name: its vaults, or the open tasks the last refresh
-// counted. It is false for Tasks until a refresh has counted them.
-func (v view) count(t tab) (int, bool) {
-	if t != tabTasks {
-		return len(v.boards[boardOf(t)].items), true
-	}
-	n, known := 0, false
-	for _, it := range v.items {
-		if s := it.Entry.State; it.Entry.Kind == vault.Project && s != nil && s.Tasks != nil {
-			n += s.Tasks.Counts.Open
-			known = true
-		}
-	}
-	return n, known
-}
-
 // fit makes a frame exactly as tall as the screen, so the tab bar sits on the same row
 // whatever the tab holds. A frame the terminal has to scroll moves everything above the
-// fold out of sight; a short one leaves the top where it is. trim cuts a frame that
-// somehow grew, which the board's own line budget already prevents.
-func (v view) fit(frame string, trim bool) string {
+// fold out of sight; a short one leaves the top where it is.
+func (v view) fit(frame string) string {
 	out := strings.Split(strings.TrimSuffix(frame, "\n"), "\n")
 	if v.height <= 0 {
 		return strings.Join(out, "\n")
@@ -1029,40 +541,15 @@ func (v view) fit(frame string, trim bool) string {
 	for len(out) < v.height {
 		out = append(out, "")
 	}
-	if trim && len(out) > v.height {
+	if len(out) > v.height {
 		out = out[:v.height]
 	}
 	return strings.Join(out, "\n")
 }
 
 func (v view) View() string {
-	switch {
-	case v.edit != nil:
-		return v.fit(v.edit.view(), false)
-	case v.add != nil:
-		return v.fit(v.add.View(), false)
-	case v.ingest != nil:
-		return v.fit(v.ingest.view(), false)
-	case v.links != nil:
-		return v.fit(v.links.view(), false)
-	case v.mounts != nil:
-		return v.fit(v.mounts.view(), false)
-	case v.cluster != nil:
-		return v.fit(v.cluster.view(), false)
-	case v.tasks != nil:
-		return v.fit(v.tasks.view(), false)
-	}
 	var b strings.Builder
 	b.WriteString(v.head())
-	if v.tab == tabTasks {
-		if v.tasksTab == nil {
-			b.WriteString("  " + dim.Render("tasks are not available here") + "\n\n")
-		} else {
-			b.WriteString(v.tasksTab.view())
-		}
-		b.WriteString(v.footer(v.hints()...))
-		return v.fit(b.String(), true)
-	}
 	bd := v.board()
 	body := v.bodyHeight()
 	if len(bd.items) == 0 {
@@ -1077,46 +564,29 @@ func (v view) View() string {
 		b.WriteString("  " + dim.Render(fmt.Sprintf("… %d more lines", more)) + "\n")
 	}
 	b.WriteString("\n" + v.footer(v.hints()...))
-	return v.fit(b.String(), true)
+	return v.fit(b.String())
 }
 
-// hints is the footer. With help off it names the tab's own keys: Enter for the vault
-// under the cursor, the key that adds a vault of the tab's kind, h, and q. With help on
-// it names every key on two lines.
+// hints is the footer. With help off it names the tab's own keys: Enter and the launch
+// keys for the entry under the cursor, h, and q. With help on it names every key on
+// two lines.
 func (v view) hints() []string {
 	quit := "h help · q quit"
 	if v.help {
 		quit = "h hide help · q quit"
 	}
-	if v.tab == tabTasks {
-		if v.help {
-			return []string{"←→ tabs · R refresh · " + quit}
-		}
-		return []string{quit}
-	}
 	if v.help {
-		return []string{v.boardHints(), "←→ tabs · n new project · N new knowledge base · C new cluster · a adopt · R refresh · " + quit}
+		return []string{v.boardHints(), "←→ tabs · R refresh · " + quit}
 	}
 	bd := v.board()
-	it := bd.current()
 	var parts []string
-	if it != nil {
-		parts = append(parts, enterHint(bd, it))
-	}
-	switch v.tab {
-	case tabProjects:
-		parts = append(parts, "n new project")
-	case tabKnowledge:
-		parts = append(parts, "N new knowledge base", "C new cluster")
-	case tabProblems:
-		if it != nil && it.Entry.Reason != registry.ReasonMissing {
-			parts = append(parts, "a adopt")
-		}
+	if it := bd.current(); it != nil {
+		parts = append(parts, enterHint(bd, it), entryKeys(it.Entry))
 	}
 	return []string{strings.Join(append(parts, quit), " · ")}
 }
 
-// enterHint says what Enter does to the vault under the cursor.
+// enterHint says what Enter does to the entry under the cursor.
 func enterHint(bd *board, it *Item) string {
 	if bd.expanded[it.Entry.Path] {
 		return "Enter collapse"
@@ -1124,41 +594,32 @@ func enterHint(bd *board, it *Item) string {
 	return "Enter details"
 }
 
-// vaultKeys lists the keys that act on one vault.
-func vaultKeys(e registry.Entry) string {
-	if e.Error != "" {
-		keys := "o Obsidian · e edit"
-		if e.Reason != registry.ReasonMissing {
-			keys += " · a adopt"
-		}
-		return keys
+// entryKeys lists the launch keys for one entry.
+func entryKeys(e registry.Entry) string {
+	switch {
+	case e.Error != "":
+		return "R refresh"
+	case e.Kind == registry.Knowledge:
+		return "o Obsidian · c Claude"
 	}
-	keys := "o Obsidian · c Claude"
-	if e.Kind == vault.Project {
-		keys += " · i ingest · t tasks · l repos"
-	} else {
-		keys += " · M members"
-	}
-	return keys + " · m mounts · e edit"
+	return "c Claude · p plant"
 }
 
-// boardHints lists the keys for the vault under the cursor.
+// boardHints lists the keys for the entry under the cursor.
 func (v view) boardHints() string {
 	hints := "↑↓ move"
 	bd := v.board()
-	if bd == nil {
-		return hints
-	}
 	it := bd.current()
 	if it == nil {
 		return hints
 	}
-	return hints + " · " + enterHint(bd, it) + " · " + vaultKeys(it.Entry)
+	return hints + " · " + enterHint(bd, it) + " · " + entryKeys(it.Entry)
 }
 
-// RunView shows the atlas until the user quits. It reports whether any vault changed.
-func RunView(items []Item, opener Opener, hooks actions.Atlas) (bool, error) {
-	final, err := tea.NewProgram(newView(items, opener, hooks), tea.WithAltScreen()).Run()
+// RunView shows the atlas until the user quits. It reports whether anything changed: a
+// plant or a refresh happened, so the caller reads the registry again.
+func RunView(items []Item, opener Opener, acts actions.Atlas) (bool, error) {
+	final, err := tea.NewProgram(newView(items, opener, acts), tea.WithAltScreen()).Run()
 	if err != nil {
 		return false, fmt.Errorf("interactive screen failed: %w", err)
 	}

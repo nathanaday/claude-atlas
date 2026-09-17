@@ -1,7 +1,7 @@
 # Domain-specific scaffold profiles
 
-A profile adds folders, page types, and index sections on top of the vault's
-mode (`generic` or `lyt`) in one `markdown` plan. It does not replace the mode.
+A profile adds folders, page types, and index sections on top of the knowledge
+base's mode (`generic` or `lyt`) in one `markdown` plan. It does not replace the mode.
 Preserve existing pages and routes.
 
 Every profile keeps these invariants:

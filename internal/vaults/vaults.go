@@ -10,7 +10,6 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/console"
 	"github.com/nathanaday/claude-atlas/internal/home"
-	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -21,15 +20,6 @@ var ErrCancelled = errors.New("cancelled")
 func CheckNewPath(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%s already exists; adopt it if it is a vault", home.Display(path))
-	}
-	return checkNotInsideVault(path)
-}
-
-// checkNewPathInRepo is CheckNewPath for REPO/atlas/, which may exist while it is empty,
-// as vault.InitIn allows.
-func checkNewPathInRepo(path string) error {
-	if entries, err := os.ReadDir(path); err == nil && len(entries) > 0 {
-		return fmt.Errorf("%s already exists and is not empty; adopt it if it is a vault", home.Display(path))
 	}
 	return checkNotInsideVault(path)
 }
@@ -57,44 +47,10 @@ func Create(path string, opts vault.Options, c *console.Console, confirm bool) (
 	return vault.Init(path, opts, time.Now())
 }
 
-// CreateIn makes a project inside the repository at repoRoot, at REPO/atlas/, and
-// returns the vault's path. It refuses a folder that is not a repository's top level.
-func CreateIn(repoRoot string, opts vault.Options, c *console.Console) (string, error) {
-	host, err := filepath.Abs(home.Expand(repoRoot))
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(host, vault.InRepoDir)
-	if err := checkNewPathInRepo(path); err != nil {
-		return "", err
-	}
-	// InitIn refuses a folder that is not a repository too; here the refusal comes before
-	// the preview, so nothing describes a project the repository cannot hold.
-	if !links.IsRepo(host) {
-		return "", fmt.Errorf("%s is not the top level of a git repository", home.Display(host))
-	}
-	if opts.Mode == "" {
-		opts.Mode = vault.Generic
-	}
-	if c != nil {
-		if err := preview(c, path, opts, "in the repository "+filepath.Base(host)); err != nil {
-			return "", err
-		}
-	}
-	res, err := vault.InitIn(host, opts, time.Now())
-	if err != nil {
-		return "", err
-	}
-	return res.Root, nil
-}
-
 // preview lists the files a new vault will hold and asks to go ahead.
 func preview(c *console.Console, path string, opts vault.Options, where string) error {
-	files := append(vault.TemplateFiles(opts.Kind), vault.Marker, vault.LedgerPath)
-	if opts.Kind == vault.Project {
-		files = append(files, vault.TaskLedgerPath)
-	}
-	c.Say("claude-atlas will create the %s %s (%s mode) with %d files %s:", opts.Kind.Noun(), home.Display(path), opts.Mode, len(files), where)
+	files := append(vault.TemplateFiles(), vault.Marker, vault.LedgerPath)
+	c.Say("claude-atlas will create the knowledge base %s (%s mode) with %d files %s:", home.Display(path), opts.Mode, len(files), where)
 	for _, item := range files {
 		c.Say("    %s", item)
 	}

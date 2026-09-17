@@ -64,12 +64,12 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 		return 1, err
 	}
 	firstPath := ""
-	if len(ix.Entries) == 0 {
+	if len(ix.Knowledge()) == 0 {
 		name := opts.FirstVault
 		if name == "" {
-			name = c.Ask("Name for your first project", "welcome")
+			name = c.Ask("Name for your first knowledge base", "notes")
 		}
-		path, err := vaults.ResolvePath(name, cfg.VaultsDir, vault.Project)
+		path, err := vaults.ResolvePath(name, cfg.VaultsDir)
 		if err != nil {
 			return 1, err
 		}
@@ -95,7 +95,7 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	}
 	plan(c, "vaults dir", "use", home.Display(cfg.VaultsDir))
 	if firstPath != "" {
-		plan(c, "first project", "create", home.Display(firstPath))
+		plan(c, "knowledge base", "create", home.Display(firstPath))
 	} else {
 		found, needAdopting := 0, 0
 		for _, e := range ix.Entries {
@@ -148,7 +148,7 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	}
 
 	if firstPath != "" {
-		if _, err := vaults.Create(firstPath, vault.Options{Kind: vault.Project, Name: filepath.Base(firstPath)}, c, false); err != nil {
+		if _, err := vaults.Create(firstPath, vault.Options{Name: filepath.Base(firstPath)}, c, false); err != nil {
 			return 1, err
 		}
 		registered, err := vaults.Register(h, cfg, firstPath)
@@ -159,37 +159,37 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 		if registered {
 			note += "; recorded in the config, since it is outside " + home.Display(cfg.VaultsDir)
 		}
-		c.Step(console.OK, "first project", note)
+		c.Step(console.OK, "knowledge base", note)
 	}
-	entries, _, _, err := refresh.Registry(h, cfg, h.StateDir(), time.Now(), true)
+	entries, _, err := refresh.Registry(h, cfg, h.StateDir(), time.Now())
 	if err != nil {
 		return 1, err
 	}
 	read := 0
 	for _, e := range entries {
 		if e.Error != "" {
-			c.Step(console.Fail, "vault", home.Display(e.Path)+": "+e.Error)
+			c.Step(console.Fail, string(e.Kind), home.Display(e.Path)+": "+e.Error)
 			continue
 		}
 		read++
 	}
-	c.Step(console.OK, "refreshed", fmt.Sprintf("%d vault%s", read, plural(read)))
+	c.Step(console.OK, "refreshed", fmt.Sprintf("%d entr%s", read, map[bool]string{true: "y", false: "ies"}[read == 1]))
 
 	c.Say("")
 	c.Say("Setup complete.")
 	c.Say("")
-	c.Say("  Vaults         %s", home.Display(cfg.VaultsDir))
+	c.Say("  Vaults          %s", home.Display(cfg.VaultsDir))
 	if firstPath != "" {
-		c.Say("  First project  %s", home.Display(firstPath))
+		c.Say("  Knowledge base  %s", home.Display(firstPath))
 	}
 	c.Say("")
-	c.Say("Open a vault in Obsidian with `claude-atlas open-vault NAME`.")
+	c.Say("Open a knowledge base in Obsidian with `claude-atlas open-vault NAME`.")
 	c.Say("")
 	c.Say("Next:")
-	c.Say("  claude-atlas new-project NAME    create another project")
-	c.Say("  claude-atlas new-knowledge NAME  create a knowledge base")
-	c.Say("  claude-atlas open-claude NAME    start Claude Code in a vault; try /claude-atlas:wiki")
-	c.Say("  claude-atlas refresh             read every vault again")
+	c.Say("  cd <your work> && claude-atlas init   make a folder or repository a project")
+	c.Say("  claude-atlas new-knowledge NAME       create another knowledge base")
+	c.Say("  claude-atlas open-claude NAME         start Claude Code in a knowledge base or project")
+	c.Say("  claude-atlas refresh                  read everything again")
 	if installed == nil {
 		c.Say("")
 		c.Say("The plugin is not installed. Install it, then run setup again:")

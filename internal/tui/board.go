@@ -7,40 +7,37 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/vault"
-	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
-// boardKind says which vaults a board lists.
+// boardKind says which entries a board lists.
 type boardKind int
 
 const (
-	boardProjects boardKind = iota
-	boardKnowledge
+	boardKnowledge boardKind = iota
+	boardProjects
 	boardProblems
 )
 
-// boardRow is one vault on a board and the lines it spans, the expanded block included.
+// noKnowledge is the group projects without a knowledge base sit under.
+const noKnowledge = "no knowledge base"
+
+// boardRow is one entry on a board and the lines it spans, the expanded block included.
 type boardRow struct {
 	item       *Item
 	start, end int
 }
 
-// board is one tab's list: the vaults of one kind as boxes, each with its connectors to
-// the other kind; the cursor; the scroll offset; and which vaults are expanded.
+// board is one tab's list: the entries of one kind as boxes, grouped; the cursor; the
+// scroll offset; and which entries are expanded.
 type board struct {
 	kind     boardKind
-	all      []Item          // every vault, for the connectors
-	items    []*Item         // this board's vaults, in display order
+	items    []*Item         // this board's entries, in display order
 	expanded map[string]bool // by path
 	cursor   int             // an index into items; len(items) is the end marker
 	offset   int
 	width    int
-	// hasCluster is set when a knowledge base here gathers others, which is when the
-	// board splits into Clusters and Knowledge bases.
-	hasCluster bool
-	rows       []boardRow
-	lines      []string
+	rows     []boardRow
+	lines    []string
 }
 
 func newBoard(kind boardKind, items []Item, width int) board {
@@ -49,71 +46,54 @@ func newBoard(kind boardKind, items []Item, width int) board {
 	return b
 }
 
-// belongs says whether a vault sits on this board.
+// belongs says whether an entry sits on this board.
 func (b board) belongs(e registry.Entry) bool {
 	switch b.kind {
 	case boardProblems:
 		return e.Error != ""
 	case boardKnowledge:
-		return e.Error == "" && e.Kind == vault.Knowledge
+		return e.Error == "" && e.Kind == registry.Knowledge
 	}
-	return e.Error == "" && e.Kind == vault.Project
+	return e.Error == "" && e.Kind == registry.Project
 }
 
-// group is the header a vault sits under: a project's first tag, and on the Knowledge
-// board, whether it gathers others. The Knowledge board files nothing when no cluster is
-// there to tell apart.
+// group is the header an entry sits under: on the Projects board, its knowledge base's
+// name, or noKnowledge. The other boards have no groups.
 func (b board) group(e registry.Entry) string {
-	if e.Error != "" {
+	if b.kind != boardProjects || e.Error != "" {
 		return ""
 	}
-	if b.kind == boardKnowledge {
-		if !b.hasCluster {
-			return ""
-		}
-		if vaults.IsCluster(e) {
-			return "Clusters"
-		}
-		return "Knowledge bases"
+	if e.Knowledge == nil || e.Knowledge.Error != "" {
+		return noKnowledge
 	}
-	if e.Kind == vault.Project && len(e.Tags) > 0 {
-		return e.Tags[0]
-	}
-	return ""
+	return e.Knowledge.Name
 }
 
-// less orders a board: ungrouped vaults first, then the groups by name, and names within
-// a group. Clusters come first on the Knowledge board because "Clusters" sorts first.
+// less orders a board: the groups by name, projects without a knowledge base last, and
+// names within a group.
 func (b board) less(x, y registry.Entry) bool {
 	gx, gy := b.group(x), b.group(y)
 	if gx != gy {
-		if gx == "" || gy == "" {
-			return gx == ""
+		if gx == noKnowledge || gy == noKnowledge {
+			return gy == noKnowledge
 		}
-		return gx < gy
+		return strings.ToLower(gx) < strings.ToLower(gy)
 	}
-	return entryName(x) < entryName(y)
+	return strings.ToLower(entryName(x)) < strings.ToLower(entryName(y))
 }
 
-// reload takes the vaults again, drops the expansions of vaults that are gone, keeps the
-// cursor on the same vault, and lays out. The board keeps pointers into the slice it is
-// given, so the caller keeps that slice.
+// reload takes the entries again, drops the expansions of entries that are gone, keeps
+// the cursor on the same entry, and lays out. The board keeps pointers into the slice
+// it is given, so the caller keeps that slice.
 func (b *board) reload(items []Item) {
 	keep := ""
 	if it := b.current(); it != nil {
 		keep = it.Entry.Path
 	}
-	b.all = items
 	b.items = nil
 	for i := range items {
 		if b.belongs(items[i].Entry) {
 			b.items = append(b.items, &items[i])
-		}
-	}
-	b.hasCluster = false
-	for _, it := range b.items {
-		if vaults.IsCluster(it.Entry) {
-			b.hasCluster = true
 		}
 	}
 	sort.SliceStable(b.items, func(i, j int) bool { return b.less(b.items[i].Entry, b.items[j].Entry) })
@@ -129,7 +109,7 @@ func (b *board) reload(items []Item) {
 	b.layout()
 }
 
-// find is the index of the vault at path, or -1.
+// find is the index of the entry at path, or -1.
 func (b board) find(path string) int {
 	for i, it := range b.items {
 		if path != "" && it.Entry.Path == path {
@@ -139,7 +119,7 @@ func (b board) find(path string) int {
 	return -1
 }
 
-// current is the vault under the cursor; nil on the end marker or an empty board.
+// current is the entry under the cursor; nil on the end marker or an empty board.
 func (b board) current() *Item {
 	if b.cursor < 0 || b.cursor >= len(b.items) {
 		return nil
@@ -147,15 +127,15 @@ func (b board) current() *Item {
 	return b.items[b.cursor]
 }
 
-// atEnd reports whether the cursor sits on the end marker below the last vault.
+// atEnd reports whether the cursor sits on the end marker below the last entry.
 func (b board) atEnd() bool { return len(b.items) > 0 && b.cursor == len(b.items) }
 
-// move steps the cursor; one step past the last vault lands on the end marker.
+// move steps the cursor; one step past the last entry lands on the end marker.
 func (b *board) move(delta int) {
 	b.cursor = max(0, min(len(b.items), b.cursor+delta))
 }
 
-// moveTo puts the cursor on the vault at path and reports whether it is here.
+// moveTo puts the cursor on the entry at path and reports whether it is here.
 func (b *board) moveTo(path string) bool {
 	i := b.find(path)
 	if i < 0 {
@@ -165,7 +145,7 @@ func (b *board) moveTo(path string) bool {
 	return true
 }
 
-// toggle expands the vault under the cursor, or collapses it.
+// toggle expands the entry under the cursor, or collapses it.
 func (b *board) toggle() {
 	it := b.current()
 	if it == nil {
@@ -179,16 +159,7 @@ func (b *board) toggle() {
 	b.layout()
 }
 
-// rekey follows a vault that moved from one path to another, so an expanded block
-// survives a rename.
-func (b *board) rekey(from, to string) {
-	if b.expanded[from] {
-		delete(b.expanded, from)
-		b.expanded[to] = true
-	}
-}
-
-// collapseAll collapses every vault and reports whether any was expanded.
+// collapseAll collapses every entry and reports whether any was expanded.
 func (b *board) collapseAll() bool {
 	had := len(b.expanded) > 0
 	b.expanded = map[string]bool{}
@@ -196,29 +167,12 @@ func (b *board) collapseAll() bool {
 	return had
 }
 
-// boxWidth is the box column: about half the screen, between 26 and 40 columns, the
+// boxWidth is the box column: most of the screen, between 26 and 72 columns, the
 // borders not counted.
-func boxWidth(width int) int { return min(40, max(26, width/2-4)) }
+func boxWidth(width int) int { return min(72, max(26, width-8)) }
 
-// entryWidth is the box a vault takes: a cluster's is wider, so it reads as the bigger
-// thing in the column before its name is read.
-func (b board) entryWidth(e registry.Entry) int {
-	if vaults.IsCluster(e) {
-		return min(b.width/2, boxWidth(b.width)+6)
-	}
-	return boxWidth(b.width)
-}
-
-// labelWidth is what is left for a connector's label beside a box of that width, after
-// the indent, the borders, and the arrow.
-func (b board) labelWidth(box int) int {
-	// One column stays free: a connector that filled the screen would wrap onto a line
-	// of its own and push the frame past the last row.
-	return max(12, b.width-3-(box+2)-len([]rune(arrowOut)))
-}
-
-// layout renders the boxes into lines and records the span of each vault. A group's
-// header belongs to the first vault under it, so scrolling back to that vault brings
+// layout renders the boxes into lines and records the span of each entry. A group's
+// header belongs to the first entry under it, so scrolling back to that entry brings
 // the header with it.
 func (b *board) layout() {
 	b.lines, b.rows = nil, nil
@@ -226,7 +180,11 @@ func (b *board) layout() {
 	for i, it := range b.items {
 		start := len(b.lines)
 		if g := b.group(it.Entry); g != "" && g != last {
-			b.lines = append(b.lines, dim.Render(g))
+			header := knowledgeSt.Render(g)
+			if g == noKnowledge {
+				header = dim.Render(g)
+			}
+			b.lines = append(b.lines, header)
 		}
 		last = b.group(it.Entry)
 		b.render(it, i == b.cursor, start)
@@ -240,74 +198,18 @@ func (b *board) layout() {
 	}
 }
 
-// side is the connector column beside a box: a project's mounts, or the projects that
-// mount a knowledge base. A problem has none.
-func (b board) side(e registry.Entry, label int) []string {
-	switch b.kind {
-	case boardProjects:
-		if len(e.Mounts) == 0 {
-			return []string{noArrow + dim.Render("no knowledge base mounted")}
-		}
-		// A derived mount takes no connector of its own: its cluster names it on one line
-		// under the cluster's connector, so a cluster with five members stays two lines.
-		through := map[string][]string{}
-		for _, m := range e.Mounts {
-			if m.Through != "" {
-				through[m.Through] = append(through[m.Through], b.kbName(m))
-			}
-		}
-		var out []string
-		for _, m := range e.Mounts {
-			if m.Through != "" {
-				continue
-			}
-			name := b.kbName(m)
-			members := through[name]
-			out = append(out, mountLine(e, m, name, len(members) > 0, label))
-			if len(members) > 0 {
-				text := "through " + name + ": " + strings.Join(members, ", ")
-				out = append(out, noArrow+dim.Render(clip(text, label)))
-			}
-		}
-		return out
-	case boardKnowledge:
-		return mountedByLines(e, b.expanded[e.Path])
-	}
-	return nil
-}
-
-// kbName is the knowledge base a mount names, as the atlas knows it now; the mount's
-// own name when the scan does not hold it.
-func (b board) kbName(m registry.Mount) string {
-	for i := range b.all {
-		if b.all[i].Entry.Error == "" && b.all[i].Entry.ID == m.ID {
-			return b.all[i].Entry.Name
-		}
-	}
-	return m.Name
-}
-
-// render writes one vault: its box with the connectors beside it, and the detail block
-// under it when expanded. The box grows to hold as many lines as the connectors need.
-// Only the vault under the cursor keeps its colors. start is where the vault's row
-// begins, at its group header when it has one.
+// render writes one entry: its box, and the detail block under it when expanded. Only
+// the entry under the cursor keeps its colors. start is where the entry's row begins, at
+// its group header when it has one.
 func (b *board) render(it *Item, selected bool, start int) {
 	e := it.Entry
-	content := boxLines(e)
-	width := b.entryWidth(e)
-	side := b.side(e, b.labelWidth(width))
-	for len(content) < len(side) {
-		content = append(content, "")
-	}
-	box := entryBox(e, selected).Width(width).Render(strings.Join(content, "\n"))
+	width := boxWidth(b.width)
+	box := boxStyle(e.Kind, selected).Width(width).Render(strings.Join(boxLines(e, width-2), "\n"))
 	// The view indents every line by two, so a line stops two short of the screen. One
 	// that reached the edge would wrap and push the frame past the last row.
 	narrow := lipgloss.NewStyle().MaxWidth(max(10, b.width-2))
 	var lines []string
-	for i, line := range strings.Split(box, "\n") {
-		if i >= 1 && i-1 < len(side) {
-			line += side[i-1]
-		}
+	for _, line := range strings.Split(box, "\n") {
 		lines = append(lines, narrow.Render(line))
 	}
 	if b.expanded[e.Path] {

@@ -36,16 +36,19 @@ func TestInspectRepo(t *testing.T) {
 	}
 }
 
-func TestPolicyAndRemoteURL(t *testing.T) {
-	if Policy("commit", "git@x:y") != "commit" || Policy("", "git@x:y") != "pr" || Policy("", "") != "commit" {
-		t.Fatal("Policy")
-	}
+func TestRemoteURLIsRepoAndCleanName(t *testing.T) {
 	if !gitx.Available() {
 		t.Skip("git is not installed")
 	}
 	dir := t.TempDir()
-	if err := CreateRepo(dir, "x"); err != nil {
+	if IsRepo(dir) {
+		t.Fatal("an empty folder is not a repository")
+	}
+	if err := (gitx.Repo{Dir: dir}).Init(); err != nil {
 		t.Fatal(err)
+	}
+	if !IsRepo(dir) || IsRepo(filepath.Join(dir, "missing")) {
+		t.Fatal("IsRepo")
 	}
 	if RemoteURL(dir) != "" {
 		t.Fatal("no remote yet")
@@ -53,5 +56,8 @@ func TestPolicyAndRemoteURL(t *testing.T) {
 	exec.Command("git", "-C", dir, "remote", "add", "origin", "git@example.com:a/x.git").Run()
 	if RemoteURL(dir) != "git@example.com:a/x.git" {
 		t.Fatalf("remote %q", RemoteURL(dir))
+	}
+	if CleanName("a/b:c") != "a-b-c" || CleanName("...") != "" || CleanName(" ok ") != "ok" {
+		t.Fatal("CleanName")
 	}
 }

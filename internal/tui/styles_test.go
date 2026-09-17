@@ -1,31 +1,27 @@
 package tui
 
 import (
-	"github.com/charmbracelet/lipgloss"
-
-	"strings"
 	"testing"
 
-	"github.com/nathanaday/claude-atlas/internal/actions"
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
-	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 func TestKindColorsAndBoxes(t *testing.T) {
-	if kindColor(vault.Project) == kindColor(vault.Knowledge) {
+	if kindColor(registry.Project) == kindColor(registry.Knowledge) {
 		t.Fatal("the kinds share a color")
 	}
-	if got := boxStyle(vault.Knowledge, true).GetBorderTopForeground(); got != knowledgeColor {
+	if got := boxStyle(registry.Knowledge, true).GetBorderTopForeground(); got != knowledgeColor {
 		t.Fatalf("selected knowledge border %v", got)
 	}
-	if got := boxStyle(vault.Project, true).GetBorderTopForeground(); got != projectColor {
+	if got := boxStyle(registry.Project, true).GetBorderTopForeground(); got != projectColor {
 		t.Fatalf("selected project border %v", got)
 	}
-	if got := boxStyle(vault.Project, false).GetBorderTopForeground(); got != muted {
+	if got := boxStyle(registry.Project, false).GetBorderTopForeground(); got != muted {
 		t.Fatalf("unselected border %v", got)
 	}
-	if kindStyle(vault.Knowledge).GetForeground() != knowledgeColor || kindStyle(vault.Project).GetForeground() != projectColor {
+	if kindStyle(registry.Knowledge).GetForeground() != knowledgeColor || kindStyle(registry.Project).GetForeground() != projectColor {
 		t.Fatal("kindStyle wears the wrong color")
 	}
 }
@@ -57,23 +53,5 @@ func TestFocusKeepsColorOnlyUnderTheCursor(t *testing.T) {
 	}
 	if got := focus(styled, true); got[0] != styled[0] || got[1] != styled[1] {
 		t.Fatalf("the row under the cursor keeps its colors: %q", got)
-	}
-}
-
-func TestAHostedBoardHasNoHeaderAndNamesTheTabs(t *testing.T) {
-	hooks := actions.Atlas{Tasks: func(registry.Entry) (tasks.Ledger, []string, error) { return tasks.Empty(), nil, nil }}
-	items := []Item{{Entry: registry.Entry{Kind: vault.Project, Name: "p3", Path: "/v/p3"}}}
-	s := newTasks(hooks, Opener{}, nil, items, 80)
-	if out := s.view(); !strings.Contains(out, "Atlas") || !strings.Contains(out, "Esc back") {
-		t.Fatalf("a board of its own has a header and Esc:\n%s", out)
-	}
-	s.hosted = true
-	out := s.view()
-	if strings.Contains(out, "Atlas") || strings.Contains(out, "Esc back") || !strings.Contains(out, "p plant") {
-		t.Fatalf("hosted:\n%s", out)
-	}
-	s.quiet = true
-	if out := s.view(); strings.Contains(out, "p plant") {
-		t.Fatalf("quiet drops the hints:\n%s", out)
 	}
 }

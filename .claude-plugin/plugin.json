@@ -1,7 +1,7 @@
 {
   "name": "claude-atlas",
-  "version": "1.4.1",
-  "description": "Source-cited Obsidian knowledge vaults for Claude Code: an inbox to ingest from, one reviewed operation per change, git history in every vault, and skills for ingesting, querying, linting, tasks that live across sessions, canvases, and Bases. Pairs with the claude-atlas binary, which serves the tools.",
+  "version": "2.0.0",
+  "description": "Source-cited Obsidian knowledge bases for Claude Code, and projects that live in your work: an inbox to ingest from, one reviewed operation per change, git history in every knowledge base, and tasks with phases in an atlas/ folder beside your code. Skills for ingesting, querying, linting, describing projects, tasks, canvases, and Bases. Pairs with the claude-atlas binary, which serves the tools.",
   "author": {
     "name": "nathanaday",
     "url": "https://github.com/nathanaday"
