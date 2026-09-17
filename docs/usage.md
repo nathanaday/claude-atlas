@@ -17,9 +17,10 @@ memory, and the `atlas` skills all work:
 | `o` open in Obsidian | `open-vault NAME` | — |
 | `c` start Claude Code | `open-claude NAME` | — |
 | `i` ingest sources, on a project | `ingest NAME [PATH...]` | `stage`, then the `wiki-ingest` skill |
+| `l` then `i` snapshot a repository for the wiki | `ingest NAME --repo REPO` | `stage` with `repo`, then the `repo-map` skill |
 | `t` tasks on a project, `p` plant, `c` continue | `tasks NAME`, `plant NAME TEXT`, `open-claude NAME --task ID` | `tasks`, `plant` |
 | `T` every project's tasks | `tasks` | — |
-| `l` repositories on a project: `n` new, `a` link, `e` edit, `u` unlink | `new-repo NAME REPO`, `link NAME PATH`, `edit-repo NAME REPO`, `unlink NAME REPO`, `repos [NAME]` | `repo` |
+| `l` repositories on a project: `n` new, `a` link, `e` edit, `u` unlink, `i` snapshot | `new-repo NAME REPO`, `link NAME PATH`, `edit-repo NAME REPO`, `unlink NAME REPO`, `repos [NAME]` | `repo` |
 | `e` edit a vault, `s` save | `edit NAME --…` | `vault` edit |
 | `e` then `r` forget | `remove NAME` | `vault` forget |
 | `m` mounts: on a project `a` mount, `w` `r` ask, `u` unmount; on a knowledge base `w` `r` grant, `x` revoke, `a` grant | `mount PROJECT KB [--read] [--as NAME]`, `unmount PROJECT KB\|NAME`, `grant KB PROJECT --write\|--read`, `revoke KB PROJECT\|ID` | `mount` |
@@ -120,12 +121,14 @@ In the session, the skills are on the slash menu:
 | Skill | What it does |
 |---|---|
 | `/claude-atlas:wiki` | orient in the vault and route to the right skill |
+| `/claude-atlas:work` | take a change from a sentence to commits: the facts, the repositories, the plan, then the task |
 | `/claude-atlas:task` | list open tasks, move one between statuses, route |
 | `/claude-atlas:task-plant` | plant a task from a sentence or the notes in `inbox/tasks/` |
 | `/claude-atlas:task-plan` | ask what matters, choose an approach, write the plan |
 | `/claude-atlas:task-run` | work the plan and write progress |
 | `/claude-atlas:task-finish` | close as done or cancelled and archive |
 | `/claude-atlas:wiki-ingest` | read what is in the inbox and write cited pages |
+| `/claude-atlas:repo-map` | describe a repository in a knowledge base from a snapshot, or bring its page up to date |
 | `/claude-atlas:wiki-query` | answer from the vault, with citations |
 | `/claude-atlas:save` | keep an answer or decision as a page |
 | `/claude-atlas:wiki-lint` | check the wiki's health |
@@ -360,7 +363,7 @@ shows every key, and again hides them.
 | `n` `N` `C` | create a project, a knowledge base, or a cluster |
 | `a` | adopt a folder as a vault; on the Problems tab, the folder under the cursor |
 | `o` `c` | open the vault in Obsidian, start Claude Code in it |
-| `i` `t` `l` | on a project: ingest sources, tasks, repositories |
+| `i` `t` `l` | on a project: ingest sources, tasks, repositories (`i` there snapshots one for the wiki) |
 | `T` | the Tasks tab |
 | `e` | edit the vault; `s` saves, `r` forgets it |
 | `m` | mounts: mount and unmount on a project; grants on a knowledge base |
@@ -470,6 +473,44 @@ claude-atlas edit-repo sensor-triage sensor-app --changes commit
 claude-atlas edit-repo sensor-triage sensor-app --remote https://github.com/you/sensor-app
 claude-atlas edit-repo sensor-triage sensor-app --path ~/code/sensor-app
 ```
+
+**What a session is told.** A session that starts in the project's vault gets
+one line per repository from the session-start hook, and the `repos` tool and
+`claude-atlas repos` say the same:
+
+```text
+Repository: sensor-app · changes: pr · repos/sensor-app (main) · described in sensors (wiki/entities/sensor-app.md) at fc70d93, 12 commits behind · CLAUDE.md: repos/sensor-app/CLAUDE.md
+Repository: paper · changes: commit · ~/code/paper (main) · not described in the wiki or a knowledge base
+```
+
+The page that describes a repository is an entity page with
+`entity_type: repository` whose `repo` property is the repository's remote or
+its name, in the project's wiki or in a knowledge base the project mounts;
+its `commit` property is the commit it was written from, and the count is how
+far the current branch has moved since. A page in a knowledge base wins over
+one in the project, and the nearest to HEAD wins among several. The CLAUDE.md
+is named because Claude Code loads it on its own only for a repository under
+the vault; a session working in a repository elsewhere reads it first. The
+repositories screen in `view` shows the same page and count as the last
+refresh found them.
+
+**A repository in the knowledge base.** A mature repository added to a
+project is invisible to the knowledge bases until a page describes it. The
+`repo-map` skill writes that page from a snapshot the core takes:
+
+```bash
+claude-atlas ingest sensor-triage --repo sensor-app    # inbox/sensor-app-<commit>.md, then /claude-atlas:repo-map
+```
+
+The snapshot holds the repository's CLAUDE.md and README, its tracked files
+(folders only past 2000), the first heading of every markdown file under
+`docs/`, and, once a page describes the repository, the log since that page's
+commit. It is captured like any source, so the repository page cites a commit
+through the ledger. `i` on the repositories screen and the `stage` tool with
+`repo` do the same. When the count behind grows, the same skill updates the
+page from the log; `task-finish` offers that for every repository a task
+changed, and the `status` tool names the repositories no page describes and
+those whose page fell more than 20 commits behind, next to the stale tasks.
 
 A repository created in the project's folder gets its own git history, and the
 vault's `.gitignore` names it, so the vault's commits never include it;

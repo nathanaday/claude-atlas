@@ -26,6 +26,9 @@ const (
 // IngestPrompt is the first message that starts an ingest of the inbox.
 const IngestPrompt = "/claude-atlas:wiki-ingest"
 
+// RepoMapPrompt is the first message that writes the pages describing a repository.
+const RepoMapPrompt = "/claude-atlas:repo-map"
+
 // TaskPrompt is the first message that continues a task.
 func TaskPrompt(taskID string) string { return "/claude-atlas:task-run " + taskID }
 

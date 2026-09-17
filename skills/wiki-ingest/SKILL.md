@@ -35,7 +35,8 @@ project that mounts a knowledge base.
    that acts on the project.
 2. List what is waiting and whether it is already captured. Files with
    `area: tasks` are task notes, not sources: leave them to `task-plant` and
-   say so.
+   say so. A file whose frontmatter says `type: repo-snapshot` is a
+   repository snapshot: leave it to `repo-map` and say so.
 3. Infer the budget; do not ask for one. A batch of up to five files, or one
    source under about fifty pages, gets no question: read every source in
    full and file what it names. Above that, ask one thing, which files now,

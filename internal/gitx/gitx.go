@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -558,4 +559,64 @@ func (r Repo) ChangedPaths(sha string) ([]string, error) {
 		paths = append(paths, stripped)
 	}
 	return paths, nil
+}
+
+// HasCommit reports whether rev names a commit in the repository.
+func (r Repo) HasCommit(rev string) bool {
+	_, err := r.run("rev-parse", "--verify", "--quiet", rev+"^{commit}")
+	return err == nil
+}
+
+// Behind counts the commits HEAD has that rev does not. It is 0 when rev is HEAD or a
+// descendant of it, and an error when rev is not a commit here.
+func (r Repo) Behind(rev string) (int, error) {
+	out, err := r.run("rev-list", "--count", rev+"..HEAD")
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list: %q is not a count", strings.TrimSpace(out))
+	}
+	return n, nil
+}
+
+// Branch is the current branch's name, or "HEAD" when detached.
+func (r Repo) Branch() (string, error) {
+	out, err := r.run("rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// LsFiles lists every tracked path under Prefix, relative to it, in git's order.
+func (r Repo) LsFiles() ([]string, error) {
+	out, err := r.run("ls-files", "-z", "--", r.pathspec())
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p == "" {
+			continue
+		}
+		if rel, ok := r.out(p); ok {
+			paths = append(paths, rel)
+		}
+	}
+	return paths, nil
+}
+
+// LogStat is git log --stat for the commits after from up to HEAD, newest first, at most
+// max of them when max is above 0.
+func (r Repo) LogStat(from string, max int) (string, error) {
+	args := []string{"log", "--stat", "--format=%h %as %s", from + "..HEAD"}
+	if max > 0 {
+		args = append(args, fmt.Sprintf("-n%d", max))
+	}
+	if r.Prefix != "" {
+		args = append(args, "--", r.Prefix)
+	}
+	return r.run(args...)
 }

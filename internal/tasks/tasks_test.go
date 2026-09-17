@@ -65,6 +65,25 @@ func TestParseEnforcesTheRules(t *testing.T) {
 	if _, err := Parse("wiki/tasks/x.md", []byte("---\ntype: concept\ntitle: x\nstatus: seed\ncreated: 2026-01-01\nupdated: 2026-01-01\ntags: []\n---\n")); err == nil || !strings.Contains(err.Error(), "type: task") {
 		t.Fatalf("type check: %v", err)
 	}
+	// repos: absent, empty, a list, or one name; anything else is refused.
+	withRepos := func(yaml string) (*Task, error) {
+		return Parse(vault.TasksDir+"/Fix it.md", []byte("---\ntype: task\ntitle: \"Fix it\"\nstatus: planted\npriority: high\ncreated: 2026-09-01\nupdated: 2026-09-02\ntags:\n  - task\ntask_id: task-20260901-ab12\n"+yaml+"---\n\n# Fix it\n\n## Idea\n\nDo it.\n"))
+	}
+	if task, err := withRepos("repos: []\n"); err != nil || len(task.Repos) != 0 {
+		t.Fatalf("empty repos: %+v %v", task, err)
+	}
+	if task, err := withRepos("repos:\n  - app\n  - paper\n"); err != nil || strings.Join(task.Repos, ",") != "app,paper" {
+		t.Fatalf("repos list: %+v %v", task, err)
+	}
+	if task, err := withRepos("repos: app\n"); err != nil || strings.Join(task.Repos, ",") != "app" {
+		t.Fatalf("one repo: %+v %v", task, err)
+	}
+	if _, err := withRepos("repos:\n  - 3\n"); err == nil || !strings.Contains(err.Error(), "repos must be a list") {
+		t.Fatalf("bad repos: %v", err)
+	}
+	if _, err := withRepos("repos:\n  name: app\n"); err == nil {
+		t.Fatal("a mapping is not a list")
+	}
 }
 
 func TestTitleFromTextAndSkeleton(t *testing.T) {
@@ -83,8 +102,26 @@ func TestTitleFromTextAndSkeleton(t *testing.T) {
 	if err != nil || task.Title != "Fix \"it\"" || task.Workdir != "/tmp/x" || task.Due != "2026-10-01" || task.Priority != "normal" || task.Status != "planted" {
 		t.Fatalf("skeleton parses: %+v %v\n%s", task, err, text)
 	}
-	if !strings.Contains(text, "## Idea\n\nWhy.\n\nHow.\n") {
-		t.Fatalf("idea verbatim:\n%s", text)
+	if !strings.Contains(text, "## Idea\n\nWhy.\n\nHow.\n") || !strings.Contains(text, "repos: []\n") || strings.Contains(text, "## Plan") {
+		t.Fatalf("idea verbatim, no plan:\n%s", text)
+	}
+	// A plant with a plan is planned; with start it is active and has a first Progress line.
+	planned := Plant{Title: "Ship", Text: "Now.", Repos: []string{"app", "paper"}, Plan: "1. Build.\n2. Test."}
+	if planned.Status() != "planned" || (Plant{}).Status() != "planted" || (Plant{Plan: "x", Start: true}).Status() != "active" {
+		t.Fatal("Status")
+	}
+	text = Skeleton(planned, "task-20260913-3f2a", now)
+	task, err = Parse(vault.TasksDir+"/Ship.md", []byte(text))
+	if err != nil || task.Status != "planned" || !task.HasPlan || strings.Join(task.Repos, ",") != "app,paper" {
+		t.Fatalf("planned skeleton: %+v %v\n%s", task, err, text)
+	}
+	if !strings.Contains(text, "repos:\n  - \"app\"\n  - \"paper\"\n") || !strings.Contains(text, "## Idea\n\nNow.\n\n## Plan\n\n1. Build.\n2. Test.\n") || strings.Contains(text, "## Progress") {
+		t.Fatalf("planned page:\n%s", text)
+	}
+	planned.Start = true
+	text = Skeleton(planned, "task-20260913-3f2a", now)
+	if task, err = Parse(vault.TasksDir+"/Ship.md", []byte(text)); err != nil || task.Status != "active" || !strings.Contains(text, "## Progress\n\n- "+now.Format("2006-01-02")+" · started\n") {
+		t.Fatalf("started page: %+v %v\n%s", task, err, text)
 	}
 	if !idPattern.MatchString(NewID(now)) {
 		t.Fatal("NewID")

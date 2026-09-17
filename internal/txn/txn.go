@@ -532,6 +532,14 @@ func PlantRequest(v *vault.Vault, p tasks.Plant, from string, now time.Time) (Re
 	if p.Priority != "" && !contains(tasks.Priorities, p.Priority) {
 		return Request{}, Planted{}, fmt.Errorf("priority must be one of %s", strings.Join(tasks.Priorities, ", "))
 	}
+	if p.Start && strings.TrimSpace(p.Plan) == "" {
+		return Request{}, Planted{}, errors.New("start needs a plan; a task runs only once it is planned")
+	}
+	for _, r := range p.Repos {
+		if strings.TrimSpace(r) == "" {
+			return Request{}, Planted{}, errors.New("repos must be repository names")
+		}
+	}
 	if p.Workdir != "" {
 		abs, err := filepath.Abs(p.Workdir)
 		if err != nil {
@@ -544,7 +552,8 @@ func PlantRequest(v *vault.Vault, p tasks.Plant, from string, now time.Time) (Re
 	}
 	taken := func(rel string) bool { _, _, exists, _ := fileState(v, rel); return exists }
 	planted := Planted{Path: tasks.PagePath(p.Title, taken), ID: tasks.NewID(now)}
-	req := Request{Kind: Task, Summary: "plant " + p.Title, Writes: []Write{{Path: planted.Path, Mode: Create, Content: []byte(tasks.Skeleton(p, planted.ID, now))}}}
+	verb := map[string]string{"planted": "plant", "planned": "plant and plan", "active": "plant and start"}[p.Status()]
+	req := Request{Kind: Task, Summary: verb + " " + p.Title, Writes: []Write{{Path: planted.Path, Mode: Create, Content: []byte(tasks.Skeleton(p, planted.ID, now))}}}
 	if from != "" {
 		rel, err := normalizePath(from)
 		if err != nil {

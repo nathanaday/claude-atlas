@@ -178,6 +178,9 @@ func (s tasksScreen) boxes() ([]string, []taskSpan) {
 		if row.rec.Workdir != "" {
 			box = append(box, dim.Render(clip("workdir "+home.Display(row.rec.Workdir), width-2)))
 		}
+		if len(row.rec.Repos) > 0 {
+			box = append(box, dim.Render(clip("repos "+strings.Join(row.rec.Repos, ", "), width-2)))
+		}
 
 		start := len(lines)
 		rendered := strings.Split(indent(style.Width(width).Render(strings.Join(box, "\n")), "  "), "\n")

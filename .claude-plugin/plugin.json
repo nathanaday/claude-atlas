@@ -1,6 +1,6 @@
 {
   "name": "claude-atlas",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Source-cited Obsidian knowledge vaults for Claude Code: an inbox to ingest from, one reviewed operation per change, git history in every vault, and skills for ingesting, querying, linting, tasks that live across sessions, canvases, and Bases. Pairs with the claude-atlas binary, which serves the tools.",
   "author": {
     "name": "nathanaday",

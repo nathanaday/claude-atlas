@@ -25,19 +25,20 @@ apply; the hook's first line names the projects that mount it.
 
 | The user wants | Skill |
 |---|---|
+| Make a change now: do this, implement, fix this across the repos | `work` |
 | Add an idea, or turn the notes in `inbox/tasks/` into tasks | `task-plant` |
 | Decide how to do a task | `task-plan` |
 | Work on a task, continue one, resume | `task-run` |
 | Close a task as done or cancelled | `task-finish` |
 
-Offer the next step for the task in view: a planted task wants a plan; a
-planned one wants a run; an active one wants to continue; a stale one wants
-a decision.
+Offer the next step for the task in view: a planted task wants a plan, or
+`work` when the user wants it done now; a planned one wants a run; an
+active one wants to continue; a stale one wants a decision.
 
 ## Quick moves
 
-Block, unblock, reprioritize, set a due date, or set the workdir without
-ceremony: one plan of kind `task` that replaces the page with the changed
+Block, unblock, reprioritize, set a due date, or set the workdir or the
+repositories without ceremony: one plan of kind `task` that replaces the page with the changed
 frontmatter and `updated` set to today. When blocking, add a dated line under
 `## Progress` saying what it waits on. Show the preview and apply. Read the
 page first; a replace needs its full content.

@@ -83,6 +83,11 @@ func hashFile(p string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
+func hashBytes(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 // storedPath is where a capture lands: content-addressed, extension kept.
 func storedPath(sum, name string) string {
 	ext := strings.ToLower(path.Ext(name))

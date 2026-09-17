@@ -70,8 +70,9 @@ func inside(root, p string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
-// Repos lists the repositories of the project at root.
-func Repos(h home.Home, root string) ([]registry.Repo, error) {
+// Project is the registry's entry for the project at root, with its mounts and
+// repositories resolved; nil when there is no atlas or root is not a project it reads.
+func Project(h home.Home, root string) (*registry.Entry, error) {
 	cfg, err := h.Load()
 	if errors.Is(err, home.ErrNoAtlas) {
 		return nil, nil
@@ -86,6 +87,15 @@ func Repos(h home.Home, root string) ([]registry.Repo, error) {
 	e := ix.ByPath(root)
 	if e == nil || e.Error != "" || e.Kind != vault.Project {
 		return nil, nil
+	}
+	return e, nil
+}
+
+// Repos lists the repositories of the project at root.
+func Repos(h home.Home, root string) ([]registry.Repo, error) {
+	e, err := Project(h, root)
+	if e == nil || err != nil {
+		return nil, err
 	}
 	return e.Repos, nil
 }

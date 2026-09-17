@@ -63,6 +63,9 @@ type Atlas struct {
 	// the inbox and reports the folders the vault now remembers. Sources lists them.
 	StagePlan func(registry.Entry, []string) (*capture.StagePlan, error)
 	Stage     func(registry.Entry, *capture.StagePlan) (*capture.StageResult, []string, error)
+	// StageRepo writes a snapshot of one of the project's repositories, by name, into its
+	// inbox, for the repo-map skill to ingest.
+	StageRepo func(registry.Entry, string) (*capture.RepoStage, error)
 	Sources   func(registry.Entry) []string
 	// The repository calls: mount a folder, initializing git there when asked; create
 	// one; clone one from a URL; drop one; and edit its remote, its folder, or how
@@ -129,6 +132,13 @@ func Bind(h home.Home, cfg *home.Config, c *console.Console) Atlas {
 				return res, nil, err
 			}
 			return res, res.Remembered, nil
+		},
+		StageRepo: func(en registry.Entry, name string) (*capture.RepoStage, error) {
+			v, err := vault.Open(en.Path)
+			if err != nil {
+				return nil, err
+			}
+			return capture.StageRepo(v, en, name, time.Now())
 		},
 		Sources: func(en registry.Entry) []string {
 			v, err := vault.Open(en.Path)

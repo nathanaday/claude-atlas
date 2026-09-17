@@ -37,6 +37,9 @@ func setup(t *testing.T) (*harness, string) {
 		t.Skip("git is not installed")
 	}
 	root := t.TempDir()
+	// Commands with no vault argument read the working directory. The checkout may sit
+	// inside a real vault, so every test runs from a directory that is inside none.
+	t.Chdir(root)
 	h := &harness{t: t, home: filepath.Join(root, "home")}
 	vaults := filepath.Join(root, "Vaults")
 	code := h.run("setup", "--no-plugin", "--vaults-dir", vaults, "--first-vault", "welcome")
@@ -227,7 +230,7 @@ func TestRepoCommands(t *testing.T) {
 	if got := h.config(t).RepoPath(id, "docs"); got != docs {
 		t.Fatalf("the config should record a repository outside the project: %q", got)
 	}
-	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "docs") || !strings.Contains(h.out.String(), "changes: commit") {
+	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "docs") || !strings.Contains(h.out.String(), "changes: commit") || !strings.Contains(h.out.String(), registry.NotDescribed) {
 		t.Fatalf("repos exit %d:\n%s", code, h.out.String())
 	}
 	if code := h.run("link", "welcome", docs); code != 1 || !strings.Contains(h.err.String(), "already") {
@@ -235,6 +238,15 @@ func TestRepoCommands(t *testing.T) {
 	}
 	if code := h.run("new-repo", "welcome", "paper"); code != 0 {
 		t.Fatalf("new-repo exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("ingest", "welcome", "--repo", "paper", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "staged") || !strings.Contains(h.out.String(), "paper-") || !strings.Contains(h.out.String(), "/claude-atlas:repo-map") {
+		t.Fatalf("ingest --repo exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("ingest", "welcome", "--repo", "paper", "--no-claude"); code != 0 || !strings.Contains(h.out.String(), "unchanged") {
+		t.Fatalf("ingest --repo again exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("ingest", "welcome", "--repo", "paper", "x"); code != 2 {
+		t.Fatalf("--repo with a path is a usage error: %d", code)
 	}
 	if _, err := os.Stat(filepath.Join(welcome, "repos", "paper", ".git")); err != nil {
 		t.Fatal("paper should be a repository under repos/")

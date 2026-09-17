@@ -75,8 +75,10 @@ type Task struct {
 	Priority string `json:"priority"`
 	Due      string `json:"due,omitempty"`
 	Workdir  string `json:"workdir,omitempty"`
-	Created  string `json:"created"`
-	Updated  string `json:"updated"`
+	// Repos names every repository of the project the task changes.
+	Repos   []string `json:"repos,omitempty"`
+	Created string   `json:"created"`
+	Updated string   `json:"updated"`
 	// HasPlan says whether the page has a Plan section with content.
 	HasPlan bool `json:"has_plan"`
 }
@@ -126,6 +128,11 @@ func Parse(p string, content []byte) (*Task, error) {
 	if t.Due != "" && !datePattern.MatchString(t.Due) {
 		return nil, fmt.Errorf("%s: due must be empty or a date like 2026-09-13", p)
 	}
+	repos, ok := repoList(fields["repos"])
+	if !ok {
+		return nil, fmt.Errorf("%s: repos must be a list of repository names", p)
+	}
+	t.Repos = repos
 	archived := path.Dir(p) == vault.TaskArchiveDir
 	switch {
 	case Terminal(t.Status) && !archived:
@@ -143,6 +150,30 @@ func dateField(fields map[string]any, key string) string {
 		return t.Format("2006-01-02")
 	}
 	return strings.TrimSpace(vault.StringField(fields, key))
+}
+
+// repoList reads the repos property: absent or empty, a list of names, or one name.
+func repoList(v any) ([]string, bool) {
+	switch v := v.(type) {
+	case nil:
+		return nil, true
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil, true
+		}
+		return []string{strings.TrimSpace(v)}, true
+	case []any:
+		var out []string
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				return nil, false
+			}
+			out = append(out, strings.TrimSpace(s))
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // hasPlan reports whether a "## Plan" section holds anything but whitespace.
@@ -167,11 +198,27 @@ func NewID(now time.Time) string {
 
 // Plant is what a planted task starts from.
 type Plant struct {
-	Title    string `json:"title"`
-	Text     string `json:"text"`
-	Priority string `json:"priority,omitempty"`
-	Workdir  string `json:"workdir,omitempty"`
-	Due      string `json:"due,omitempty"`
+	Title    string   `json:"title"`
+	Text     string   `json:"text"`
+	Priority string   `json:"priority,omitempty"`
+	Workdir  string   `json:"workdir,omitempty"`
+	Due      string   `json:"due,omitempty"`
+	Repos    []string `json:"repos,omitempty"`
+	// Plan is the Plan section's text; with it the task is planned, not planted.
+	Plan string `json:"plan,omitempty"`
+	// Start makes a planned task active, with a first Progress line.
+	Start bool `json:"start,omitempty"`
+}
+
+// Status is the status a plant gives the page.
+func (p Plant) Status() string {
+	switch {
+	case p.Start:
+		return "active"
+	case strings.TrimSpace(p.Plan) != "":
+		return "planned"
+	}
+	return "planted"
 }
 
 // TitleFromText picks a title from a note: its first heading, else its first line,
@@ -207,13 +254,28 @@ func Skeleton(p Plant, id string, now time.Time) string {
 	}
 	date := now.Format("2006-01-02")
 	var b strings.Builder
-	fmt.Fprintf(&b, "---\ntype: task\ntitle: %q\nstatus: planted\npriority: %s\ncreated: %s\nupdated: %s\ntags:\n  - task\ntask_id: %s\ndue: %q\nworkdir: %q\n---\n\n# %s\n\n## Idea\n\n",
-		p.Title, priority, date, date, id, p.Due, p.Workdir, p.Title)
+	fmt.Fprintf(&b, "---\ntype: task\ntitle: %q\nstatus: %s\npriority: %s\ncreated: %s\nupdated: %s\ntags:\n  - task\ntask_id: %s\ndue: %q\nworkdir: %q\n",
+		p.Title, p.Status(), priority, date, date, id, p.Due, p.Workdir)
+	if len(p.Repos) == 0 {
+		b.WriteString("repos: []\n")
+	} else {
+		b.WriteString("repos:\n")
+		for _, r := range p.Repos {
+			fmt.Fprintf(&b, "  - %q\n", r)
+		}
+	}
+	fmt.Fprintf(&b, "---\n\n# %s\n\n## Idea\n\n", p.Title)
 	text := strings.TrimSpace(p.Text)
 	if text == "" {
 		text = p.Title
 	}
 	b.WriteString(text + "\n")
+	if plan := strings.TrimSpace(p.Plan); plan != "" {
+		b.WriteString("\n## Plan\n\n" + plan + "\n")
+	}
+	if p.Start {
+		fmt.Fprintf(&b, "\n## Progress\n\n- %s · started\n", date)
+	}
 	return b.String()
 }
 

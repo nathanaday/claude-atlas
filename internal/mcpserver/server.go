@@ -23,6 +23,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -390,10 +391,18 @@ type RepoInfo struct {
 	Policy  string `json:"policy"`
 	Branch  string `json:"branch,omitempty"`
 	Dirty   int    `json:"dirty"`
+	// ClaudeMD is the repository's CLAUDE.md, to read before changing files there; a
+	// session in the vault does not load it on its own unless the repository sits under
+	// the vault.
+	ClaudeMD string `json:"claude_md,omitempty"`
+	// Described is the page that describes the repository, in the project's wiki or a
+	// mounted knowledge base, with the commit it was written from and how far the
+	// repository has moved since. Absent when no page does.
+	Described *registry.RepoDescription `json:"described,omitempty"`
 }
 
-func repoInfo(r registry.Repo) RepoInfo {
-	info := RepoInfo{Name: r.Name, Path: r.Path, Remote: r.Remote, Changes: links.Policy(r.Changes, r.Remote)}
+func repoInfo(project *registry.Entry, r registry.Repo) RepoInfo {
+	info := RepoInfo{Name: r.Name, Path: r.Path, Remote: r.Remote, Changes: links.Policy(r.Changes, r.Remote), ClaudeMD: repomap.ClaudeMD(r)}
 	info.Policy = links.PolicyText(info.Changes)
 	if r.Path != "" {
 		if fact := links.Inspect(links.Repo, r.Path); fact.OK {
@@ -403,7 +412,41 @@ func repoInfo(r registry.Repo) RepoInfo {
 			}
 		}
 	}
+	if project != nil {
+		info.Described = repomap.Describe(*project, r)
+	}
 	return info
+}
+
+// repoPageWarnings names the project's repositories no page describes, and those whose
+// page fell more than repomap.BehindThreshold commits behind, so a session sees the
+// knowledge base going stale next to the stale tasks.
+func repoPageWarnings(h home.Home, root string) []string {
+	project, err := discover.Project(h, root)
+	if err != nil || project == nil {
+		return nil
+	}
+	var missing, behind []string
+	for _, r := range project.Repos {
+		if r.Error != "" || r.Path == "" {
+			continue
+		}
+		d := repomap.Describe(*project, r)
+		switch {
+		case d == nil:
+			missing = append(missing, r.Name)
+		case d.Behind > repomap.BehindThreshold:
+			behind = append(behind, fmt.Sprintf("%s (%s, %d commits)", r.Name, d.In, d.Behind))
+		}
+	}
+	var out []string
+	if len(missing) > 0 {
+		out = append(out, fmt.Sprintf("%d repositor%s no page describes: %s; the repo-map skill writes one", len(missing), map[bool]string{true: "y", false: "ies"}[len(missing) == 1], strings.Join(missing, ", ")))
+	}
+	if len(behind) > 0 {
+		out = append(out, fmt.Sprintf("%d repository page%s fell behind the code: %s; the repo-map skill updates them", len(behind), plural(len(behind)), strings.Join(behind, ", ")))
+	}
+	return out
 }
 
 type Versions struct {
@@ -477,8 +520,11 @@ func (s *Server) status(ctx context.Context, req *mcp.CallToolRequest, a VaultAr
 		}
 	}
 	if match, _, err := discover.Vault(s.home(), s.opts.ProjectDir); err == nil && match != nil && match.Project.Path == v.Root {
-		info := repoInfo(match.Repo)
+		info := repoInfo(&match.Project, match.Repo)
 		out.Repository = &info
+	}
+	if v.Config.Kind == vault.Project {
+		out.Warnings = append(out.Warnings, repoPageWarnings(s.home(), v.Root)...)
 	}
 	if out.Versions.Plugin != "" && out.Versions.Binary != "dev" && out.Versions.Plugin != out.Versions.Binary {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("plugin %s and binary %s differ; update one of them", out.Versions.Plugin, out.Versions.Binary))
@@ -645,12 +691,15 @@ func mountRoute(m registry.Mount, pageType, title string, now time.Time) MountRo
 
 type PlantArgs struct {
 	VaultArg
-	Title    string `json:"title,omitempty" jsonschema:"the task's title; taken from the text when omitted"`
-	Text     string `json:"text,omitempty" jsonschema:"the idea in the user's words; kept verbatim on the page"`
-	Priority string `json:"priority,omitempty" jsonschema:"high, normal, low, or someday; default normal"`
-	Workdir  string `json:"workdir,omitempty" jsonschema:"the folder the work happens in, usually a linked repository"`
-	Due      string `json:"due,omitempty" jsonschema:"YYYY-MM-DD"`
-	From     string `json:"from,omitempty" jsonschema:"the note under inbox/tasks/ this task comes from; it is removed in the same commit"`
+	Title    string   `json:"title,omitempty" jsonschema:"the task's title; taken from the text when omitted"`
+	Text     string   `json:"text,omitempty" jsonschema:"the idea in the user's words; kept verbatim on the page"`
+	Priority string   `json:"priority,omitempty" jsonschema:"high, normal, low, or someday; default normal"`
+	Workdir  string   `json:"workdir,omitempty" jsonschema:"the folder the work happens in, usually a linked repository"`
+	Due      string   `json:"due,omitempty" jsonschema:"YYYY-MM-DD"`
+	From     string   `json:"from,omitempty" jsonschema:"the note under inbox/tasks/ this task comes from; it is removed in the same commit"`
+	Repos    []string `json:"repos,omitempty" jsonschema:"the project's repositories the task changes, by name as the repos tool lists them"`
+	Plan     string   `json:"plan,omitempty" jsonschema:"the Plan section's text: the approach, the steps with the repository each lands in, what done looks like; with it the task is planned"`
+	Start    bool     `json:"start,omitempty" jsonschema:"with plan: make the task active now, with a first Progress line; the work skill uses it"`
 }
 
 type PlantOut struct {
@@ -668,7 +717,7 @@ func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArg
 		return nil, PlantOut{}, err
 	}
 	now := s.opts.Now()
-	request, planted, err := txn.PlantRequest(v, tasks.Plant{Title: a.Title, Text: a.Text, Priority: a.Priority, Workdir: a.Workdir, Due: a.Due}, a.From, now)
+	request, planted, err := txn.PlantRequest(v, tasks.Plant{Title: a.Title, Text: a.Text, Priority: a.Priority, Workdir: a.Workdir, Due: a.Due, Repos: a.Repos, Plan: a.Plan, Start: a.Start}, a.From, now)
 	if err != nil {
 		return nil, PlantOut{}, err
 	}
@@ -878,13 +927,15 @@ func (s *Server) repos(ctx context.Context, req *mcp.CallToolRequest, a VaultArg
 	if err := requireProject(v, "repositories"); err != nil {
 		return nil, ReposOut{}, err
 	}
-	repos, err := discover.Repos(home.Resolve(s.opts.Env(home.EnvHome)), v.Root)
+	project, err := discover.Project(home.Resolve(s.opts.Env(home.EnvHome)), v.Root)
 	if err != nil {
 		return nil, ReposOut{}, err
 	}
 	out := ReposOut{Repos: []RepoInfo{}}
-	for _, r := range repos {
-		out.Repos = append(out.Repos, repoInfo(r))
+	if project != nil {
+		for _, r := range project.Repos {
+			out.Repos = append(out.Repos, repoInfo(project, r))
+		}
 	}
 	return nil, out, nil
 }
@@ -1150,13 +1201,13 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "lint", Annotations: ro(),
 		Description: "Run the deterministic wiki health check: dead and ambiguous links, duplicate basenames, orphans, pages missing from every index, missing frontmatter, empty sections, stale index entries, and ledger problems. Read-only."}, s.lint)
 	mcp.AddTool(server, &mcp.Tool{Name: "plant",
-		Description: "Plant a task: create a task page with status planted from a title and the idea's text, as one commit. Give from to remove the inbox/tasks/ note it came from. No plan preview is needed; undo covers it."}, s.plant)
+		Description: "Plant a task: create a task page from a title and the idea's text, as one commit; planted, or planned when plan is given, or active when start is set too. Give from to remove the inbox/tasks/ note it came from. No plan preview is needed; undo covers it."}, s.plant)
 	mcp.AddTool(server, &mcp.Tool{Name: "stub",
 		Description: "Create seed pages for the pages the wiki links to but nobody has written (lint's wanted pages). The empty pages a link points to get frontmatter too. It is one commit, with no plan preview, and undo reverts it. Omit titles to stub every one of them with the mode's default type; one the vault cannot file is skipped and reported, while a title you name is refused and says why. Pass a title with a type when the name is a person, product, project, or organization (entity). In a project, give a title a target to file its stub in that mount's knowledge base; the mounts tool names them."}, s.stub)
 	mcp.AddTool(server, &mcp.Tool{Name: "tasks", Annotations: ro(),
 		Description: "List the vault's tasks from the task ledger: open ones by status, priority, and age, with each task's page, workdir, last touch, and history; counts; and the notes waiting in inbox/tasks/. Pass all to include finished tasks."}, s.tasks)
 	mcp.AddTool(server, &mcp.Tool{Name: "repos", Annotations: ro(),
-		Description: "List the repositories mounted on the vault's project: path, remote, branch, uncommitted changes, and how changes land there (pr: branch and pull request; commit: on the current branch). Read it before changing files in a repository."}, s.repos)
+		Description: "List the repositories mounted on the vault's project: path, remote, branch, uncommitted changes, how changes land there (pr: branch and pull request; commit: on the current branch), the page that describes it with the commit it was written from and how far the branch has moved since, and its CLAUDE.md. Read it before changing files in a repository, and read that CLAUDE.md first."}, s.repos)
 	mcp.AddTool(server, &mcp.Tool{Name: "mounts", Annotations: ro(),
 		Description: "List the knowledge bases the project mounts: id, name, the knowledge base's real wiki path, the mount folder, the requested and effective access, what the knowledge base is for, and its page count. Grep the real path; plan a page under a write mount like the project's own. A mount that names through came from a cluster: the project mounted that cluster, and every member is reached the same way. Read-only."}, s.mounts)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",
@@ -1174,7 +1225,7 @@ func (s *Server) MCP() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "settings",
 		Description: "Set an atlas setting and return them all: new_days (how long a vault counts as new) and repo_changes (the change policy a newly linked repository takes, commit or pr). With no arguments it only reads."}, s.settingsTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "stage",
-		Description: "Copy files or folders from outside a project into its inbox, skipping what the project already captured or already holds; omit paths to stage what is new in the folders it staged from before. dry_run plans and copies nothing. Then ingest with the wiki-ingest skill."}, s.stageTool)
+		Description: "Copy files or folders from outside a project into its inbox, skipping what the project already captured or already holds; omit paths to stage what is new in the folders it staged from before. dry_run plans and copies nothing. Then ingest with the wiki-ingest skill. With repo, write a snapshot of one of the project's repositories into the inbox instead, for the repo-map skill."}, s.stageTool)
 	return server
 }
 

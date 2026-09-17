@@ -347,6 +347,26 @@ func TestSettingsAndStage(t *testing.T) {
 	if msg := c.call("stage", map[string]any{"project": "p"}, &out); msg != "" || len(out.Plan.New) != 0 || len(out.Plan.Unchanged) != 1 {
 		t.Fatalf("the remembered folder has nothing new: %q %+v", msg, out.Plan)
 	}
+	// A repository's snapshot goes into the inbox the same way.
+	if msg := c.call("repo", map[string]any{"action": "new", "project": "p", "name": "code"}, nil); msg != "" {
+		t.Fatal(msg)
+	}
+	if msg := c.call("stage", map[string]any{"project": "p", "repo": "code", "paths": []string{src}}, nil); !strings.Contains(msg, "not both") {
+		t.Fatalf("repo and paths: %q", msg)
+	}
+	if msg := c.call("stage", map[string]any{"project": "p", "repo": "nope"}, nil); !strings.Contains(msg, "no repository named nope") {
+		t.Fatalf("unknown repo: %q", msg)
+	}
+	out = StageOut{}
+	if msg := c.call("stage", map[string]any{"project": "p", "repo": "code"}, &out); msg != "" || out.Snapshot == nil || !out.Snapshot.New || out.Plan != nil || !strings.HasPrefix(out.Snapshot.To, "inbox/code-") {
+		t.Fatalf("snapshot: %q %+v", msg, out.Snapshot)
+	}
+	if _, err := os.Stat(p.Path(out.Snapshot.To)); err != nil {
+		t.Fatal("the snapshot should be in the inbox")
+	}
+	if msg := c.call("stage", map[string]any{"project": "p", "repo": "code"}, &out); msg != "" || out.Snapshot.New {
+		t.Fatalf("the same commit again is not new: %q %+v", msg, out.Snapshot)
+	}
 	if msg := c.call("stage", map[string]any{"project": kb.Root}, nil); !strings.Contains(msg, "no inbox") {
 		t.Fatalf("a knowledge base: %q", msg)
 	}

@@ -124,7 +124,7 @@ func TestGuard(t *testing.T) {
 func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 	v := newVault(t)
 	now := time.Now()
-	req, _, err := txn.PlantRequest(v, tasks.Plant{Title: "Fix the dialog", Text: "It quits on Enter."}, "", now)
+	req, _, err := txn.PlantRequest(v, tasks.Plant{Title: "Fix the dialog", Text: "It quits on Enter.", Repos: []string{"app"}}, "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"Open tasks: 1 (active 0, blocked 0, planned 0, planted 1)", "- [planted] Fix the dialog (task-", "1 task note waits in inbox/tasks/", "task-plant"} {
+	for _, want := range []string{"Open tasks: 1 (active 0, blocked 0, planned 0, planted 1)", "- [planted] Fix the dialog (task-", " · repos app\n", "1 task note waits in inbox/tasks/", "task-plant"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
@@ -178,6 +178,26 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 	for _, want := range []string{"the repository code of the project", "Open tasks: 1", "<vault-context>", "This folder is the repository code. In it, changes land as commits on the current branch. The repos tool says the same."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in repo session:\n%s", want, text)
+		}
+	}
+	// A session in the vault is told about the repository: policy, place, branch, whether
+	// a page describes it, and its CLAUDE.md, which Claude Code does not load from there.
+	out.Reset()
+	SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, e, false, now)
+	text = out.String()
+	if want := "Repository: code · changes: commit · " + home.Display(outside) + " (main) · " + registry.NotDescribed + "; the repo-map skill writes the page\n"; !strings.Contains(text, want) {
+		t.Fatalf("missing %q in:\n%s", want, text)
+	}
+	head, _ := (gitx.Repo{Dir: outside}).Head()
+	os.WriteFile(filepath.Join(outside, "CLAUDE.md"), []byte("# code\n"), 0o644)
+	os.MkdirAll(v.Path("wiki/entities"), 0o755)
+	os.WriteFile(v.Path("wiki/entities/code.md"), []byte("---\ntitle: code\ntype: entity\nentity_type: repository\nrepo: code\ncommit: "+head+"\nstatus: developing\ncreated: 2026-09-17\nupdated: 2026-09-17\ntags:\n  - entity\n---\n\n# code\n"), 0o644)
+	out.Reset()
+	SessionStart(strings.NewReader(`{"cwd":"`+v.Root+`"}`), &out, e, false, now)
+	text = out.String()
+	for _, want := range []string{"described in " + v.Name() + " (wiki/entities/code.md) at " + head[:7] + ", current", "CLAUDE.md: " + home.Display(filepath.Join(outside, "CLAUDE.md"))} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
 	// With a remote and no policy recorded, the session is told to open pull requests.

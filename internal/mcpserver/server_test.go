@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/nathanaday/claude-atlas/internal/repomap"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/ledger"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/tasks"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -407,6 +410,28 @@ func TestTaskTools(t *testing.T) {
 	if list.Counts.Active != 1 || !list.Tasks[0].HasPlan || len(list.Tasks[0].History) != 2 {
 		t.Fatalf("after apply %+v", list)
 	}
+	// A plant with a plan and start is active at once, with its repositories.
+	if msg := c.call("plant", map[string]any{"text": "x", "start": true}, nil); !strings.Contains(msg, "start needs a plan") {
+		t.Fatalf("start without a plan: %q", msg)
+	}
+	var started PlantOut
+	if msg := c.call("plant", map[string]any{"title": "Ship it", "text": "Now.", "repos": []string{"app", "paper"}, "plan": "1. Build in app.\n2. Write in paper.", "start": true}, &started); msg != "" {
+		t.Fatal(msg)
+	}
+	list = TasksOut{}
+	c.call("tasks", nil, &list)
+	var ship *tasks.Record
+	for i := range list.Tasks {
+		if list.Tasks[i].ID == started.ID {
+			ship = &list.Tasks[i]
+		}
+	}
+	if list.Counts.Active != 2 || ship == nil || ship.Status != "active" || !ship.HasPlan || strings.Join(ship.Repos, ",") != "app,paper" || ship.History[0].Summary != "plant and start Ship it" {
+		t.Fatalf("a started task: %+v", ship)
+	}
+	if text, _ := os.ReadFile(v.Path(started.Path)); !strings.Contains(string(text), "## Plan\n\n1. Build in app.\n2. Write in paper.\n\n## Progress\n\n- ") {
+		t.Fatalf("the page:\n%s", text)
+	}
 }
 
 func TestReposToolAndStatusInARepository(t *testing.T) {
@@ -450,6 +475,42 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	c.call("repos", nil, &repos)
 	if len(repos.Repos) != 1 || repos.Repos[0].Path != v.Path("repos/code") || repos.Repos[0].Changes != "pr" || !strings.Contains(repos.Repos[0].Policy, "pull request") {
 		t.Fatalf("repos %+v", repos)
+	}
+	if repos.Repos[0].ClaudeMD != "" || repos.Repos[0].Described != nil {
+		t.Fatalf("nothing describes the repository yet: %+v", repos.Repos[0])
+	}
+	// A page describing the repository, and a CLAUDE.md, are reported with the rest.
+	head, _ := (gitx.Repo{Dir: v.Path("repos/code")}).Head()
+	os.WriteFile(v.Path("repos/code/CLAUDE.md"), []byte("# code\n"), 0o644)
+	os.MkdirAll(v.Path("wiki/entities"), 0o755)
+	os.WriteFile(v.Path("wiki/entities/code.md"), []byte("---\ntitle: code\ntype: entity\nentity_type: repository\nrepo: git@example.com:a/code.git\ncommit: "+head+"\nstatus: developing\ncreated: 2026-09-17\nupdated: 2026-09-17\ntags:\n  - entity\n---\n\n# code\n"), 0o644)
+	c.call("repos", nil, &repos)
+	d := repos.Repos[0].Described
+	if repos.Repos[0].ClaudeMD != v.Path("repos/code/CLAUDE.md") || d == nil || d.Page != "wiki/entities/code.md" || d.In != v.Name() || d.Commit != head || d.Behind != 0 {
+		t.Fatalf("described: %+v %+v", repos.Repos[0], d)
+	}
+	// status warned while no page described the repository, says nothing while the page
+	// is current, and warns again once the code moved far past it.
+	if !strings.Contains(strings.Join(status.Warnings, "\n"), "1 repository no page describes: code; the repo-map skill writes one") {
+		t.Fatalf("status before the page: %+v", status.Warnings)
+	}
+	status = Status{}
+	c.call("status", nil, &status)
+	if strings.Contains(strings.Join(status.Warnings, "\n"), "repo-map") {
+		t.Fatalf("status with a current page: %+v", status.Warnings)
+	}
+	repo := gitx.Repo{Dir: v.Path("repos/code")}
+	for i := 0; i <= repomap.BehindThreshold; i++ {
+		os.WriteFile(v.Path("repos/code/n.txt"), []byte{byte(i)}, 0o644)
+		repo.AddAll()
+		if _, err := repo.Commit("n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status = Status{}
+	c.call("status", nil, &status)
+	if !strings.Contains(strings.Join(status.Warnings, "\n"), fmt.Sprintf("1 repository page fell behind the code: code (%s, %d commits); the repo-map skill updates them", v.Name(), repomap.BehindThreshold+1)) {
+		t.Fatalf("status behind: %+v", status.Warnings)
 	}
 }
 

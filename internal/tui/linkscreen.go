@@ -43,9 +43,10 @@ const listChanged = "the list changed; try again"
 // linkRow is one box: the repository as the identity file holds it, and what the last
 // refresh found in its folder.
 type linkRow struct {
-	repo   registry.Repo
-	facts  string
-	broken bool
+	repo      registry.Repo
+	facts     string
+	broken    bool
+	described string // the page that describes it, as the last refresh found it
 }
 
 type linksScreen struct {
@@ -101,6 +102,10 @@ func (s *linksScreen) build() {
 		if s.entry.State != nil {
 			if fact, ok := s.entry.State.RepoFacts[r.Name]; ok {
 				row.facts, row.broken = refresh.LinkSummary(fact), !fact.OK
+				row.described = registry.NotDescribed
+			}
+			if d, ok := s.entry.State.RepoDescriptions[r.Name]; ok {
+				row.described = d.Short()
 			}
 		}
 		s.rows = append(s.rows, row)
@@ -158,6 +163,8 @@ func (s linksScreen) update(msg tea.Msg) (linksScreen, tea.Cmd) {
 				if s.current() != nil {
 					s.mode = linksConfirmUnlink
 				}
+			case "i":
+				return s.snapshot(), nil
 			case "q":
 				s.closed = true
 			}
@@ -400,6 +407,32 @@ func (s linksScreen) create() linksScreen {
 	return s
 }
 
+// snapshot stages a snapshot of the repository under the cursor into the project's
+// inbox, for the repo-map skill.
+func (s linksScreen) snapshot() linksScreen {
+	row := s.current()
+	if row == nil {
+		return s
+	}
+	if s.hooks.StageRepo == nil {
+		s.err = "staging a snapshot is not available here"
+		return s
+	}
+	snap, err := s.hooks.StageRepo(s.entry, row.repo.Name)
+	if err != nil {
+		s.err = err.Error()
+		return s
+	}
+	name := strings.TrimPrefix(snap.To, "inbox/")
+	if snap.New {
+		s.status = "staged " + name + " into inbox/; start Claude Code there and run /claude-atlas:repo-map"
+		s.changed = true
+	} else {
+		s.status = name + " already waits in inbox/ or was captured"
+	}
+	return s
+}
+
 func (s linksScreen) unlink() linksScreen {
 	row := s.current()
 	s.mode = linksList
@@ -476,6 +509,9 @@ func (s linksScreen) view() string {
 			facts = errSt.Render(row.facts)
 		}
 		lines = append(lines, facts)
+		if row.described != "" {
+			lines = append(lines, dim.Render(row.described))
+		}
 		rendered := strings.Split(indent(style.Width(width).Render(strings.Join(lines, "\n")), "  "), "\n")
 		b.WriteString(strings.Join(focus(rendered, selected), "\n") + "\n")
 	}
@@ -514,7 +550,7 @@ func (s linksScreen) view() string {
 	default:
 		hints := "n new repository · a mount one that exists"
 		if len(s.rows) > 0 {
-			hints = "↑↓ move · n new · a mount · e edit · u unlink"
+			hints = "↑↓ move · n new · a mount · e edit · u unlink · i snapshot for the wiki"
 		}
 		b.WriteString("  " + dim.Render(hints+" · Esc back") + "\n")
 	}

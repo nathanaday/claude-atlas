@@ -54,8 +54,19 @@ func TestReposScreenMountsCreatesEditsAndUnlinks(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(code, ".git")); err != nil {
 		t.Fatal("the folder should be a repository now")
 	}
+	v = keyV(v, "i")
+	if !strings.HasPrefix(v.links.status, "staged code-") || !strings.Contains(v.links.status, "/claude-atlas:repo-map") || v.links.err != "" {
+		t.Fatalf("i should stage a snapshot: status=%q err=%q", v.links.status, v.links.err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(vaultPath, "inbox", "code-*.md")); len(matches) != 1 {
+		t.Fatalf("snapshot in the inbox: %v", matches)
+	}
+	v = keyV(v, "i")
+	if !strings.Contains(v.links.status, "already waits") {
+		t.Fatalf("the same commit again: %q", v.links.status)
+	}
 	out := v.View()
-	for _, want := range []string{"╭", "code", "changes: commit", "not refreshed yet", "u unlink"} {
+	for _, want := range []string{"╭", "code", "changes: commit", "not refreshed yet", "u unlink", "i snapshot"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
@@ -231,5 +242,20 @@ func TestUnlinkSurvivesAReloadThatDroppedTheRepository(t *testing.T) {
 	v = keyV(v, "y")
 	if v.links == nil || v.links.mode != linksList || removed != 0 || !strings.Contains(v.links.status, "the list changed") {
 		t.Fatalf("y after the row is gone: mode=%d removed=%d status=%q", v.links.mode, removed, v.links.status)
+	}
+}
+
+func TestReposScreenShowsThePageThatDescribesARepository(t *testing.T) {
+	ok := 0
+	entry := registry.Entry{Kind: vault.Project, Name: "reading", Path: "/tmp/reading", Repos: []registry.Repo{{Name: "code", Path: "/tmp/code"}, {Name: "paper", Path: "/tmp/paper"}}}
+	entry.State = &registry.State{
+		RepoFacts:        map[string]links.Link{"code": {OK: true, Branch: "main", Dirty: &ok}, "paper": {OK: true, Branch: "main", Dirty: &ok}},
+		RepoDescriptions: map[string]registry.RepoDescription{"code": {Page: "wiki/entities/code.md", In: "tools", Commit: "fc70d93abcdef", Behind: 12}},
+	}
+	out := newLinks(actions.Atlas{}, entry, 80).view()
+	for _, want := range []string{"tools: wiki/entities/code.md · fc70d93 · 12 commits behind", registry.NotDescribed} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
 }
