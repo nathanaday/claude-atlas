@@ -25,12 +25,24 @@ func TestOnlyTheRowUnderTheCursorIsColored(t *testing.T) {
 	b.moveTo("/v/course")
 	b.layout()
 	for _, r := range b.rows {
-		text := strings.Join(b.lines[r.start:r.end+1], "\n")
+		text := strings.Join(b.boxOf(r), "\n")
 		colored := strings.Contains(text, "\x1b[")
 		if want := r.item == b.current(); colored != want {
 			t.Errorf("%s colored=%v, want %v:\n%s", r.item.Entry.Name, colored, want, text)
 		}
 	}
+}
+
+// boxOf is a row's lines from its box's top border, leaving out the group header a row
+// carries when it opens a group.
+func (b board) boxOf(r boardRow) []string {
+	lines := b.lines[r.start : r.end+1]
+	for i, line := range lines {
+		if strings.Contains(line, "╭") {
+			return lines[i:]
+		}
+	}
+	return lines
 }
 
 // boardItems is four projects (one untagged, one under itl, two under usc), two knowledge
@@ -105,11 +117,10 @@ func TestTheBoxGrowsToFitTheConnectors(t *testing.T) {
 	b := newBoard(boardProjects, boardItems(), 100)
 	b.moveTo("/v/p3")
 	b.layout()
-	r := b.rows[b.cursor]
-	if r.end-r.start+1 != 5 {
-		t.Fatalf("three mounts need three content lines and two borders, got %d lines", r.end-r.start+1)
+	lines := b.boxOf(b.rows[b.cursor])
+	if len(lines) != 5 {
+		t.Fatalf("three mounts need three content lines and two borders, got %d lines", len(lines))
 	}
-	lines := b.lines[r.start : r.end+1]
 	for i, want := range []string{"╌╌╌╌▶ ai-ml   write · link missing", "╌╌╌╌▶ papers   read (write not granted) · link missing", "╌╌╌╌▶ no knowledge base with id id-x"} {
 		if !strings.Contains(lines[i+1], want) {
 			t.Errorf("line %d = %q, want %q", i+1, lines[i+1], want)
@@ -117,9 +128,9 @@ func TestTheBoxGrowsToFitTheConnectors(t *testing.T) {
 	}
 	b.moveTo("/v/welcome")
 	b.layout()
-	r = b.rows[b.cursor]
-	if r.end-r.start+1 != 4 || !strings.Contains(b.lines[r.start+1], "no knowledge base mounted") {
-		t.Fatalf("no mounts: %q", b.lines[r.start:r.end+1])
+	lines = b.boxOf(b.rows[b.cursor])
+	if len(lines) != 4 || !strings.Contains(lines[1], "no knowledge base mounted") {
+		t.Fatalf("no mounts: %q", lines)
 	}
 	kb := newBoard(boardKnowledge, boardItems(), 100)
 	if text := strings.Join(kb.lines, "\n"); strings.Count(text, "◀╌╌╌╌ 1 project") != 2 {
@@ -247,6 +258,36 @@ func TestATallRowKeepsItsTopOnScreen(t *testing.T) {
 	lines, _ := b.window(5)
 	if len(lines) != 5 || lines[0] != b.lines[r.start] {
 		t.Fatalf("the window starts at the box's top border: %q", lines)
+	}
+}
+
+// Scrolling back to the top brings the first group's header with it: the header is part
+// of the row under it, not a line above the row.
+func TestScrollingBackToTheTopShowsTheGroupHeaderAgain(t *testing.T) {
+	four := 4
+	var items []Item
+	for _, name := range []string{"aleph", "beth", "gimel"} {
+		items = append(items, Item{Entry: registry.Entry{ID: "id-" + name, Kind: vault.Project, Name: name,
+			Path: "/v/" + name, Tags: []string{name}, State: &registry.State{VaultOK: true, Heat: "warm", Pages: &four}}})
+	}
+	b := newBoard(boardProjects, items, 100)
+	if b.rows[0].start != 0 || !strings.Contains(b.lines[0], "aleph") {
+		t.Fatalf("the first row starts at its header: start=%d line=%q", b.rows[0].start, b.lines[0])
+	}
+	const avail = 5
+	b.ensureVisible(avail)
+	b.move(1)
+	b.move(1)
+	b.ensureVisible(avail)
+	if b.offset == 0 {
+		t.Fatal("expected the board to scroll")
+	}
+	b.move(-1)
+	b.move(-1)
+	b.ensureVisible(avail)
+	lines, _ := b.window(avail)
+	if b.offset != 0 || !strings.Contains(strings.Join(lines, "\n"), "aleph\n") {
+		t.Fatalf("back at the top the group header shows again: offset=%d\n%s", b.offset, strings.Join(lines, "\n"))
 	}
 }
 

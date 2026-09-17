@@ -171,16 +171,19 @@ func (b board) labelWidth() int {
 	return max(12, b.width-2-(boxWidth(b.width)+2)-len([]rune(arrowOut)))
 }
 
-// layout renders the boxes into lines and records the span of each vault.
+// layout renders the boxes into lines and records the span of each vault. A group's
+// header belongs to the first vault under it, so scrolling back to that vault brings
+// the header with it.
 func (b *board) layout() {
 	b.lines, b.rows = nil, nil
 	last := ""
 	for i, it := range b.items {
+		start := len(b.lines)
 		if g := group(it.Entry); g != "" && g != last {
 			b.lines = append(b.lines, dim.Render(g))
 		}
 		last = group(it.Entry)
-		b.render(it, i == b.cursor)
+		b.render(it, i == b.cursor, start)
 	}
 	if len(b.lines) > 0 {
 		end := dim.Render("(end)")
@@ -223,8 +226,9 @@ func (b board) kbName(m registry.Mount) string {
 
 // render writes one vault: its box with the connectors beside it, and the detail block
 // under it when expanded. The box grows to hold as many lines as the connectors need.
-// Only the vault under the cursor keeps its colors.
-func (b *board) render(it *Item, selected bool) {
+// Only the vault under the cursor keeps its colors. start is where the vault's row
+// begins, at its group header when it has one.
+func (b *board) render(it *Item, selected bool, start int) {
 	e := it.Entry
 	content := boxLines(e)
 	side := b.side(e)
@@ -244,7 +248,6 @@ func (b *board) render(it *Item, selected bool) {
 			lines = append(lines, "   "+line)
 		}
 	}
-	start := len(b.lines)
 	b.lines = append(b.lines, focus(lines, selected)...)
 	b.rows = append(b.rows, boardRow{item: it, start: start, end: len(b.lines) - 1})
 }
