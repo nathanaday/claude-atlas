@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
 	"github.com/nathanaday/claude-atlas/internal/home"
@@ -116,44 +117,70 @@ func (s *tasksScreen) reload(items []Item) {
 // taskSpan is the lines one task box covers.
 type taskSpan struct{ start, end int }
 
-// boxes renders the task boxes and records the lines each one covers.
+// titleLines is how many lines a task's title may take before it is cut short.
+const titleLines = 3
+
+// wrapTo breaks text at width and keeps at most maxLines, ending the last one with an
+// ellipsis when there was more.
+func wrapTo(text string, width, maxLines int) []string {
+	out := strings.Split(lipgloss.NewStyle().Width(width).Render(text), "\n")
+	for i := range out {
+		out[i] = strings.TrimRight(out[i], " ")
+	}
+	if len(out) <= maxLines {
+		return out
+	}
+	out = out[:maxLines]
+	out[maxLines-1] = clip(out[maxLines-1]+"…", width)
+	return out
+}
+
+// boxes renders the task boxes and records the lines each one covers. Every box has the
+// same shape: where the task lives, then its title over as many as three lines, then
+// what it is and how it stands.
 func (s tasksScreen) boxes() ([]string, []taskSpan) {
 	var lines []string
 	var spans []taskSpan
 	width := min(76, max(32, s.width-6))
 	for i, row := range s.rows {
-		style := boxSt
-		name := row.rec.Title
-		if i == s.cursor && s.mode == tasksList {
-			style = boxSelSt
-			name = selSt.Render(name)
-		}
-		badge := row.rec.Status + " · " + row.rec.Priority
-		if tasks.Stale(row.rec, now()) {
-			badge = errSt.Render(badge + " · stale")
-		} else {
-			badge = dim.Render(badge)
-		}
-		pad := max(1, width-2-len(row.rec.Title)-len(stripANSI(badge)))
-		box := []string{name + strings.Repeat(" ", pad) + badge}
-		second := row.rec.ID
-		if row.rec.LastTouched != "" {
-			second += " · touched " + row.rec.LastTouched
-		}
-		if row.rec.Due != "" {
-			second += " · due " + row.rec.Due
-		}
-		second = dim.Render(second)
+		selected := i == s.cursor && s.mode == tasksList
+		style := boxStyle(vault.Project, selected)
+
+		where := row.rec.ID
 		if s.item == nil {
-			second = projectSt.Render(row.project.Entry.Name) + dim.Render(" · ") + second
+			where = projectSt.Render(row.project.Entry.Name) + dim.Render(" · "+row.rec.ID)
+		} else {
+			where = dim.Render(where)
 		}
-		box = append(box, second)
+		box := []string{where}
+
+		title := wrapTo(row.rec.Title, width-2, titleLines)
+		for _, line := range title {
+			if selected {
+				line = selSt.Render(line)
+			}
+			box = append(box, line)
+		}
+
+		badge := row.rec.Status + " · " + row.rec.Priority
+		if row.rec.Due != "" {
+			badge += " · due " + row.rec.Due
+		}
+		if row.rec.LastTouched != "" {
+			badge += " · touched " + row.rec.LastTouched
+		}
+		if tasks.Stale(row.rec, now()) {
+			box = append(box, errSt.Render(clip(badge+" · stale", width-2)))
+		} else {
+			box = append(box, dim.Render(clip(badge, width-2)))
+		}
 		if row.rec.Workdir != "" {
-			box = append(box, dim.Render("workdir "+home.Display(row.rec.Workdir)))
+			box = append(box, dim.Render(clip("workdir "+home.Display(row.rec.Workdir), width-2)))
 		}
+
 		start := len(lines)
 		rendered := strings.Split(indent(style.Width(width).Render(strings.Join(box, "\n")), "  "), "\n")
-		lines = append(lines, focus(rendered, i == s.cursor && s.mode == tasksList)...)
+		lines = append(lines, focus(rendered, selected)...)
 		spans = append(spans, taskSpan{start: start, end: len(lines) - 1})
 	}
 	return lines, spans

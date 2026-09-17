@@ -266,16 +266,26 @@ func (v *view) rebuild(path string) {
 
 func (v view) Init() tea.Cmd { return nil }
 
-// bodyHeight is how many lines the body may take. It reserves the blank line, the tab
-// bar, the caption, a blank line, the "more lines" line, a blank line, and the hint
-// lines: one, or two with help on.
-func (v view) bodyHeight() int {
-	reserved := 7
-	if v.help {
-		reserved++
+// head is everything above the body: a blank line, the tab bar, the caption, a blank
+// line. The caption wraps to the screen, so its height is known here and nothing below
+// it shifts when the tab changes.
+func (v view) head() string {
+	var caption []string
+	for _, line := range strings.Split(captionSt.Width(max(20, v.width-6)).Render(captions[v.tab]), "\n") {
+		caption = append(caption, "    "+strings.TrimRight(line, " "))
 	}
-	return max(5, v.height-reserved)
+	return fmt.Sprintf("\n  %s\n%s\n\n", v.tabBar(), strings.Join(caption, "\n"))
 }
+
+// bodyHeight is how many lines the body may take: the screen without the head, the
+// footer, and the line that counts what the body leaves out.
+func (v view) bodyHeight() int {
+	chrome := countLines(v.head()) + countLines("\n"+v.footer(v.hints()...)) + 1
+	return max(5, v.height-chrome)
+}
+
+// lines counts the screen lines a rendered block takes.
+func countLines(block string) int { return strings.Count(strings.TrimSuffix(block, "\n"), "\n") + 1 }
 
 func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -870,24 +880,41 @@ func tabColor(t tab) lipgloss.Color {
 	return projectColor
 }
 
-// tabBar is the first line: every tab with its count in parentheses, the active one
-// filled with its color, and the refresh stamp at the right.
-func (v view) tabBar() string {
+// tabs renders the tab boxes, with their counts when there is room for them.
+func (v view) tabRow(counts bool) string {
 	var parts []string
 	for _, t := range v.tabs() {
 		text := tabNames[t]
-		if n, ok := v.count(t); ok {
+		if n, ok := v.count(t); ok && counts {
 			text += fmt.Sprintf(" (%d)", n)
 		}
 		parts = append(parts, tabStyle(tabColor(t), t == v.tab).Render(text))
 	}
-	left := title.Render("Atlas") + "  " + strings.Join(parts, "")
+	return strings.Join(parts, "")
+}
+
+// tabBar is the first line: every tab with its count in parentheses, the active one
+// filled with its color, and the refresh stamp at the right. It never wraps: a screen
+// too narrow for all of that loses the stamp, then the name, then the counts.
+func (v view) tabBar() string {
+	room := v.width - 4
+	fits := func(s string) bool { return lipgloss.Width(s) <= room }
+
+	full := title.Render("Atlas") + "  " + v.tabRow(true)
 	stamp := "not refreshed yet"
 	if t, err := time.Parse("2006-01-02T15:04:05Z", v.refreshed); err == nil {
 		stamp = "refreshed " + t.Local().Format("2006-01-02 15:04")
 	}
-	pad := max(3, v.width-4-lipgloss.Width(left)-lipgloss.Width(stamp))
-	return left + strings.Repeat(" ", pad) + dim.Render(stamp)
+	if pad := room - lipgloss.Width(full) - lipgloss.Width(stamp); pad >= 3 {
+		return full + strings.Repeat(" ", pad) + dim.Render(stamp)
+	}
+	switch {
+	case fits(full):
+		return full
+	case fits(v.tabRow(true)):
+		return v.tabRow(true)
+	}
+	return v.tabRow(false)
 }
 
 // count is the number after a tab's name: its vaults, or the open tasks the last refresh
@@ -922,7 +949,7 @@ func (v view) View() string {
 		return v.tasks.view()
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n  %s\n  %s\n\n", v.tabBar(), dim.Render(captions[v.tab]))
+	b.WriteString(v.head())
 	if v.tab == tabTasks {
 		if v.tasksTab == nil {
 			b.WriteString("  " + dim.Render("tasks are not available here") + "\n\n")

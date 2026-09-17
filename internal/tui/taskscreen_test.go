@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/tasks"
@@ -139,6 +140,67 @@ func TestTasksScreenPlantsListsAndContinues(t *testing.T) {
 	}
 }
 
+// Every card has the same shape, and a long title wraps instead of pushing the status
+// off its own line.
+func TestATaskCardWrapsItsTitle(t *testing.T) {
+	long := "Work out why the planner drops frames when the thermal camera and the visible camera disagree about the scene for more than a second at a time on the edge box"
+	ledgers := map[string]*tasks.Ledger{
+		"/v/p3": {Tasks: []tasks.Record{
+			{Task: tasks.Task{ID: "task-20260901-aaaa", Path: "wiki/tasks/x.md", Title: long, Status: "planted", Priority: "normal"}},
+			{Task: tasks.Task{ID: "task-20260902-bbbb", Path: "wiki/tasks/y.md", Title: "Short one", Status: "active", Priority: "high", Due: "2026-09-20"}},
+		}},
+	}
+	var planted []string
+	v := keyV(newView(sample(), Opener{}, taskHooks(ledgers, &planted)), "T")
+	next, _ := v.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
+	v = next.(view)
+	out := v.View()
+	t.Logf("\n%s", out)
+
+	width := min(76, max(32, v.tasksTab.width-6))
+	for _, line := range strings.Split(out, "\n") {
+		if lipgloss.Width(line) > v.width {
+			t.Fatalf("a card overflows the screen: %q is %d wide", line, lipgloss.Width(line))
+		}
+	}
+	// The project and the id come first, the title wraps under them, the status last.
+	var card []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "p3 · task-20260901-aaaa") {
+			card = []string{line}
+			continue
+		}
+		if card != nil && strings.Contains(line, "│") {
+			card = append(card, line)
+		} else if card != nil {
+			break
+		}
+	}
+	if len(card) < 5 {
+		t.Fatalf("the long card should have a header, wrapped title lines, and a status line:\n%s", out)
+	}
+	titled := 0
+	for _, line := range card[1:] {
+		if strings.Contains(line, "planted · normal") {
+			break
+		}
+		titled++
+	}
+	if titled != titleLines {
+		t.Fatalf("a long title takes %d lines, want %d:\n%s", titled, titleLines, out)
+	}
+	if !strings.Contains(strings.Join(card, "\n"), "…") {
+		t.Fatalf("a title that does not fit ends with an ellipsis:\n%s", out)
+	}
+	// A short title keeps its own line, and the status still has one of its own.
+	if !strings.Contains(out, "Short one") || !strings.Contains(out, "active · high · due 2026-09-20") {
+		t.Fatalf("the second card:\n%s", out)
+	}
+	if got := wrapTo("one two three", width-2, 3); len(got) != 1 || got[0] != "one two three" {
+		t.Fatalf("a title that fits is one line: %q", got)
+	}
+}
+
 // A long board scrolls: the window follows the cursor and the footer stays on screen.
 func TestTheTasksBoardScrolls(t *testing.T) {
 	var recs []tasks.Record
@@ -150,9 +212,9 @@ func TestTheTasksBoardScrolls(t *testing.T) {
 	var planted []string
 	v := keyV(newView(sample(), Opener{}, taskHooks(map[string]*tasks.Ledger{"/v/p3": {Tasks: recs}}, &planted)), "T")
 	v = keyV(v, "h")                                              // help on: the board's hints show, and the footer takes two lines
-	next, _ := v.Update(tea.WindowSizeMsg{Width: 80, Height: 16}) // eight lines for the boxes
+	next, _ := v.Update(tea.WindowSizeMsg{Width: 80, Height: 15}) // eight lines for the boxes
 	v = next.(view)
-	if v.tasksTab == nil || len(v.tasksTab.rows) != 6 || v.tasksTab.avail != 8 {
+	if v.tasksTab == nil || len(v.tasksTab.rows) != 6 || v.tasksTab.avail != v.bodyHeight() || v.tasksTab.avail != 8 {
 		t.Fatalf("six tasks in an eight-line window: %+v", v.tasksTab)
 	}
 	out := v.View()

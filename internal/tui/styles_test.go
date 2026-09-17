@@ -31,11 +31,14 @@ func TestKindColorsAndBoxes(t *testing.T) {
 
 func TestTheActiveTabIsFilled(t *testing.T) {
 	on := tabStyle(knowledgeColor, true)
-	if on.GetBackground() != knowledgeColor || on.GetForeground() != lipgloss.Color("0") {
-		t.Fatalf("the active tab is filled with its color: bg=%v fg=%v", on.GetBackground(), on.GetForeground())
+	if on.GetBackground() != knowledgeColor || on.GetForeground() != lipgloss.Color("15") {
+		t.Fatalf("the active tab is filled with its color and wears white: bg=%v fg=%v", on.GetBackground(), on.GetForeground())
+	}
+	if onFill(projectColor) != lipgloss.Color("15") || onFill(muted) != lipgloss.Color("0") {
+		t.Fatalf("white on the dark fills, dark on the light one: %v %v", onFill(projectColor), onFill(muted))
 	}
 	off := tabStyle(knowledgeColor, false)
-	if off.GetBackground() == knowledgeColor || off.GetForeground() == lipgloss.Color("0") {
+	if off.GetBackground() == knowledgeColor || off.GetForeground() == lipgloss.Color("15") {
 		t.Fatalf("the other tabs are plain: bg=%v fg=%v", off.GetBackground(), off.GetForeground())
 	}
 	if l, r := off.GetPaddingLeft(), off.GetPaddingRight(); l != 1 || r != 1 {

@@ -35,6 +35,9 @@ var (
 	boxSelSt    = boxSt.BorderForeground(projectColor)
 	projectSt   = lipgloss.NewStyle().Foreground(projectColor).Bold(true)
 	knowledgeSt = lipgloss.NewStyle().Foreground(knowledgeColor).Bold(true)
+	// captionSt is the sentence under the tab bar: a quiet gray aside, not a second row
+	// of keys.
+	captionSt = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
 )
 
 // kindColor is the color a vault's kind wears.
@@ -58,13 +61,22 @@ func boxStyle(k vault.Kind, selected bool) lipgloss.Style {
 	return boxSt
 }
 
-// tabStyle is one tab in the bar: the active tab is filled with its color and the text
-// goes dark; the others are plain text. Both carry a space on each side, so every tab
-// reads as a box.
+// onFill is the text color that reads on a filled tab: dark on the light fills, white on
+// the rest.
+func onFill(c lipgloss.Color) lipgloss.Color {
+	if c == muted {
+		return lipgloss.Color("0")
+	}
+	return lipgloss.Color("15")
+}
+
+// tabStyle is one tab in the bar: the active tab is filled with its color and its text
+// takes the color that reads on that fill; the others are plain text. Both carry a space
+// on each side, so every tab reads as a box.
 func tabStyle(c lipgloss.Color, active bool) lipgloss.Style {
 	s := lipgloss.NewStyle().Padding(0, 1)
 	if active {
-		return s.Background(c).Foreground(lipgloss.Color("0")).Bold(true)
+		return s.Background(c).Foreground(onFill(c)).Bold(true)
 	}
 	return s
 }
