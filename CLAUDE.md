@@ -51,6 +51,28 @@ safety net, and adds the cross-vault view.
    `~/.claude-atlas/state/registry.json` is derived, and `refresh` rebuilds it
    in full.
 
+## Tool, skill, or hook
+
+Three carriers, and a new capability splits across them rather than picking one.
+
+1. A tool is a fact or a commit. Code owns whatever two correct runs must
+   answer the same way (`status`, `route`, `mounts`, `tasks`, `history`,
+   `lint`) and every path that changes bytes (`capture`, `plan`, `apply`,
+   `undo`, `plant`, `stub`, `mode`). No tool writes prose.
+2. A skill is a procedure and a policy: which depth to read at, what counts
+   as adequate evidence, how to cite, when to stop, which skill comes next.
+   A skill is advice. When the model must be refused instead of advised, the
+   rule belongs in a tool or in a hook, which is why `PreToolUse` guards
+   `wiki/` and no skill asks nicely.
+3. Tools and skills do not pair one to one, and naming them alike is the
+   trap. `plan` and `apply` serve every writing skill; `think` and
+   `task-plan` call no tool of their own. Tools are nouns and stay few,
+   because every description sits in every session's context; skills are
+   verbs and load when they trigger. A wanted `wiki-query` tool means the
+   split has not happened yet: the code part of querying is candidate
+   selection (`search`) and a source's standing in the ledger, and the skill
+   keeps the rest.
+
 ## Two layers, one backend
 
 `view` is the whole atlas as one screen; every command is one thing from it.

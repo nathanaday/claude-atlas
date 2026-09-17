@@ -36,7 +36,7 @@ decides which parts exist.
 
 | | knowledge | project |
 |---|---|---|
-| `wiki/`: sources, entities, concepts | yes | yes, about the project itself |
+| `wiki/`: sources, entities, concepts | yes | yes, when the user files one there |
 | `wiki/`: questions, sessions | no | yes |
 | `inbox/` | no | yes |
 | `wiki/tasks/`, `inbox/tasks/`, `ideas/`, the task ledger | no | yes |
@@ -244,9 +244,13 @@ The ingest flow in a project session:
    page would take in each vault the project may write. A match anywhere means
    the skill links to that page instead of creating one. This is the check v1
    could not make.
-3. The skill picks the target vault from the knowledge bases' `scope` lines,
-   or the project's own wiki when no knowledge base fits. The preview names
-   the target vault.
+3. The skill decides what the source is. Project management (tasks, plans,
+   decisions, sessions, questions) goes to the project. Knowledge, including
+   knowledge about the project itself, goes to the knowledge base whose
+   `scope` covers it. Knowledge that no scope covers, or two cover, or a
+   project with no mount: the skill asks the user once per batch, offering
+   each mount and the project's wiki; the project's wiki is never the silent
+   fallback. The preview names the target vault.
 4. `capture` with `vault` set to the target copies the file into that vault's
    `.raw/captured/` and writes the ledger record, one commit in the target.
    When the target is a knowledge base, the record carries `via`: the

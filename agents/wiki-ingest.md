@@ -43,8 +43,12 @@ source.
 2. Classify the source from its format and visible structure: code, research
    paper, decision, conversation, reference, dataset, or media. Mark an
    uncertain classification provisional and refine it after reading.
-3. Read the source completely. Recommend no canonical page when it adds no
-   durable synthesis, navigation, decision, or reusable connection.
+3. Read the source completely. Propose an entity page for every nameable
+   thing the source is about (a codebase, tool, product, service, dataset,
+   person, organization, or project) that no page in the project or a mount
+   covers; that is the default, not a recommendation for the parent to weigh.
+   Recommend no concept page when the source adds no durable synthesis,
+   navigation, decision, or reusable connection.
 4. Read `wiki/index.md`, `wiki/hot.md`, and only the pages needed to detect
    existing entities, concepts, claims, and contradictions. Read a mounted
    knowledge base's pages through the real path the parent gave, not through
@@ -53,10 +57,14 @@ source.
 5. Preserve evidence fidelity. Record exact locators (page, section, timestamp,
    line) only when present. Never invent a quotation, locator, date, or
    corroborating source.
-6. Name a target vault for every proposal. Propose a page for a knowledge base
-   only when its scope covers the source and its effective access is `write`;
-   propose every other page for the project. When a page in the project or in a
-   mount already covers the subject, link to it instead of proposing a new page.
+6. Name a target vault for every proposal. Project management (tasks, plans,
+   decisions, sessions, questions) goes to the project. Everything else is
+   knowledge, including knowledge about the project itself, and goes to the
+   knowledge base whose scope covers it when its effective access is `write`.
+   Knowledge that no scope covers, or that two cover, is not proposed for the
+   project: report it as unrouted with the scopes considered, and the parent
+   asks the user. When a page in the project or in a mount already covers the
+   subject, link to it instead of proposing a new page.
 7. Propose the smallest set of creates and updates. Reuse existing pages and
    aliases first. Follow the filing mode: typed folders under `wiki/` in generic
    mode; `wiki/notes/` plus a MOC in lyt mode. The parent confirms each path
@@ -91,6 +99,11 @@ contradictions:
   - <claim or page conflict, or none>
 open_questions:
   - <missing evidence or merge decision, or none>
+unrouted:
+  - path: <the page as it would be filed, relative to wiki/>
+    reason: <no scope covers it, or the scopes that both do>
+    content: |
+      <complete proposed content, so the parent can file it once the user chooses>
 partial:
   reason: <null, turn budget, unread range, or other concrete limit>
   remaining:
