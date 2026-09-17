@@ -11,6 +11,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -517,4 +518,97 @@ func (s *Server) clusterTool(ctx context.Context, req *mcp.CallToolRequest, a Cl
 		out.Members = c.Members
 	}
 	return nil, out, nil
+}
+
+type RepoToolArgs struct {
+	Action  string  `json:"action" jsonschema:"link, new, clone, unlink, or edit"`
+	Project string  `json:"project" jsonschema:"the project, by name, id, or path"`
+	Path    string  `json:"path,omitempty" jsonschema:"link: the repository's folder; edit: point the entry at another folder"`
+	Init    bool    `json:"init,omitempty" jsonschema:"link: make a plain folder a git repository first, with one commit of what it holds"`
+	URL     string  `json:"url,omitempty" jsonschema:"clone: an https, ssh, git, or file URL, or git@host:path"`
+	Name    string  `json:"name,omitempty" jsonschema:"new: the repository's name; unlink and edit: which repository"`
+	At      string  `json:"at,omitempty" jsonschema:"new and clone: where the repository goes, default repos/ inside the project"`
+	Remote  *string `json:"remote,omitempty" jsonschema:"edit: the remote URL; an empty string clears it"`
+	Changes *string `json:"changes,omitempty" jsonschema:"edit: how changes land there, pr or commit; an empty string returns to the atlas default"`
+}
+
+// RepoToolOut is the repository as the atlas now sees it, or the name unlink dropped.
+type RepoToolOut struct {
+	Repo     *RepoInfo `json:"repo,omitempty"`
+	Unlinked string    `json:"unlinked,omitempty" jsonschema:"the repository dropped from the project; its folder stays"`
+}
+
+func (s *Server) repoTool(ctx context.Context, req *mcp.CallToolRequest, a RepoToolArgs) (*mcp.CallToolResult, RepoToolOut, error) {
+	acts, _, err := s.bind()
+	if err != nil {
+		return nil, RepoToolOut{}, err
+	}
+	ix, err := acts.Scan()
+	if err != nil {
+		return nil, RepoToolOut{}, err
+	}
+	project, err := entryOf(ix, a.Project)
+	if err != nil {
+		return nil, RepoToolOut{}, err
+	}
+	if project.Kind != vault.Project {
+		return nil, RepoToolOut{}, fmt.Errorf("%s is a knowledge base and has no repositories; they belong to a project", project.Name)
+	}
+	var name string
+	switch a.Action {
+	case "link":
+		if links.IsRemoteURL(a.Path) {
+			return nil, RepoToolOut{}, fmt.Errorf("%s is a URL; pass it as url with action clone", a.Path)
+		}
+		repo, _, err := acts.AddRepo(project, home.Expand(a.Path), a.Init)
+		var notRepo *vaults.NotRepoError
+		if errors.As(err, &notRepo) {
+			return nil, RepoToolOut{}, fmt.Errorf("%w; pass init to make it one", err)
+		}
+		if err != nil {
+			return nil, RepoToolOut{}, err
+		}
+		name = repo.Name
+	case "new":
+		repo, _, err := acts.NewRepo(project, a.Name, home.Expand(a.At))
+		if err != nil {
+			return nil, RepoToolOut{}, err
+		}
+		name = repo.Name
+	case "clone":
+		repo, _, err := acts.CloneRepo(project, a.URL, home.Expand(a.At))
+		if err != nil {
+			return nil, RepoToolOut{}, err
+		}
+		name = repo.Name
+	case "unlink":
+		if err := acts.RemoveRepo(project, a.Name); err != nil {
+			return nil, RepoToolOut{}, err
+		}
+		return nil, RepoToolOut{Unlinked: a.Name}, nil
+	case "edit":
+		if a.Changes != nil && *a.Changes != "" && *a.Changes != links.ChangesPR && *a.Changes != links.ChangesCommit {
+			return nil, RepoToolOut{}, fmt.Errorf("changes must be pr or commit, not %q", *a.Changes)
+		}
+		repo, err := acts.EditRepo(project, a.Name, vaults.RepoEdit{Remote: a.Remote, Changes: a.Changes, Path: home.Expand(a.Path)})
+		if err != nil {
+			return nil, RepoToolOut{}, err
+		}
+		name = repo.Name
+	default:
+		return nil, RepoToolOut{}, fmt.Errorf("action must be link, new, clone, unlink, or edit, not %q", a.Action)
+	}
+	after, err := acts.Scan()
+	if err != nil {
+		return nil, RepoToolOut{}, err
+	}
+	if p := after.ByID(project.ID); p != nil {
+		for _, r := range p.Repos {
+			if r.Name == name {
+				info := repoInfo(r)
+				return nil, RepoToolOut{Repo: &info}, nil
+			}
+		}
+	}
+	return nil, RepoToolOut{}, fmt.Errorf("%s is recorded but the scan does not list it; call atlas with refresh", name)
 }

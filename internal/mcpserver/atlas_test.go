@@ -2,11 +2,13 @@ package mcpserver
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -216,5 +218,71 @@ func TestClusterAddAndRemove(t *testing.T) {
 	}
 	if msg := c.call("cluster", map[string]any{"action": "remove", "cluster": "domain", "knowledge": "kb"}, &out); msg != "" || len(out.Members) != 0 {
 		t.Fatalf("remove: %q %+v", msg, out)
+	}
+}
+
+func TestRepoLinkNewEditUnlink(t *testing.T) {
+	h, _, p, _ := mounted(t)
+	c := connectIn(t, h, p.Root)
+	code := filepath.Join(t.TempDir(), "code")
+	if err := os.MkdirAll(code, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(code, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out RepoToolOut
+	if msg := c.call("repo", map[string]any{"action": "link", "project": "p", "path": code}, nil); !strings.Contains(msg, "init") {
+		t.Fatalf("a plain folder needs init: %q", msg)
+	}
+	if msg := c.call("repo", map[string]any{"action": "link", "project": "p", "path": code, "init": true}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Repo == nil || out.Repo.Name != "code" || out.Repo.Changes != links.ChangesCommit || !links.IsRepo(out.Repo.Path) {
+		t.Fatalf("link: %+v", out.Repo)
+	}
+	if msg := c.call("repo", map[string]any{"action": "edit", "project": "p", "name": "code", "changes": "pr"}, &out); msg != "" || out.Repo.Changes != links.ChangesPR {
+		t.Fatalf("edit: %q %+v", msg, out.Repo)
+	}
+	if msg := c.call("repo", map[string]any{"action": "edit", "project": "p", "name": "code", "changes": "maybe"}, nil); !strings.Contains(msg, "pr or commit") {
+		t.Fatalf("bad policy: %q", msg)
+	}
+	if msg := c.call("repo", map[string]any{"action": "new", "project": "p", "name": "tool"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Repo.Path != p.Path("repos/tool") || !links.IsRepo(out.Repo.Path) {
+		t.Fatalf("new: %+v", out.Repo)
+	}
+	// The folder decides membership: a repository still under repos/ cannot be unlinked; one outside can.
+	if msg := c.call("repo", map[string]any{"action": "unlink", "project": "p", "name": "tool"}, nil); msg == "" {
+		t.Fatal("a repository under repos/ is refused")
+	}
+	if msg := c.call("repo", map[string]any{"action": "unlink", "project": "p", "name": "code"}, &out); msg != "" || out.Unlinked != "code" {
+		t.Fatalf("unlink: %q %+v", msg, out)
+	}
+	if _, err := os.Stat(code); err != nil {
+		t.Fatal("unlink leaves the folder")
+	}
+	if msg := c.call("repo", map[string]any{"action": "link", "project": "kb", "path": code}, nil); msg == "" {
+		t.Fatal("a knowledge base has no repositories")
+	}
+}
+
+func TestRepoCloneFromAFileURL(t *testing.T) {
+	h, _, p, _ := mounted(t)
+	c := connectIn(t, h, p.Root)
+	bare := filepath.Join(t.TempDir(), "upstream.git")
+	if out, err := exec.Command("git", "init", "-q", "--bare", bare).CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	var out RepoToolOut
+	if msg := c.call("repo", map[string]any{"action": "clone", "project": "p", "url": "file://" + bare}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Repo.Name != "upstream" || out.Repo.Path != p.Path("repos/upstream") || !strings.Contains(out.Repo.Remote, "upstream.git") {
+		t.Fatalf("clone: %+v", out.Repo)
+	}
+	if msg := c.call("repo", map[string]any{"action": "link", "project": "p", "path": "https://example.com/x.git"}, nil); !strings.Contains(msg, "clone") {
+		t.Fatalf("a URL on link points at clone: %q", msg)
 	}
 }
