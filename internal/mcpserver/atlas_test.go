@@ -139,3 +139,58 @@ func TestVaultCreateInARepository(t *testing.T) {
 		t.Fatalf("a knowledge base in a repository: %q", msg)
 	}
 }
+
+func TestMountAccessGrantRevokeUnmount(t *testing.T) {
+	h, _, p, _ := mounted(t)
+	c := connectIn(t, h, p.Root)
+	// A second project, and kb made guarded so grants decide what it may do.
+	if msg := c.call("vault", map[string]any{"action": "create", "kind": "project", "name": "q"}, nil); msg != "" {
+		t.Fatal(msg)
+	}
+	if msg := c.call("vault", map[string]any{"action": "edit", "target": "kb", "access": "guarded"}, nil); msg != "" {
+		t.Fatal(msg)
+	}
+	var out MountToolOut
+	if msg := c.call("mount", map[string]any{"action": "mount", "project": "q", "knowledge": "kb", "access": "read"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Mount == nil || out.Mount.Access != vault.AccessRead || out.Mount.Effective != vault.AccessRead {
+		t.Fatalf("mount: %+v", out.Mount)
+	}
+	out = MountToolOut{}
+	if msg := c.call("mount", map[string]any{"action": "access", "project": "q", "knowledge": "kb", "access": "write"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Mount.Access != vault.AccessWrite || out.Mount.Effective != vault.AccessRead {
+		t.Fatalf("guarded with no grant reads: %+v", out.Mount)
+	}
+	out = MountToolOut{}
+	if msg := c.call("mount", map[string]any{"action": "grant", "knowledge": "kb", "project": "q", "access": "write"}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if len(out.Grants) != 1 || out.Grants[0].Access != vault.AccessWrite || out.Grants[0].Name != "q" {
+		t.Fatalf("grant: %+v", out.Grants)
+	}
+	out = MountToolOut{}
+	if msg := c.call("mount", map[string]any{"action": "access", "project": "q", "knowledge": "kb", "access": "read"}, &out); msg != "" || out.Mount.Effective != vault.AccessRead {
+		t.Fatalf("asking for read reads: %q %+v", msg, out.Mount)
+	}
+	out = MountToolOut{}
+	if msg := c.call("mount", map[string]any{"action": "access", "project": "q", "knowledge": "kb", "access": "write"}, &out); msg != "" || out.Mount.Effective != vault.AccessWrite {
+		t.Fatalf("after the grant the mount writes: %q %+v", msg, out.Mount)
+	}
+	out = MountToolOut{}
+	if msg := c.call("mount", map[string]any{"action": "revoke", "knowledge": "kb", "project": "q"}, &out); msg != "" || len(out.Grants) != 0 {
+		t.Fatalf("revoke: %q %+v", msg, out.Grants)
+	}
+	if msg := c.call("mount", map[string]any{"action": "grant", "knowledge": "kb", "project": "q", "access": "all"}, nil); !strings.Contains(msg, "read or write") {
+		t.Fatalf("bad access: %q", msg)
+	}
+	if msg := c.call("mount", map[string]any{"action": "mount", "project": "kb", "knowledge": "q"}, nil); msg == "" {
+		t.Fatal("a knowledge base mounts nothing")
+	}
+	out = MountToolOut{}
+	if msg := c.call("mount", map[string]any{"action": "unmount", "project": "q", "knowledge": "kb"}, &out); msg != "" || len(out.Mounts) != 0 {
+		t.Fatalf("unmount: %q %+v", msg, out.Mounts)
+	}
+}

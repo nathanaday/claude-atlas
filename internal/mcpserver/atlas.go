@@ -284,3 +284,163 @@ func (s *Server) entryOut(acts actions.Atlas, path string) (*mcp.CallToolResult,
 	}
 	return nil, VaultToolOut{Vault: en}, nil
 }
+
+type MountToolArgs struct {
+	Action    string `json:"action" jsonschema:"mount, unmount, access, grant, or revoke"`
+	Project   string `json:"project,omitempty" jsonschema:"the project, by name, id, or path; on revoke a stale grant's id works too"`
+	Knowledge string `json:"knowledge,omitempty" jsonschema:"the knowledge base, by name, id, or path; on unmount and access the mount's own name works too"`
+	Access    string `json:"access,omitempty" jsonschema:"mount: what the project asks for, write (default) or read; access and grant: read or write"`
+	As        string `json:"as,omitempty" jsonschema:"mount: the name the project reaches it under, default the knowledge base's name"`
+}
+
+// MountToolOut is the mount as it now stands, with its effective access; after unmount,
+// what the project still mounts; after grant or revoke, the knowledge base's grants.
+type MountToolOut struct {
+	Mount  *registry.Mount  `json:"mount,omitempty"`
+	Mounts []registry.Mount `json:"mounts,omitempty"`
+	Grants []registry.Grant `json:"grants,omitempty"`
+}
+
+func checkAccess(access string) error {
+	if access != vault.AccessRead && access != vault.AccessWrite {
+		return fmt.Errorf("access must be read or write, not %q", access)
+	}
+	return nil
+}
+
+// mountTarget is what Unmount and SetMountAccess take: the knowledge base's id when the
+// argument names a vault, else the argument as a mount name.
+func mountTarget(ix *registry.Index, arg string) string {
+	if en, err := ix.Find(arg); err == nil {
+		return en.ID
+	}
+	return arg
+}
+
+func (s *Server) mountTool(ctx context.Context, req *mcp.CallToolRequest, a MountToolArgs) (*mcp.CallToolResult, MountToolOut, error) {
+	acts, _, err := s.bind()
+	if err != nil {
+		return nil, MountToolOut{}, err
+	}
+	ix, err := acts.Scan()
+	if err != nil {
+		return nil, MountToolOut{}, err
+	}
+	switch a.Action {
+	case "mount":
+		project, err := entryOf(ix, a.Project)
+		if err != nil {
+			return nil, MountToolOut{}, err
+		}
+		kb, err := entryOf(ix, a.Knowledge)
+		if err != nil {
+			return nil, MountToolOut{}, err
+		}
+		access := a.Access
+		if access == "" {
+			access = vault.AccessWrite
+		}
+		if err := checkAccess(access); err != nil {
+			return nil, MountToolOut{}, err
+		}
+		m, err := acts.Mount(project, kb, access, a.As)
+		if err != nil {
+			if m.ID != "" {
+				return nil, MountToolOut{}, fmt.Errorf("%w; the mount is recorded, so atlas with refresh can make kb/%s", err, m.Name)
+			}
+			return nil, MountToolOut{}, err
+		}
+		return s.mountOut(acts, project.ID, m.Name)
+	case "access":
+		project, err := entryOf(ix, a.Project)
+		if err != nil {
+			return nil, MountToolOut{}, err
+		}
+		if err := checkAccess(a.Access); err != nil {
+			return nil, MountToolOut{}, err
+		}
+		m, err := acts.EditMount(project, mountTarget(ix, a.Knowledge), a.Access)
+		if err != nil {
+			return nil, MountToolOut{}, err
+		}
+		return s.mountOut(acts, project.ID, m.Name)
+	case "unmount":
+		project, err := entryOf(ix, a.Project)
+		if err != nil {
+			return nil, MountToolOut{}, err
+		}
+		if err := acts.Unmount(project, mountTarget(ix, a.Knowledge)); err != nil {
+			return nil, MountToolOut{}, err
+		}
+		after, err := acts.Scan()
+		if err != nil {
+			return nil, MountToolOut{}, err
+		}
+		out := MountToolOut{Mounts: []registry.Mount{}}
+		if p := after.ByID(project.ID); p != nil && p.Mounts != nil {
+			out.Mounts = p.Mounts
+		}
+		return nil, out, nil
+	case "grant", "revoke":
+		kb, err := entryOf(ix, a.Knowledge)
+		if err != nil {
+			return nil, MountToolOut{}, err
+		}
+		if a.Action == "grant" {
+			project, err := entryOf(ix, a.Project)
+			if err != nil {
+				return nil, MountToolOut{}, err
+			}
+			if err := checkAccess(a.Access); err != nil {
+				return nil, MountToolOut{}, err
+			}
+			if err := acts.Grant(kb, project, a.Access); err != nil {
+				return nil, MountToolOut{}, err
+			}
+		} else {
+			// A stale grant's id first, so a project the scan lost can still be revoked.
+			id := ""
+			for _, g := range kb.Grants {
+				if g.ID == a.Project {
+					id = g.ID
+				}
+			}
+			if id == "" {
+				project, err := entryOf(ix, a.Project)
+				if err != nil {
+					return nil, MountToolOut{}, err
+				}
+				id = project.ID
+			}
+			if err := acts.Revoke(kb, id); err != nil {
+				return nil, MountToolOut{}, err
+			}
+		}
+		after, err := acts.Scan()
+		if err != nil {
+			return nil, MountToolOut{}, err
+		}
+		out := MountToolOut{Grants: []registry.Grant{}}
+		if k := after.ByID(kb.ID); k != nil && k.Grants != nil {
+			out.Grants = k.Grants
+		}
+		return nil, out, nil
+	}
+	return nil, MountToolOut{}, fmt.Errorf("action must be mount, unmount, access, grant, or revoke, not %q", a.Action)
+}
+
+// mountOut scans again and returns the project's mount by name, with its effective access.
+func (s *Server) mountOut(acts actions.Atlas, projectID, mountName string) (*mcp.CallToolResult, MountToolOut, error) {
+	ix, err := acts.Scan()
+	if err != nil {
+		return nil, MountToolOut{}, err
+	}
+	if p := ix.ByID(projectID); p != nil {
+		for i := range p.Mounts {
+			if p.Mounts[i].Name == mountName {
+				return nil, MountToolOut{Mount: &p.Mounts[i]}, nil
+			}
+		}
+	}
+	return nil, MountToolOut{}, fmt.Errorf("kb/%s is recorded but the scan does not list it; call atlas with refresh", mountName)
+}
