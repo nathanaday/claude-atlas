@@ -1,6 +1,7 @@
 package refresh
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -242,4 +243,34 @@ func Signals(e registry.Entry, today time.Time) []string {
 		}
 	}
 	return notes
+}
+
+// All rebuilds the registry from a scan and brings every project's local state up to
+// date: the CLI runs it after every change.
+func All(h home.Home, cfg *home.Config, today time.Time) ([]registry.Entry, *registry.Index, []ProjectChange, error) {
+	return Registry(h, cfg, h.StateDir(), today, true)
+}
+
+// Entries reads the registry the last refresh wrote, writing one first when none exists.
+func Entries(h home.Home, cfg *home.Config, today time.Time) ([]registry.Entry, error) {
+	entries, _, err := registry.Read(h.StateDir())
+	if errors.Is(err, os.ErrNotExist) {
+		entries, _, _, err = All(h, cfg, today)
+	}
+	return entries, err
+}
+
+// Derived scans and derives every entry's state, and writes nothing: what a tool reads
+// when it wants the atlas as it is now.
+func Derived(cfg *home.Config, today time.Time) (*registry.Index, error) {
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		return nil, err
+	}
+	generatedAt := NowUTC()
+	newDays := cfg.NewDays()
+	for i := range ix.Entries {
+		ix.Entries[i].State = Derive(ix.Entries[i], today, generatedAt, newDays)
+	}
+	return ix, nil
 }
