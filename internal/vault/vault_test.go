@@ -1070,3 +1070,68 @@ func TestInitInWaitsOutAMergeInTheHost(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A knowledge base may list other knowledge bases as members; that makes it a cluster.
+// UpdateConfig sees one file, so it refuses what one file can answer.
+func TestMembersAreAKnowledgeBasesOwnList(t *testing.T) {
+	dir := t.TempDir()
+	kb := filepath.Join(dir, "p3")
+	if _, err := Init(kb, Options{Kind: Knowledge, Name: "p3"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateConfig(kb, "member software", now, func(c *Config) error {
+		c.Members = []Member{{ID: "kb-software", Name: "software"}, {ID: "kb-people", Name: "people"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Open(kb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Config.Members) != 2 || again.Config.Members[0].Name != "software" {
+		t.Fatalf("members: %+v", again.Config.Members)
+	}
+
+	// The same member twice.
+	err = UpdateConfig(kb, "member twice", now, func(c *Config) error {
+		c.Members = append(c.Members, Member{ID: "kb-software", Name: "software"})
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Fatalf("a member listed twice: %v", err)
+	}
+	// Itself.
+	err = UpdateConfig(kb, "member self", now, func(c *Config) error {
+		c.Members = []Member{{ID: c.ID, Name: c.Name}}
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "its own member") {
+		t.Fatalf("a cluster as its own member: %v", err)
+	}
+	// No id.
+	err = UpdateConfig(kb, "member blank", now, func(c *Config) error {
+		c.Members = []Member{{Name: "nameless"}}
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "id") {
+		t.Fatalf("a member with no id: %v", err)
+	}
+	// The file on disk kept the good list through all three refusals.
+	if again, err = Open(kb); err != nil || len(again.Config.Members) != 2 {
+		t.Fatalf("the file should still hold two members: %+v %v", again.Config.Members, err)
+	}
+
+	// A project carries no members.
+	project := filepath.Join(dir, "work")
+	if _, err := Init(project, Options{Kind: Project, Name: "work"}, now); err != nil {
+		t.Fatal(err)
+	}
+	err = UpdateConfig(project, "member on a project", now, func(c *Config) error {
+		c.Members = []Member{{ID: "kb-software", Name: "software"}}
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "knowledge base") {
+		t.Fatalf("members on a project: %v", err)
+	}
+}
