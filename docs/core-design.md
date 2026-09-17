@@ -260,6 +260,19 @@ above `CLAUDE_PROJECT_DIR`, and fails closed otherwise.
 The model reads pages with its own Read, Grep, and Glob tools. A `search`
 tool with BM25 ranking is a later addition, not part of this design.
 
+Added in 1.3.0, the atlas tools, bound to the same functions as the view
+(`docs/superpowers/specs/2026-09-16-atlas-tools-design.md`):
+
+| Tool | Reads or writes | Returns |
+|---|---|---|
+| `atlas` | reads; with `refresh`, rewrites the registry | every vault with its state, the problems, the settings |
+| `vault` | writes: create, adopt, edit, forget | the vault as the atlas sees it |
+| `mount` | writes: mount, unmount, access, grant, revoke | the mount with its effective access, or the grants |
+| `cluster` | writes: add, remove | the members |
+| `repo` | writes: link, new, clone, unlink, edit | the repository |
+| `settings` | writes when given a value | the settings |
+| `stage` | writes into `inbox/` unless `dry_run` | the plan, and what was copied |
+
 ### Hooks
 
 | Event | Command | Effect |

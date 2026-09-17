@@ -15,6 +15,7 @@ Read `README.md` first. This file holds what the code and README do not say.
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side before v2 (superseded by `v2-design.md`) | `docs/atlas-design.md` |
 | Tasks: pages, ledger, skills, repos reaching the vault | `docs/tasks-design.md` |
+| The atlas tools and the `atlas` skills | `docs/superpowers/specs/2026-09-16-atlas-tools-design.md` |
 | Original brainstorm (not a contract) | `docs/spec.md` |
 | The skills' contracts | `skills/<name>/SKILL.md` and `skills/wiki/references/` |
 
@@ -73,15 +74,17 @@ Three carriers, and a new capability splits across them rather than picking one.
    selection (`search`) and a source's standing in the ledger, and the skill
    keeps the rest.
 
-## Two layers, one backend
+## Three layers, one backend
 
-`view` is the whole atlas as one screen; every command is one thing from it.
-The rule: an action lives once, as a function in `internal/vaults`,
-`internal/refresh`, `internal/vault`, or `internal/txn`. The CLI exposes it as
-one subcommand. The TUI reaches it through `tui.Hooks`, which `cli.hooks`
-builds in one place. The TUI is a subset of the CLI, never the reverse: a new
-key gets a command in the same change, and `docs/usage.md` carries the table
-that maps them.
+`view` is the whole atlas as one screen; every command is one thing from it;
+the atlas tools (`atlas`, `vault`, `mount`, `cluster`, `repo`, `settings`,
+`stage`) are the same things from a Claude Code session. The rule: an action
+lives once, as a function in `internal/vaults`, `internal/refresh`,
+`internal/vault`, `internal/txn`, or `internal/capture`. The CLI exposes it
+as one subcommand. The TUI and the tools reach it through `actions.Atlas`,
+which `actions.Bind` builds in one place. The TUI and the tools are subsets
+of the CLI, never the reverse: a new key or a new tool gets a command in the
+same change, and `docs/usage.md` carries the table that maps them.
 
 ## Layout
 
@@ -94,6 +97,7 @@ skills/                 one directory per skill; skills/wiki/references/ is shar
 agents/                 wiki-ingest worker, wiki-lint interpreter
 cmd/claude-atlas/       main
 internal/cli/           argument parsing and one method per subcommand
+internal/actions/       every atlas action as one struct of functions, and Bind, the one place it is built
 internal/wizard/        the setup flow
 internal/vault/         identity file, layout, templates, Init, Adopt, mode routing, page skeletons
 internal/gitx/          the git commands the core needs
@@ -130,6 +134,10 @@ never goes inside another vault (`vaults.CheckNewPath`).
 - Dependencies: `gopkg.in/yaml.v3`, the official MCP `go-sdk` pinned to v1.4.0
   (later versions need Go 1.25; the machine runs 1.24), and Bubble Tea, Bubbles,
   and Lip Gloss. Nothing else. Do not pull `golang.org/x/*` at `@latest`.
+- The atlas tools call `actions.Bind` once per call over a config loaded for
+  that call, and never use `plan`/`apply`: nothing they do deletes user data,
+  and the skill's one-line statement is the preview. `atlas` without
+  `refresh` writes nothing; every write tool scans afresh to resolve names.
 - `git` is a runtime requirement. `python3` is not. macOS and Linux only.
 - The binary and the plugin are installed separately. `scripts/atlas` finds the
   binary on PATH, in `~/go/bin`, in the Homebrew prefixes, or at
@@ -277,7 +285,7 @@ with `claude --plugin-dir .` from inside a vault. End-to-end by hand:
 `--allowedTools "mcp__plugin_claude-atlas_atlas__*,Read,Grep,Glob,Skill"`.
 
 1.0.0 is the first v2 release; 1.1.0 is the view with tabs; 1.2.0 is
-clusters.
+clusters; 1.3.0 is the atlas tools and skills.
 
 ## Open questions
 

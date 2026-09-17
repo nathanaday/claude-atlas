@@ -182,6 +182,10 @@ knowledge base sets `access`, `open` or `guarded`; `grant` and `revoke` name
 which projects may write a guarded one. The `mounts` tool reports a project's
 mounts with their effective access. A cluster is a knowledge base that
 gathers others; a project mounts the cluster once and reaches every member.
+Every change here is also possible from a Claude Code session: the `atlas`,
+`atlas-project`, `atlas-knowledge`, `atlas-mount`, and `atlas-repo` skills
+create vaults, mount, grant, and link repositories through tools that call
+the same functions the view calls.
 `new-project NAME --in REPO` puts a project inside an existing git repository
 instead of giving it a history of its own.
 
