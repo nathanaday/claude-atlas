@@ -42,16 +42,19 @@ func Bind(h home.Home, cfg *home.Config, c *console.Console) Atlas
 `Bind` is what `cli.hooks` is today, moved whole: the closures over
 `vaults`, `refresh`, `capture`, and `tasks`, and the helpers they call
 (`createOrAdopt`, `refreshAll`, `registryEntries`, `planStage`, `stage`,
-`plantTask`). The CLI calls `Bind` and keeps none of it. The `mcp`
-subcommand runs inside the CLI, so it hands the same value to
-`mcpserver.Options.Atlas`; the server's tests, which cannot import `cli`,
-call `Bind` themselves. `tui` and `mcpserver` import `actions`; neither
-imports the other, and `actions` imports neither.
+`plantTask`). The CLI calls `Bind` and keeps none of it. The server
+calls `Bind` itself, once per tool call with a config it has just loaded,
+because the CLI in another process may change `config.json` between two
+calls. `tui` and `mcpserver` import `actions`; neither imports the other,
+and `actions` imports neither.
 
-The struct gains one field: `Scan func() (*registry.Index, error)`, a fresh
-scan with no write. Every write tool resolves its names through it, because
-every command that acts on a vault scans afresh and `registry.json` is for
-display only.
+The struct gains one field, `Scan func() (*registry.Index, error)`: a fresh
+scan with every entry's state derived and nothing written. Every tool
+resolves its names through it, because every command that acts on a vault
+scans afresh and `registry.json` is for display only. Two signatures change:
+`Refresh` returns the index and each project's changes, and `StagePlan`
+takes a list of sources. `AddVault` gains `Access` and `InRepo`, so one
+`Create` covers every way the CLI makes a vault.
 
 `vaults.Create` keeps its console preview. `Bind` passes `confirm=false`
 for the view already; the server does the same, and the skill is the
@@ -66,7 +69,8 @@ grouping. Each argument's schema doc names the actions that read it.
 
 A vault is named by `name`, `id`, or `path`. The resolver tries the id, then
 the exact name, then the path. Two vaults that share a name are refused with
-both ids in the message; the skill passes the id.
+both paths in the message (`registry.Index.Find`); the skill passes the path
+or the id.
 
 The server resolves a vault per call, not at start, so these tools work in a
 session started anywhere: in a vault, in a project's repository, or in a
@@ -93,7 +97,7 @@ waiting under `repos/`, and reports what it adopted in `changes`.
 
 ```
 action: create | adopt | edit | forget
-create: kind, name, path?, mode?, tags?, scope?, access?, in_repo?, mount?
+create: kind, name, path?, mode?, tags?, scope?, access?, in_repo?, mount?, members?
 adopt:  path, kind, name?, mode?
 edit:   target, name?, tags?, scope?, access?
 forget: target
@@ -103,7 +107,8 @@ returns: { vault: Entry }  |  { forgotten: path }
 - `create` defaults `path` to `vaults.PathFor`, `mode` to `generic`, and
   `access` to `open`. `in_repo` is a repository root; the project goes to
   `REPO/atlas/` through `vaults.CreateIn`. `mount` names a knowledge base a
-  new project mounts with write, as the view's add screen does.
+  new project mounts with write, and `members` the knowledge bases a new
+  cluster gathers, as the view's add screen does.
 - `adopt` takes the folder's name when `name` is empty.
 - `edit` renames, retags, rescopes, or changes access through
   `vaults.EditIdentity`; a rename moves the folder and the returned entry
@@ -236,8 +241,8 @@ base with members, so one skill. In order: name; location; a scope the skill
 helps write, two sentences, what it holds and what it does not, because the
 ingest skill chooses a destination by reading it; `open` or `guarded`, with
 what guarded means for the projects that mount it; and for a cluster, the
-members, through `cluster add` after creation. One line, yes, `vault create`,
-then `cluster` as chosen. Also: edit scope and access, add and drop members.
+members, passed as `members` on `vault create`. One line, yes, `vault
+create`. Also: edit scope and access, add and drop members.
 
 ### `atlas-mount`
 
