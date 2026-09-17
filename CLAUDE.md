@@ -112,7 +112,7 @@ internal/hooks/         session-start (the kind line for a vault or a project's 
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
 internal/registry/      the scan for identity files, the resolved entries, the registry state file
 internal/refresh/       derive one vault's state, rewrite the registry, list a vault's signals
-internal/vaults/        create, adopt, register, edit identity files, link and create repositories, adopt those waiting under repos/, add and remove a cluster's members
+internal/vaults/        create, adopt, register, edit identity files, link and create repositories, adopt those waiting under repos/, add and remove a cluster's members, relocate the vaults directory
 internal/links/         git init, create and clone, change policies, the facts git reports
 internal/tui/           Bubble Tea screens: the view (a tab per kind, boards of boxes with connectors), the vault editor, the repositories screen, tasks, ingest, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
@@ -128,6 +128,20 @@ are the user's and live under the vaults directory (default
 config, because the scan cannot find it there (`vaults.Register`); a vault
 inside it needs no entry and cannot be forgotten (`vaults.Unregister`). A vault
 never goes inside another vault (`vaults.CheckNewPath`).
+
+`vaults.PlanRelocate` and `vaults.ApplyRelocate` move the whole vaults
+directory; `relocate` is the only command that changes `vaults_dir`, and it is
+CLI-only, with no tool and no TUI key, because a session must not move the
+user's vaults. Nothing inside a vault changes, because an identity file holds
+no path: the move rewrites `vaults_dir` plus every `vaults` and `repos` entry
+that sat under the old root, then the caller refreshes and the registry and the
+`kb/` symlinks follow. On one volume the move is a rename that a failed save
+undoes; across volumes it copies, verifies every file and symlink, saves, and
+only then removes the old tree. The plan also reports the state the atlas will
+not repair: Obsidian's vault list (`obsidian.Registry.Under`), Claude Code's
+path-keyed projects (`claudecode.ProjectsUnder`), and build state inside
+repositories that holds the old path (a virtual environment, a CMake cache,
+installed packages, a worktree's `.git` file).
 
 ## Constraints
 

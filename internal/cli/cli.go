@@ -63,6 +63,7 @@ Across the vaults:
   edit NAME [flags]         change a vault's name, tags, scope, or access
   remove NAME               forget a vault outside the vaults directory; the folder stays
   refresh                   read every vault again and rewrite the registry
+  relocate PATH             move the whole vaults directory to another folder and follow it
 
 Knowledge bases a project reaches (a mount is a folder kb/NAME inside the project):
   mount PROJECT KB          mount a knowledge base in a project; --read mounts it read-only, --as NAME renames it
@@ -212,6 +213,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.remove(rest[1:])
 	case "refresh":
 		code, err = e.refresh(rest[1:])
+	case "relocate":
+		code, err = e.relocate(rest[1:])
 	case "lint":
 		code, err = e.lint(rest[1:])
 	case "stub":
@@ -1405,6 +1408,79 @@ func (e *env) remove(args []string) (int, error) {
 	return 0, nil
 }
 
+// warnExamples is how many paths a preview shows per kind before it counts the rest.
+const warnExamples = 3
+
+// relTo shortens a path under the vaults directory to what follows it, so a preview
+// reads as a list of places inside the tree rather than a column of identical prefixes.
+func relTo(root, path string) string {
+	if rel, err := filepath.Rel(root, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	return home.Display(path)
+}
+
+// relocate moves the whole vaults directory. It shows what moves, what the config will
+// say afterwards, and what holds the old path that the atlas will not change; then it
+// asks, moves, and refreshes so the registry and every kb/ symlink follow.
+func (e *env) relocate(args []string) (int, error) {
+	if len(args) != 1 {
+		return 2, errors.New("usage: claude-atlas relocate PATH")
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return 1, err
+	}
+	p, err := vaults.PlanRelocate(e.home, cfg, args[0])
+	if err != nil {
+		return 1, err
+	}
+	c := e.console
+	how := "a rename on the same volume"
+	if !p.SameVolume {
+		how = "a copy to another volume, verified before the old folder goes"
+	}
+	c.Say("claude-atlas will move %d vault%s from %s to %s:", p.Vaults, plural(p.Vaults), home.Display(p.From), home.Display(p.To))
+	c.Say("    %d files, %s, %s", p.Files, console.Size(p.Bytes), how)
+	c.Say("")
+	c.Say("  The config will say:")
+	for _, r := range p.Rewrites {
+		c.Say("    %-24s %s", r.What, home.Display(r.To))
+	}
+	if groups := p.GroupWarnings(); len(groups) > 0 {
+		c.Say("")
+		c.Say("  These hold the old path and claude-atlas does not change them:")
+		for _, g := range groups {
+			c.Say("    %d %s", len(g.Paths), g.Reason)
+			for i, path := range g.Paths {
+				if i == warnExamples {
+					c.Say("        and %d more", len(g.Paths)-warnExamples)
+					break
+				}
+				c.Say("        %s", relTo(p.From, path))
+			}
+		}
+	}
+	c.Say("")
+	ok, err := c.Confirm("Move the vaults?", false)
+	if err != nil {
+		return 1, err
+	}
+	if !ok {
+		return 1, vaults.ErrCancelled
+	}
+	if err := vaults.ApplyRelocate(e.home, cfg, p); err != nil {
+		return 1, err
+	}
+	c.Step(console.OK, "moved", fmt.Sprintf("%d vault%s to %s", p.Vaults, plural(p.Vaults), home.Display(p.To)))
+	entries, _, err := e.refreshAll(cfg)
+	if err != nil {
+		return 1, err
+	}
+	c.Step(console.OK, "refreshed", refreshed(entries)+"; the registry and every kb/ link follow")
+	return 0, nil
+}
+
 func (e *env) mount(args []string) (int, error) {
 	fs := newFlags("mount", e.stderr)
 	read := fs.Bool("read", false, "the project may read the knowledge base but not write to it")
@@ -2571,7 +2647,7 @@ func (e *env) config(args []string) (int, error) {
 		row := func(label, value string) { c.Say("  %-18s %s", label, value) }
 		row("new-days", fmt.Sprintf("%d  (a vault is new for this many days after its creation; 0 turns it off)", cfg.NewDays()))
 		row("repo-changes", cfg.DefaultChanges()+"  (how a newly linked repository lands its changes: commit or pr)")
-		row("vaults dir", home.Display(cfg.VaultsDir))
+		row("vaults dir", home.Display(cfg.VaultsDir)+"  (where the vaults live; `claude-atlas relocate PATH` moves them)")
 		row("claude command", cfg.ClaudeCode.Command)
 		row("plugin source", cfg.Plugin.Source)
 		row("file", home.Display(e.home.ConfigPath()))
