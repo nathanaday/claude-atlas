@@ -21,7 +21,9 @@ import (
 
 // The atlas tools: the whole atlas as one read, and the writes that configure it. They
 // bind the same functions the view calls, once per call over a config loaded for that
-// call, because the CLI in another process may change config.json between two calls.
+// call, because the CLI in another process may change config.json between two calls. A
+// write ends in a refresh, so the stored registry `claude-atlas list` and the view read
+// carries the change, and the tool answers from the index that refresh derived.
 
 // bind loads the config and binds the atlas actions for one call.
 func (s *Server) bind() (actions.Atlas, *home.Config, error) {
@@ -175,10 +177,10 @@ func (s *Server) vaultTool(ctx context.Context, req *mcp.CallToolRequest, a Vaul
 		if err != nil {
 			return nil, VaultToolOut{}, err
 		}
-		if err := vaults.CheckForget(cfg, en.Path); err != nil {
+		if err := acts.Unregister(en); err != nil {
 			return nil, VaultToolOut{}, err
 		}
-		if err := acts.Unregister(en); err != nil {
+		if _, _, err := acts.Refresh(); err != nil {
 			return nil, VaultToolOut{}, err
 		}
 		return nil, VaultToolOut{Forgotten: en.Path}, nil
@@ -187,16 +189,21 @@ func (s *Server) vaultTool(ctx context.Context, req *mcp.CallToolRequest, a Vaul
 }
 
 // vaultChoice turns the create and adopt arguments into what Create takes, with the
-// mount and the members resolved to ids before anything is written.
+// mount and the members resolved to ids before anything is written. An adopt with no
+// kind keeps the kind the vault already has; a create with no kind makes a project.
 func vaultChoice(ix *registry.Index, cfg *home.Config, a VaultToolArgs) (actions.AddVault, error) {
-	kind := vault.Project
-	if a.Kind != "" {
+	adopt := a.Action == "adopt"
+	var kind vault.Kind
+	switch {
+	case a.Kind != "":
 		var err error
 		if kind, err = vault.ParseKind(a.Kind); err != nil {
 			return actions.AddVault{}, err
 		}
+	case !adopt:
+		kind = vault.Project
 	}
-	choice := actions.AddVault{Kind: kind, Name: a.Name, Mode: a.Mode, Adopt: a.Action == "adopt"}
+	choice := actions.AddVault{Kind: kind, Name: a.Name, Mode: a.Mode, Adopt: adopt}
 	if a.Tags != nil {
 		choice.Tags = *a.Tags
 	}
@@ -206,10 +213,22 @@ func vaultChoice(ix *registry.Index, cfg *home.Config, a VaultToolArgs) (actions
 	if a.Access != nil {
 		choice.Access = *a.Access
 	}
+	if len(choice.Tags) > 0 && kind == vault.Knowledge {
+		return actions.AddVault{}, errors.New("tags are a project's; a knowledge base has a scope")
+	}
+	if choice.Scope != "" && kind == vault.Project {
+		return actions.AddVault{}, errors.New("scope is a knowledge base's; a project has tags")
+	}
+	if choice.Access != "" && !vault.ValidAccess(choice.Access, true) {
+		return actions.AddVault{}, fmt.Errorf("access must be open or guarded, not %q", choice.Access)
+	}
 	switch {
 	case choice.Adopt:
 		if a.Path == "" {
 			return actions.AddVault{}, errors.New("adopt needs path: the folder to adopt")
+		}
+		if a.Mount != "" || len(a.Members) > 0 {
+			return actions.AddVault{}, errors.New("mount and members are for create; mount an adopted vault with the mount tool, and gather members with the cluster tool")
 		}
 		abs, err := filepath.Abs(home.Expand(a.Path))
 		if err != nil {
@@ -274,9 +293,10 @@ func vaultChoice(ix *registry.Index, cfg *home.Config, a VaultToolArgs) (actions
 	return choice, nil
 }
 
-// entryOut scans again and returns the vault at path as the atlas now sees it.
+// entryOut rewrites the registry after a write, so `claude-atlas list` and the view show
+// the change, and returns the vault at path as the atlas now sees it.
 func (s *Server) entryOut(acts actions.Atlas, path string) (*mcp.CallToolResult, VaultToolOut, error) {
-	ix, err := acts.Scan()
+	ix, _, err := acts.Refresh()
 	if err != nil {
 		return nil, VaultToolOut{}, err
 	}
@@ -374,7 +394,7 @@ func (s *Server) mountTool(ctx context.Context, req *mcp.CallToolRequest, a Moun
 		if err := acts.Unmount(project, mountTarget(ix, a.Knowledge)); err != nil {
 			return nil, MountToolOut{}, err
 		}
-		after, err := acts.Scan()
+		after, _, err := acts.Refresh()
 		if err != nil {
 			return nil, MountToolOut{}, err
 		}
@@ -418,7 +438,7 @@ func (s *Server) mountTool(ctx context.Context, req *mcp.CallToolRequest, a Moun
 				return nil, MountToolOut{}, err
 			}
 		}
-		after, err := acts.Scan()
+		after, _, err := acts.Refresh()
 		if err != nil {
 			return nil, MountToolOut{}, err
 		}
@@ -431,9 +451,10 @@ func (s *Server) mountTool(ctx context.Context, req *mcp.CallToolRequest, a Moun
 	return nil, MountToolOut{}, fmt.Errorf("action must be mount, unmount, access, grant, or revoke, not %q", a.Action)
 }
 
-// mountOut scans again and returns the project's mount by name, with its effective access.
+// mountOut rewrites the registry after a write and returns the project's mount by name,
+// with its effective access.
 func (s *Server) mountOut(acts actions.Atlas, projectID, mountName string) (*mcp.CallToolResult, MountToolOut, error) {
-	ix, err := acts.Scan()
+	ix, _, err := acts.Refresh()
 	if err != nil {
 		return nil, MountToolOut{}, err
 	}
@@ -510,7 +531,7 @@ func (s *Server) clusterTool(ctx context.Context, req *mcp.CallToolRequest, a Cl
 	default:
 		return nil, ClusterToolOut{}, fmt.Errorf("action must be add or remove, not %q", a.Action)
 	}
-	after, err := acts.Scan()
+	after, _, err := acts.Refresh()
 	if err != nil {
 		return nil, ClusterToolOut{}, err
 	}
@@ -583,10 +604,21 @@ func (s *Server) repoTool(ctx context.Context, req *mcp.CallToolRequest, a RepoT
 		}
 		name = repo.Name
 	case "unlink":
+		// The name as the project records it, like every other action returns; when the
+		// project records no such repository, RemoveRepo says so.
+		unlinked := a.Name
+		for _, r := range project.Repos {
+			if r.Name == a.Name {
+				unlinked = r.Name
+			}
+		}
 		if err := acts.RemoveRepo(project, a.Name); err != nil {
 			return nil, RepoToolOut{}, err
 		}
-		return nil, RepoToolOut{Unlinked: a.Name}, nil
+		if _, _, err := acts.Refresh(); err != nil {
+			return nil, RepoToolOut{}, err
+		}
+		return nil, RepoToolOut{Unlinked: unlinked}, nil
 	case "edit":
 		repo, err := acts.EditRepo(project, a.Name, vaults.RepoEdit{Remote: a.Remote, Changes: a.Changes, Path: home.Expand(a.Path)})
 		if err != nil {
@@ -596,7 +628,7 @@ func (s *Server) repoTool(ctx context.Context, req *mcp.CallToolRequest, a RepoT
 	default:
 		return nil, RepoToolOut{}, fmt.Errorf("action must be link, new, clone, unlink, or edit, not %q", a.Action)
 	}
-	after, err := acts.Scan()
+	after, _, err := acts.Refresh()
 	if err != nil {
 		return nil, RepoToolOut{}, err
 	}
@@ -682,6 +714,10 @@ func (s *Server) stageTool(ctx context.Context, req *mcp.CallToolRequest, a Stag
 	}
 	res, remembered, err := acts.Stage(project, plan)
 	if err != nil {
+		return nil, StageOut{}, err
+	}
+	// The inbox count is part of a vault's derived state, so the registry is rewritten.
+	if _, _, err := acts.Refresh(); err != nil {
 		return nil, StageOut{}, err
 	}
 	out.Result, out.Remembered = res, remembered

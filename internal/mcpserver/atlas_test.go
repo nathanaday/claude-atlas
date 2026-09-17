@@ -9,6 +9,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/links"
+	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -84,6 +85,19 @@ func TestVaultCreateAdoptEditForget(t *testing.T) {
 	}
 	if msg := c.call("vault", map[string]any{"action": "create", "kind": "project"}, nil); !strings.Contains(msg, "needs name") {
 		t.Fatalf("no name: %q", msg)
+	}
+	// Facts of the other kind, and a bad access, are refused before anything is written.
+	if msg := c.call("vault", map[string]any{"action": "create", "kind": "knowledge", "name": "bad", "tags": []string{"x"}}, nil); !strings.Contains(msg, "tags are a project's") {
+		t.Fatalf("tags on a knowledge base: %q", msg)
+	}
+	if msg := c.call("vault", map[string]any{"action": "create", "kind": "project", "name": "bad", "scope": "x"}, nil); !strings.Contains(msg, "scope is a knowledge base's") {
+		t.Fatalf("scope on a project: %q", msg)
+	}
+	if msg := c.call("vault", map[string]any{"action": "create", "kind": "knowledge", "name": "bad", "access": "write"}, nil); !strings.Contains(msg, "open or guarded") {
+		t.Fatalf("bad access: %q", msg)
+	}
+	if _, err := os.Stat(vaults.PathFor(cfg.VaultsDir, vault.Knowledge, "bad")); !os.IsNotExist(err) {
+		t.Fatal("a refused create writes nothing")
 	}
 	// Edit: a rename moves the folder; an empty scope clears it; access stays.
 	out = VaultToolOut{}
@@ -335,5 +349,60 @@ func TestSettingsAndStage(t *testing.T) {
 	}
 	if msg := c.call("stage", map[string]any{"project": kb.Root}, nil); !strings.Contains(msg, "no inbox") {
 		t.Fatalf("a knowledge base: %q", msg)
+	}
+}
+
+func TestVaultAdoptKeepsTheKindTheVaultHas(t *testing.T) {
+	h, _, p, _ := mounted(t)
+	c := connectIn(t, h, p.Root)
+	// A knowledge base outside the vaults directory, which is the only vault the atlas
+	// can forget.
+	outside := filepath.Join(t.TempDir(), "papers")
+	var out VaultToolOut
+	if msg := c.call("vault", map[string]any{"action": "create", "kind": "knowledge", "name": "papers", "path": outside}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Vault == nil || out.Vault.Kind != vault.Knowledge {
+		t.Fatalf("create: %+v", out.Vault)
+	}
+	if msg := c.call("vault", map[string]any{"action": "forget", "target": outside}, nil); msg != "" {
+		t.Fatal(msg)
+	}
+	// Adopting it back with no kind keeps the kind its identity file names.
+	out = VaultToolOut{}
+	if msg := c.call("vault", map[string]any{"action": "adopt", "path": outside}, &out); msg != "" {
+		t.Fatal(msg)
+	}
+	if out.Vault == nil || out.Vault.Kind != vault.Knowledge {
+		t.Fatalf("adopt keeps the kind: %+v", out.Vault)
+	}
+	// mount and members belong to create; adopt says so rather than dropping them.
+	if msg := c.call("vault", map[string]any{"action": "adopt", "path": outside, "mount": "kb"}, nil); !strings.Contains(msg, "for create") {
+		t.Fatalf("mount on adopt: %q", msg)
+	}
+	if msg := c.call("vault", map[string]any{"action": "adopt", "path": outside, "members": []string{"kb"}}, nil); !strings.Contains(msg, "for create") {
+		t.Fatalf("members on adopt: %q", msg)
+	}
+}
+
+func TestVaultWriteRewritesTheRegistry(t *testing.T) {
+	h, cfg, p, _ := mounted(t)
+	c := connectIn(t, h, p.Root)
+	if msg := c.call("vault", map[string]any{"action": "create", "kind": "project", "name": "q"}, nil); msg != "" {
+		t.Fatal(msg)
+	}
+	if _, err := os.Stat(registry.File(h.StateDir())); err != nil {
+		t.Fatalf("a write rewrites the registry: %v", err)
+	}
+	entries, err := refresh.Entries(h, cfg, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range entries {
+		found = found || e.Name == "q"
+	}
+	if !found {
+		t.Fatalf("the stored registry lists the new project: %+v", entries)
 	}
 }

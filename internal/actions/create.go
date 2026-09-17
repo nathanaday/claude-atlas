@@ -28,9 +28,13 @@ func createOrAdopt(h home.Home, cfg *home.Config, c *console.Console, choice Add
 	opts := vault.Options{Kind: choice.Kind, Mode: mode, Name: choice.Name}
 	switch {
 	case choice.Adopt:
-		if _, err := vault.Adopt(choice.Path, opts, time.Now()); err != nil {
+		// An adopt with no kind keeps the vault's own, and recordFacts files the facts
+		// under the kind the vault turned out to have.
+		res, err := vault.Adopt(choice.Path, opts, time.Now())
+		if err != nil {
 			return "", err
 		}
+		choice.Kind = res.Kind
 	case choice.InRepo != "":
 		path, err := vaults.CreateIn(choice.InRepo, opts, nil)
 		if err != nil {
