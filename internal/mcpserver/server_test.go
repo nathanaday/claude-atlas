@@ -193,7 +193,7 @@ func TestToolsListAndStatus(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, ",") != "apply,atlas,capture,cluster,history,inbox,lint,mode,mount,mounts,plan,plant,repo,repos,route,status,stub,tasks,undo,vault" {
+	if strings.Join(names, ",") != "apply,atlas,capture,cluster,history,inbox,lint,mode,mount,mounts,plan,plant,repo,repos,route,settings,stage,status,stub,tasks,undo,vault" {
 		t.Fatalf("tools %v", names)
 	}
 	if strings.Join(ToolNames(), ",") != strings.Join(names, ",") {

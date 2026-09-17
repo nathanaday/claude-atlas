@@ -1171,6 +1171,10 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "Add a knowledge base to a cluster or drop a member; action is add or remove. A cluster is a knowledge base with members, and a project that mounts it reaches every member. State the change and get a yes before calling."}, s.clusterTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "repo",
 		Description: "Change a project's repositories: link a folder (init makes a plain folder one), create one, clone a URL, unlink one (the folder stays), or edit its remote, folder, or change policy (pr or commit); action is link, new, clone, unlink, or edit. State the change and get a yes before calling."}, s.repoTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "settings",
+		Description: "Set an atlas setting and return them all: new_days (how long a vault counts as new) and repo_changes (the change policy a newly linked repository takes, commit or pr). With no arguments it only reads."}, s.settingsTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "stage",
+		Description: "Copy files or folders from outside a project into its inbox, skipping what the project already captured or already holds; omit paths to stage what is new in the folders it staged from before. dry_run plans and copies nothing. Then ingest with the wiki-ingest skill."}, s.stageTool)
 	return server
 }
 
@@ -1181,7 +1185,7 @@ func Run(ctx context.Context, opts Options) error {
 
 // ToolNames lists every tool MCP registers, sorted, for docs and tests.
 func ToolNames() []string {
-	names := []string{"apply", "atlas", "capture", "cluster", "history", "inbox", "lint", "mode", "mount", "mounts", "plan", "plant", "repo", "repos", "route", "status", "stub", "tasks", "undo", "vault"}
+	names := []string{"apply", "atlas", "capture", "cluster", "history", "inbox", "lint", "mode", "mount", "mounts", "plan", "plant", "repo", "repos", "route", "settings", "stage", "status", "stub", "tasks", "undo", "vault"}
 	sort.Strings(names)
 	return names
 }

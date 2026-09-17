@@ -10,6 +10,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nathanaday/claude-atlas/internal/actions"
+	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
@@ -611,4 +612,81 @@ func (s *Server) repoTool(ctx context.Context, req *mcp.CallToolRequest, a RepoT
 		}
 	}
 	return nil, RepoToolOut{}, fmt.Errorf("%s is recorded but the scan does not list it; call atlas with refresh", name)
+}
+
+type SettingsArgs struct {
+	NewDays     *int    `json:"new_days,omitempty" jsonschema:"a vault is new for this many days after its creation; 0 turns it off"`
+	RepoChanges *string `json:"repo_changes,omitempty" jsonschema:"how a newly linked repository lands its changes: commit or pr"`
+}
+
+func (s *Server) settingsTool(ctx context.Context, req *mcp.CallToolRequest, a SettingsArgs) (*mcp.CallToolResult, Settings, error) {
+	acts, cfg, err := s.bind()
+	if err != nil {
+		return nil, Settings{}, err
+	}
+	if a.NewDays != nil {
+		if err := cfg.SetNewDays(*a.NewDays); err != nil {
+			return nil, Settings{}, err
+		}
+	}
+	if a.RepoChanges != nil {
+		if err := cfg.SetDefaultChanges(*a.RepoChanges); err != nil {
+			return nil, Settings{}, err
+		}
+	}
+	if a.NewDays != nil || a.RepoChanges != nil {
+		if err := s.home().Save(cfg); err != nil {
+			return nil, Settings{}, err
+		}
+		if _, _, err := acts.Refresh(); err != nil {
+			return nil, Settings{}, err
+		}
+	}
+	return nil, settingsOf(cfg), nil
+}
+
+type StageArgs struct {
+	Project string   `json:"project" jsonschema:"the project whose inbox receives the files, by name, id, or path"`
+	Paths   []string `json:"paths,omitempty" jsonschema:"files or folders outside the vault; omit to stage what is new in the folders the project staged from before"`
+	DryRun  bool     `json:"dry_run,omitempty" jsonschema:"plan only: say what would be copied and copy nothing"`
+}
+
+// StageOut is the plan, and after a copy, what was copied and the folders the project
+// now stages from when paths is omitted.
+type StageOut struct {
+	Plan       *capture.StagePlan   `json:"plan"`
+	Result     *capture.StageResult `json:"result,omitempty"`
+	Remembered []string             `json:"remembered,omitempty"`
+}
+
+func (s *Server) stageTool(ctx context.Context, req *mcp.CallToolRequest, a StageArgs) (*mcp.CallToolResult, StageOut, error) {
+	acts, _, err := s.bind()
+	if err != nil {
+		return nil, StageOut{}, err
+	}
+	ix, err := acts.Scan()
+	if err != nil {
+		return nil, StageOut{}, err
+	}
+	project, err := entryOf(ix, a.Project)
+	if err != nil {
+		return nil, StageOut{}, err
+	}
+	if project.Kind != vault.Project {
+		return nil, StageOut{}, fmt.Errorf("%s is a knowledge base and has no inbox; stage into a project that mounts it", project.Name)
+	}
+	plan, err := acts.StagePlan(project, a.Paths)
+	if err != nil {
+		return nil, StageOut{}, err
+	}
+	out := StageOut{Plan: plan}
+	if a.DryRun {
+		return nil, out, nil
+	}
+	res, remembered, err := acts.Stage(project, plan)
+	if err != nil {
+		return nil, StageOut{}, err
+	}
+	out.Result, out.Remembered = res, remembered
+	return nil, out, nil
 }

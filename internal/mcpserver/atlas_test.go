@@ -241,12 +241,17 @@ func TestRepoLinkNewEditUnlink(t *testing.T) {
 	if out.Repo == nil || out.Repo.Name != "code" || out.Repo.Changes != links.ChangesCommit || !links.IsRepo(out.Repo.Path) {
 		t.Fatalf("link: %+v", out.Repo)
 	}
+	// out is reset before each reuse: its Repo field is a pointer json.Unmarshal fills in
+	// place, so a response that omits repo (omitempty) would otherwise leak the previous
+	// response's value.
+	out = RepoToolOut{}
 	if msg := c.call("repo", map[string]any{"action": "edit", "project": "p", "name": "code", "changes": "pr"}, &out); msg != "" || out.Repo.Changes != links.ChangesPR {
 		t.Fatalf("edit: %q %+v", msg, out.Repo)
 	}
 	if msg := c.call("repo", map[string]any{"action": "edit", "project": "p", "name": "code", "changes": "maybe"}, nil); !strings.Contains(msg, "pr or commit") {
 		t.Fatalf("bad policy: %q", msg)
 	}
+	out = RepoToolOut{}
 	if msg := c.call("repo", map[string]any{"action": "new", "project": "p", "name": "tool"}, &out); msg != "" {
 		t.Fatal(msg)
 	}
@@ -257,6 +262,7 @@ func TestRepoLinkNewEditUnlink(t *testing.T) {
 	if msg := c.call("repo", map[string]any{"action": "unlink", "project": "p", "name": "tool"}, nil); msg == "" {
 		t.Fatal("a repository under repos/ is refused")
 	}
+	out = RepoToolOut{}
 	if msg := c.call("repo", map[string]any{"action": "unlink", "project": "p", "name": "code"}, &out); msg != "" || out.Unlinked != "code" {
 		t.Fatalf("unlink: %q %+v", msg, out)
 	}
@@ -284,5 +290,50 @@ func TestRepoCloneFromAFileURL(t *testing.T) {
 	}
 	if msg := c.call("repo", map[string]any{"action": "link", "project": "p", "path": "https://example.com/x.git"}, nil); !strings.Contains(msg, "clone") {
 		t.Fatalf("a URL on link points at clone: %q", msg)
+	}
+}
+
+func TestSettingsAndStage(t *testing.T) {
+	h, _, p, kb := mounted(t)
+	c := connectIn(t, h, p.Root)
+	var st Settings
+	if msg := c.call("settings", map[string]any{"new_days": 3, "repo_changes": "pr"}, &st); msg != "" || st.NewDays != 3 || st.RepoChanges != "pr" {
+		t.Fatalf("settings: %q %+v", msg, st)
+	}
+	if msg := c.call("settings", map[string]any{"repo_changes": "maybe"}, nil); msg == "" {
+		t.Fatal("a bad policy is refused")
+	}
+	if msg := c.call("settings", map[string]any{}, &st); msg != "" || st.NewDays != 3 || st.RepoChanges != "pr" {
+		t.Fatalf("a read returns what was saved: %q %+v", msg, st)
+	}
+	src := filepath.Join(t.TempDir(), "notes")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.md"), []byte("# a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out StageOut
+	if msg := c.call("stage", map[string]any{"project": "p", "paths": []string{src}, "dry_run": true}, &out); msg != "" || out.Plan == nil || len(out.Plan.New) != 1 || out.Result != nil {
+		t.Fatalf("dry run: %q %+v", msg, out)
+	}
+	if _, err := os.Stat(p.Path("inbox/notes/a.md")); !os.IsNotExist(err) {
+		t.Fatal("a dry run copies nothing")
+	}
+	// out is reset before each reuse: Result and Remembered are omitempty, so a response
+	// that omits them would otherwise leak the previous response's value.
+	out = StageOut{}
+	if msg := c.call("stage", map[string]any{"project": "p", "paths": []string{src}}, &out); msg != "" || out.Result == nil || len(out.Result.Staged) != 1 || len(out.Remembered) != 1 {
+		t.Fatalf("stage: %q %+v", msg, out)
+	}
+	if _, err := os.Stat(p.Path("inbox/notes/a.md")); err != nil {
+		t.Fatal("the file is in the inbox")
+	}
+	out = StageOut{}
+	if msg := c.call("stage", map[string]any{"project": "p"}, &out); msg != "" || len(out.Plan.New) != 0 || len(out.Plan.Unchanged) != 1 {
+		t.Fatalf("the remembered folder has nothing new: %q %+v", msg, out.Plan)
+	}
+	if msg := c.call("stage", map[string]any{"project": kb.Root}, nil); !strings.Contains(msg, "no inbox") {
+		t.Fatalf("a knowledge base: %q", msg)
 	}
 }
