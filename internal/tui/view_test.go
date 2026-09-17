@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nathanaday/claude-atlas/internal/capture"
 	"github.com/nathanaday/claude-atlas/internal/claudecode"
@@ -172,6 +173,38 @@ func TestTabBarAndArrows(t *testing.T) {
 	}
 }
 
+// Every frame is exactly as tall as the screen and no wider, so the terminal never
+// scrolls the tab bar out of sight on one tab and leaves it in place on another.
+func TestEveryTabFillsTheScreenExactly(t *testing.T) {
+	hooks := Hooks{
+		Load:  func() ([]registry.Entry, error) { return entriesOf(sample()), nil },
+		Tasks: func(registry.Entry) (tasks.Ledger, []string, error) { return tasks.Empty(), nil, nil },
+	}
+	for _, size := range []tea.WindowSizeMsg{{Width: 120, Height: 40}, {Width: 80, Height: 24}, {Width: 60, Height: 12}} {
+		v := newView(sample(), Opener{}, hooks)
+		next, _ := v.Update(size)
+		v = next.(view)
+		for _, name := range []string{"Projects", "Knowledge", "Tasks", "Problems"} {
+			out := v.View()
+			if got := strings.Count(out, "\n") + 1; got != size.Height {
+				t.Errorf("%s at %dx%d is %d lines, want %d:\n%s", name, size.Width, size.Height, got, size.Height, out)
+			}
+			for _, line := range strings.Split(out, "\n") {
+				if w := lipgloss.Width(line); w > size.Width {
+					t.Errorf("%s at %dx%d: %q is %d columns, want at most %d", name, size.Width, size.Height, line, w, size.Width)
+				}
+			}
+			v = pressV(v, tea.KeyRight)
+		}
+		// Expanding a vault and turning help on do not change the frame's height either.
+		v = keyV(findVault(t, v, "p3"), "h")
+		v = pressV(v, tea.KeyEnter)
+		if got := strings.Count(v.View(), "\n") + 1; got != size.Height {
+			t.Errorf("expanded with help at %dx%d is %d lines, want %d", size.Width, size.Height, got, size.Height)
+		}
+	}
+}
+
 func TestProjectsTabDrawsTheConnectors(t *testing.T) {
 	v := newView(sample(), Opener{}, Hooks{})
 	out := v.View()
@@ -206,7 +239,7 @@ func TestKnowledgeTabCountsThenExpands(t *testing.T) {
 	v = pressV(v, tea.KeyEnter)
 	out = v.View()
 	t.Logf("\n%s", out)
-	for _, want := range []string{"◀╌╌╌╌ course   read", "grant  gone-0000   read · no project with id gone-0000", "Scope", "papers sources", "Access", "open", "Grant", "Enter collapse"} {
+	for _, want := range []string{"◀╌╌╌╌ course   read", "grant  gone-0000   read", "Scope", "papers sources", "Access", "open", "Grant", "Enter collapse"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expanded knowledge base missing %q", want)
 		}
@@ -267,10 +300,11 @@ func TestFooterNamesTheTabsKeysUntilHelp(t *testing.T) {
 		}
 	}
 	v = keyV(v, "h")
-	out = v.View()
+	// The hint lines wrap to the screen, so the keys are checked in pieces.
+	out = stripANSI(v.View())
 	for _, want := range []string{
-		"↑↓ move · Enter details · o Obsidian · c Claude · i ingest · t tasks · l repos · m mounts · e edit",
-		"←→ tabs · n new project · N new knowledge base · a adopt · R refresh · h hide help · q quit",
+		"↑↓ move · Enter details · o Obsidian · c Claude · i ingest", "m mounts",
+		"←→ tabs · n new project · N new knowledge base · a adopt", "h hide help · q quit",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help missing %q:\n%s", want, out)
@@ -303,16 +337,16 @@ func TestFooterNamesTheTabsKeysUntilHelp(t *testing.T) {
 	if !strings.Contains(v.View(), "Enter collapse · n new project") {
 		t.Fatalf("expanded footer:\n%s", v.View())
 	}
-	// Help stays on across tabs, and the body gives it the second line.
+	// Help stays on across tabs, and the body gives up the lines the hints take.
 	v = keyV(v, "h")
-	tall := v.bodyHeight()
+	withHelp := v.bodyHeight()
 	v = pressV(v, tea.KeyRight)
-	if !v.help || !strings.Contains(v.View(), "h hide help") || v.bodyHeight() != tall {
-		t.Fatalf("help across tabs: help=%v body=%d\n%s", v.help, v.bodyHeight(), v.View())
+	if !v.help || !strings.Contains(v.View(), "h hide help") {
+		t.Fatalf("help across tabs: help=%v\n%s", v.help, v.View())
 	}
 	v = keyV(v, "h")
-	if v.bodyHeight() != tall+1 {
-		t.Fatalf("help off gives the body its line back: %d vs %d", v.bodyHeight(), tall)
+	if v.bodyHeight() <= withHelp {
+		t.Fatalf("help off gives the body its lines back: %d vs %d", v.bodyHeight(), withHelp)
 	}
 }
 

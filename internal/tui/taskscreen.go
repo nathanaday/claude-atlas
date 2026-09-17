@@ -384,11 +384,11 @@ func (s tasksScreen) view() string {
 		}
 	}
 	if len(s.rows) == 0 {
+		empty := "no open tasks in any project; press t on a project to plant one"
 		if s.item != nil {
-			b.WriteString("  " + dim.Render("no open tasks; press p to plant one") + "\n")
-		} else {
-			b.WriteString("  " + dim.Render("no open tasks in any project; press t on a project to plant one") + "\n")
+			empty = "no open tasks; press p to plant one"
 		}
+		b.WriteString("  " + dim.Render(clip(empty, max(20, s.width-4))) + "\n")
 	}
 	all, _ := s.boxes()
 	lines, more := s.window(all)
@@ -399,7 +399,8 @@ func (s tasksScreen) view() string {
 		fmt.Fprintf(&b, "  %s\n", dim.Render(fmt.Sprintf("… %d more lines", more)))
 	}
 	if s.notes > 0 {
-		fmt.Fprintf(&b, "  %s\n", dim.Render(fmt.Sprintf("%d task note%s waiting in inbox/tasks/; c then /claude-atlas:task-plant turns them into tasks", s.notes, plural(s.notes))))
+		notes := fmt.Sprintf("%d task note%s waiting in inbox/tasks/; c then /claude-atlas:task-plant turns them into tasks", s.notes, plural(s.notes))
+		fmt.Fprintf(&b, "  %s\n", dim.Render(clip(notes, max(20, s.width-4))))
 	}
 	b.WriteString("\n")
 	switch s.mode {

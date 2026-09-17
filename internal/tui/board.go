@@ -4,6 +4,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
@@ -168,7 +170,9 @@ func boxWidth(width int) int { return min(40, max(26, width/2-4)) }
 // labelWidth is what is left for a connector's label after the indent, the box with
 // its borders, and the arrow.
 func (b board) labelWidth() int {
-	return max(12, b.width-2-(boxWidth(b.width)+2)-len([]rune(arrowOut)))
+	// One column stays free: a connector that filled the screen would wrap onto a line
+	// of its own and push the frame past the last row.
+	return max(12, b.width-3-(boxWidth(b.width)+2)-len([]rune(arrowOut)))
 }
 
 // layout renders the boxes into lines and records the span of each vault. A group's
@@ -236,16 +240,19 @@ func (b *board) render(it *Item, selected bool, start int) {
 		content = append(content, "")
 	}
 	box := boxStyle(e.Kind, selected).Width(boxWidth(b.width)).Render(strings.Join(content, "\n"))
+	// The view indents every line by two, so a line stops two short of the screen. One
+	// that reached the edge would wrap and push the frame past the last row.
+	narrow := lipgloss.NewStyle().MaxWidth(max(10, b.width-2))
 	var lines []string
 	for i, line := range strings.Split(box, "\n") {
 		if i >= 1 && i-1 < len(side) {
 			line += side[i-1]
 		}
-		lines = append(lines, line)
+		lines = append(lines, narrow.Render(line))
 	}
 	if b.expanded[e.Path] {
 		for _, line := range detailLines(e) {
-			lines = append(lines, "   "+line)
+			lines = append(lines, narrow.Render("   "+line))
 		}
 	}
 	b.lines = append(b.lines, focus(lines, selected)...)

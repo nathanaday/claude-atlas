@@ -856,13 +856,23 @@ func (v view) footer(hints ...string) string {
 	}
 	out := ""
 	for _, line := range hints {
-		out += "  " + dim.Render(line) + "\n"
+		out += v.wrapped(dim, line)
 	}
 	if v.status != "" {
-		out += "  " + okSt.Render(v.status) + "\n"
+		out += v.wrapped(okSt, v.status)
 	}
 	if v.errMsg != "" {
-		out += "  " + errSt.Render(v.errMsg) + "\n"
+		out += v.wrapped(errSt, v.errMsg)
+	}
+	return out
+}
+
+// wrapped is one footer line, broken to the screen so it never runs past the last row.
+// Wrapping here keeps the whole message and keeps the frame's height countable.
+func (v view) wrapped(style lipgloss.Style, text string) string {
+	out := ""
+	for _, line := range strings.Split(style.Width(max(20, v.width-4)).Render(text), "\n") {
+		out += "  " + strings.TrimRight(line, " ") + "\n"
 	}
 	return out
 }
@@ -933,20 +943,38 @@ func (v view) count(t tab) (int, bool) {
 	return n, known
 }
 
+// fit makes a frame exactly as tall as the screen, so the tab bar sits on the same row
+// whatever the tab holds. A frame the terminal has to scroll moves everything above the
+// fold out of sight; a short one leaves the top where it is. trim cuts a frame that
+// somehow grew, which the board's own line budget already prevents.
+func (v view) fit(frame string, trim bool) string {
+	out := strings.Split(strings.TrimSuffix(frame, "\n"), "\n")
+	if v.height <= 0 {
+		return strings.Join(out, "\n")
+	}
+	for len(out) < v.height {
+		out = append(out, "")
+	}
+	if trim && len(out) > v.height {
+		out = out[:v.height]
+	}
+	return strings.Join(out, "\n")
+}
+
 func (v view) View() string {
 	switch {
 	case v.edit != nil:
-		return v.edit.view()
+		return v.fit(v.edit.view(), false)
 	case v.add != nil:
-		return v.add.View()
+		return v.fit(v.add.View(), false)
 	case v.ingest != nil:
-		return v.ingest.view()
+		return v.fit(v.ingest.view(), false)
 	case v.links != nil:
-		return v.links.view()
+		return v.fit(v.links.view(), false)
 	case v.mounts != nil:
-		return v.mounts.view()
+		return v.fit(v.mounts.view(), false)
 	case v.tasks != nil:
-		return v.tasks.view()
+		return v.fit(v.tasks.view(), false)
 	}
 	var b strings.Builder
 	b.WriteString(v.head())
@@ -957,13 +985,15 @@ func (v view) View() string {
 			b.WriteString(v.tasksTab.view())
 		}
 		b.WriteString(v.footer(v.hints()...))
-		return b.String()
+		return v.fit(b.String(), true)
 	}
 	bd := v.board()
+	body := v.bodyHeight()
 	if len(bd.items) == 0 {
 		b.WriteString("  " + dim.Render(empties[v.tab]) + "\n")
+		body--
 	}
-	lines, more := bd.window(v.bodyHeight())
+	lines, more := bd.window(body)
 	for _, line := range lines {
 		b.WriteString("  " + line + "\n")
 	}
@@ -971,7 +1001,7 @@ func (v view) View() string {
 		b.WriteString("  " + dim.Render(fmt.Sprintf("… %d more lines", more)) + "\n")
 	}
 	b.WriteString("\n" + v.footer(v.hints()...))
-	return b.String()
+	return v.fit(b.String(), true)
 }
 
 // hints is the footer. With help off it names the tab's own keys: Enter for the vault
