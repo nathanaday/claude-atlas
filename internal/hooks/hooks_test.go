@@ -180,9 +180,10 @@ func TestSessionStartListsTasksAndFindsAVaultThroughTheAtlas(t *testing.T) {
 			t.Errorf("missing %q in repo session:\n%s", want, text)
 		}
 	}
-	// With a remote and no policy, the session is told to open pull requests.
+	// With a remote and no policy recorded, the session is told to open pull requests.
 	if err := vault.UpdateConfig(v.Root, "remote", now, func(c *vault.Config) error {
 		c.Repos[0].Remote = "git@example.com:a/code.git"
+		c.Repos[0].Changes = ""
 		return nil
 	}); err != nil {
 		t.Fatal(err)

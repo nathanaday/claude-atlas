@@ -430,8 +430,10 @@ func TestReposToolAndStatusInARepository(t *testing.T) {
 	if _, _, err := vaults.CreateRepo(h, cfg, *entry, "code", "", now); err != nil {
 		t.Fatal(err)
 	}
+	// No policy recorded and a remote: the tools fall back to pull requests.
 	if err := vault.UpdateConfig(v.Root, "remote", now, func(c *vault.Config) error {
 		c.Repos[0].Remote = "git@example.com:a/code.git"
+		c.Repos[0].Changes = ""
 		return nil
 	}); err != nil {
 		t.Fatal(err)

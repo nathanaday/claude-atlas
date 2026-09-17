@@ -124,7 +124,10 @@ A project:
 - `tags` replaces the category tree. `view` groups projects by tag.
 - `repos` records a repository by name, with its remote and its change policy
   (`pr` or `commit`, as today). A repository at `<project>/repos/<name>/`
-  needs no path. The atlas config records the path of any other.
+  needs no path. The atlas config records the path of any other. A git
+  repository found under `repos/` is linked by `refresh`, with the atlas
+  config's `default_repo_changes` as its policy, so the folder is the gesture;
+  `unlink` then refuses until the folder moves out.
 - `mode` changes through a `config` operation, as today. Every other field
   changes through the CLI (`mount`, `unmount`, `grant`, `revoke`, `edit`),
   which commits the file as a `setup` operation.

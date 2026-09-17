@@ -108,40 +108,60 @@ func taskSummaryFor(v *vault.Vault, today time.Time) *registry.TaskSummary {
 	return sum
 }
 
-// MountChange is what one project's mount symlinks needed: the repair itself, and Error
-// for what stopped one of them.
-type MountChange struct {
+// ProjectChange is what one project needed to bring its local state up to date: the
+// mount symlinks the repair touched, the repositories adoption linked, and Error for
+// what stopped one of them.
+type ProjectChange struct {
 	Project string
 	vaults.MountRepair
-	Error string
+	// Adopted names the repositories found under repos/ and written to the identity file.
+	Adopted []string
+	Error   string
 }
 
 // any reports whether the change is worth a line.
-func (c MountChange) any() bool {
-	return len(c.Created)+len(c.Repaired)+len(c.Removed)+len(c.Missing) > 0 || c.Error != ""
+func (c ProjectChange) any() bool {
+	return len(c.Created)+len(c.Repaired)+len(c.Removed)+len(c.Missing)+len(c.Adopted) > 0 || c.Error != ""
 }
 
 // Registry scans, derives every readable entry, writes the registry file, and returns the
-// entries. With ensure, it recreates every project's mount symlinks first and reports what
-// each project needed; one project's failure does not stop the others.
-func Registry(cfg *home.Config, stateDir string, today time.Time, ensure bool) ([]registry.Entry, *registry.Index, []MountChange, error) {
+// entries. With ensure, it first links every git repository waiting under a project's
+// repos/ and recreates its mount symlinks, then reports what each project needed; one
+// project's failure does not stop the others. Adoption changes identity files, so the
+// scan runs again afterwards and the caller sees the repositories it just linked.
+func Registry(h home.Home, cfg *home.Config, stateDir string, today time.Time, ensure bool) ([]registry.Entry, *registry.Index, []ProjectChange, error) {
 	ix, err := registry.Scan(cfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	var changes []MountChange
+	var changes []ProjectChange
 	if ensure {
+		adopted := false
 		for _, e := range ix.Entries {
 			if e.Error != "" || e.Kind != vault.Project {
 				continue
 			}
+			change := ProjectChange{Project: e.Name}
+			repos, adoptErr := vaults.AdoptRepos(h, cfg, e, today)
+			for _, r := range repos {
+				change.Adopted = append(change.Adopted, r.Name)
+				adopted = true
+			}
+			if adoptErr != nil {
+				change.Error = adoptErr.Error()
+			}
 			rep, err := vaults.EnsureMounts(e, ix)
-			change := MountChange{Project: e.Name, MountRepair: rep}
-			if err != nil {
+			change.MountRepair = rep
+			if err != nil && change.Error == "" {
 				change.Error = err.Error()
 			}
 			if change.any() {
 				changes = append(changes, change)
+			}
+		}
+		if adopted {
+			if ix, err = registry.Scan(cfg); err != nil {
+				return nil, nil, nil, err
 			}
 		}
 	}

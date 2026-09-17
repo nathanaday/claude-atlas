@@ -9,6 +9,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
@@ -119,7 +120,7 @@ func TestRegistryDerivesEveryEntry(t *testing.T) {
 	os.MkdirAll(filepath.Join(cfg.VaultsDir, "old", "wiki"), 0o755)
 	os.WriteFile(filepath.Join(cfg.VaultsDir, "old", vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1"}`), 0o644)
 	stateDir := filepath.Join(root, "state")
-	entries, ix, _, err := Registry(cfg, stateDir, time.Now(), false)
+	entries, ix, _, err := Registry(home.Home{Root: filepath.Join(root, "home")}, cfg, stateDir, time.Now(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,5 +214,49 @@ func TestSignalsNameAStaleGrant(t *testing.T) {
 	got := strings.Join(Signals(e, time.Now()), "\n")
 	if !strings.Contains(got, "no project with id gone-0000") || !strings.Contains(got, "revoke") {
 		t.Fatalf("a stale grant:\n%s", got)
+	}
+}
+
+func TestRegistryAdoptsARepositoryDroppedIntoRepos(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	h := home.Home{Root: filepath.Join(root, "home")}
+	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults")}
+	p := filepath.Join(cfg.VaultsDir, "projects", "cs566")
+	if _, err := vault.Init(p, vault.Options{Kind: vault.Project, Name: "cs566"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	code := filepath.Join(p, "repos", "my_git_project")
+	os.MkdirAll(code, 0o755)
+	os.WriteFile(filepath.Join(code, "main.go"), []byte("package main\n"), 0o644)
+	if err := links.InitRepo(code, "my_git_project"); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(root, "state")
+	entries, _, changes, err := Registry(h, cfg, stateDir, time.Now(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || len(changes[0].Adopted) != 1 || changes[0].Adopted[0] != "my_git_project" {
+		t.Fatalf("refresh reports the adoption: %+v", changes)
+	}
+	var project registry.Entry
+	for _, e := range entries {
+		if e.Name == "cs566" {
+			project = e
+		}
+	}
+	if len(project.Repos) != 1 || project.Repos[0].Path != code || project.Repos[0].Changes != "commit" {
+		t.Fatalf("the adopted repository resolves in the same run: %+v", project.Repos)
+	}
+	// A second refresh adopts nothing.
+	_, _, changes, err = Registry(h, cfg, stateDir, time.Now(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("a second refresh is quiet: %+v", changes)
 	}
 }

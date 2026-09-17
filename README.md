@@ -118,10 +118,12 @@ behind it.
 
 Every link is a git repository. Create one in the project's `repos/` folder,
 ignored by the vault's own git, or anywhere on the machine; clone one from
-GitHub; or link one that exists. A repository with a remote carries a choice
-of how a session lands its changes, pull requests or commits, and the session
-is told at its start. Folders of sources you ingest from are not linked; the
-vault remembers where it staged from.
+GitHub; or link one that exists. Move a git repository into `repos/` and the
+next refresh links it on its own. Each one carries a choice of how a session
+lands its changes, pull requests or commits, and the session is told at its
+start; `claude-atlas config repo-changes` sets the choice a new repository
+starts with. Folders of sources you ingest from are not linked; the vault
+remembers where it staged from.
 
 ## Inside a vault
 

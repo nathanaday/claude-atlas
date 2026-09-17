@@ -93,3 +93,43 @@ func TestDisplayAndExpand(t *testing.T) {
 		t.Fatal("expand wrong")
 	}
 }
+
+func TestDefaultChanges(t *testing.T) {
+	h := Home{Root: t.TempDir()}
+	cfg := h.Default("~/Vaults")
+	if cfg.DefaultChanges() != "commit" {
+		t.Fatalf("a fresh config defaults to commit, got %q", cfg.DefaultChanges())
+	}
+	var old Config
+	if old.DefaultChanges() != "commit" {
+		t.Fatalf("a config written before the section defaults to commit, got %q", old.DefaultChanges())
+	}
+	if err := cfg.SetDefaultChanges("pr"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	back, err := h.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.DefaultChanges() != "pr" {
+		t.Fatalf("pr should round-trip, got %q", back.DefaultChanges())
+	}
+	if err := cfg.SetDefaultChanges("merge"); err == nil {
+		t.Fatal("only commit and pr are policies")
+	}
+}
+
+func TestLoadRefusesUnknownDefaultChanges(t *testing.T) {
+	h := Home{Root: t.TempDir()}
+	cfg := h.Default("~/Vaults")
+	cfg.DefaultRepoChanges = "merge"
+	if err := h.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Load(); err == nil {
+		t.Fatal("a config naming an unknown policy should not load")
+	}
+}

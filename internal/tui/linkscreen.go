@@ -321,9 +321,11 @@ func (s linksScreen) clone() linksScreen {
 	return s.askChanges(repo)
 }
 
-// askChanges asks how changes land in a repository with a remote and no policy yet.
+// askChanges asks how changes land in a repository with a remote. Every new repository
+// carries the atlas default, so the question offers it rather than filling a blank; a
+// remote is where the choice matters and the clone is the moment to make it.
 func (s linksScreen) askChanges(repo vault.Repo) linksScreen {
-	if repo.Remote == "" || repo.Changes != "" || s.hooks.EditRepo == nil {
+	if repo.Remote == "" || s.hooks.EditRepo == nil {
 		s.mode = linksList
 		return s
 	}

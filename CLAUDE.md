@@ -85,7 +85,7 @@ internal/hooks/         session-start (the kind line for a vault or a project's 
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a vault
 internal/registry/      the scan for identity files, the resolved entries, the registry state file
 internal/refresh/       derive one vault's state, rewrite the registry, list a vault's signals
-internal/vaults/        create, adopt, register, edit identity files, link and create repositories
+internal/vaults/        create, adopt, register, edit identity files, link and create repositories, adopt those waiting under repos/
 internal/links/         git init, create and clone, change policies, the facts git reports
 internal/tui/           Bubble Tea screens: the view (a tab per kind, boards of boxes with connectors), the vault editor, the repositories screen, tasks, ingest, the add and adopt screens
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
@@ -136,6 +136,15 @@ never goes inside another vault (`vaults.CheckNewPath`).
   has its path in the atlas config, and a path inside the vault but outside
   `repos/` is refused. Sessions learn the policy from the hook and the `repos`
   tool.
+- The folder decides membership. A git repository under `<project>/repos/` is
+  a repository of that project: `vaults.AdoptRepos`, which `refresh.Registry`
+  runs with `ensure`, writes it to the identity file, and `RemoveRepo` refuses
+  a name whose folder is still there. Adoption is the only place a scan leads
+  to a write, so it lives behind `ensure` and never in `registry.Scan`.
+- Every repository the atlas links records `changes` explicitly, from the
+  config's `default_repo_changes` (`commit` unless set). `links.Policy`'s
+  fallback to `pr` on a remote is now only for an identity file written before
+  that, or edited by hand.
 - A project may live inside a repository at `REPO/atlas/` (`new-project NAME
   --in REPO`). `vault.HostRepo` detects the layout from the filesystem;
   nothing stores it. Every git command the engine runs there takes the

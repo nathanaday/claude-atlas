@@ -419,15 +419,28 @@ one name. It goes under the project's `repos/` folder or outside the vault;
 anywhere else inside the vault is refused, because the vault's git would take
 it in.
 
-**How changes land.** A repository with a remote gets a change policy, kept in
-the project's identity file as `changes`: `pr` means a session works on a
-branch and opens a pull request, never pushing to the default branch;
-`commit` means it commits on the current branch. `link` asks when it links
-or clones a repository with a remote, or takes `--changes pr|commit`; with
-no answer the default is `pr` when there is a remote and `commit` when there
-is none. A session started inside the repository is told the policy at its
-start, and the `repos` tool repeats it. Change it later, or point the project
-at a repository that moved:
+**Moving a repository in links it.** A git repository that sits under a
+project's `repos/` folder is a repository of that project. `refresh`, which
+`view` and every command that rewrites the registry run, links each one the
+identity file does not already name, and reports it as `linked`. So moving a
+folder into `repos/` is the whole gesture; no `link` command follows. A folder
+there that is not a git repository is left alone, and so is one whose name a
+repository already has. Because the folder decides membership, `unlink` on a
+repository still under `repos/` is refused: move the folder out first, or the
+next refresh links it again.
+
+**How changes land.** Every repository gets a change policy, kept in the
+project's identity file as `changes`: `pr` means a session works on a branch
+and opens a pull request, never pushing to the default branch; `commit` means
+it commits on the current branch. A new repository takes the atlas-wide
+default, `commit`, whether it was created, linked, cloned, or found under
+`repos/`; `claude-atlas config repo-changes pr` changes that default for every
+repository linked afterwards. `link` takes `--changes pr|commit` to override
+it once, and asks when it clones a repository with a remote. An identity file
+that records no policy at all falls back to `pr` when the repository has a
+remote and `commit` when it has none. A session started inside the repository
+is told the policy at its start, and the `repos` tool repeats it. Change it
+later, or point the project at a repository that moved:
 
 ```bash
 claude-atlas edit-repo sensor-triage sensor-app --changes commit
@@ -591,12 +604,13 @@ claude-atlas apply sensor-triage plan.json
   },
   "heat": {
     "new_days": 7
-  }
+  },
+  "default_repo_changes": "commit"
 }
 ```
 
 `claude-atlas config` prints the settings; `claude-atlas config new-days 14`
-sets one and refreshes.
+and `claude-atlas config repo-changes pr` set one and refresh.
 
 | Setting | Effect |
 |---|---|
@@ -608,6 +622,7 @@ sets one and refreshes.
 | `claude_code.session_context` | whether the session-start hook hands Claude the vault's `hot.md` |
 | `plugin.source` | where `claude plugin marketplace add` gets the plugin: a GitHub slug or a local path |
 | `heat.new_days` | how many days after its creation a vault shows as ✨ new whatever its activity; 7 by default, 0 turns it off |
+| `default_repo_changes` | how a newly linked repository lands its changes, `commit` or `pr`; `commit` by default. It applies when the repository is linked, so changing it leaves the existing ones alone |
 | `--home DIR`, `CLAUDE_ATLAS_HOME` | use a different home instead of `~/.claude-atlas` |
 | `-y`, `--yes` | answer yes to every prompt |
 

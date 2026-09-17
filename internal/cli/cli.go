@@ -93,7 +93,7 @@ Plugin:
   mcp                       serve the atlas tools over stdio; Claude Code runs this
   hook EVENT                run a plugin hook: session-start, guard, stop
 
-  config [KEY VALUE]        show the settings, or set one: new-days N
+  config [KEY VALUE]        show the settings, or set one: new-days N, repo-changes pr|commit
   info                      show every path and version the atlas uses
   doctor                    check the installation and every vault
   version                   print the version
@@ -363,7 +363,7 @@ func badEntry(ix *registry.Index, arg string) *registry.Entry {
 // refreshAll rebuilds the registry from a scan and recreates every project's mount
 // symlinks. Callers report the count themselves; only `refresh` reports the symlinks.
 func (e *env) refreshAll(cfg *home.Config) ([]registry.Entry, *registry.Index, error) {
-	entries, ix, _, err := refresh.Registry(cfg, e.home.StateDir(), time.Now(), true)
+	entries, ix, _, err := refresh.Registry(e.home, cfg, e.home.StateDir(), time.Now(), true)
 	return entries, ix, err
 }
 
@@ -1985,11 +1985,14 @@ func (e *env) refresh(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	entries, ix, changes, err := refresh.Registry(cfg, e.home.StateDir(), time.Now(), true)
+	entries, ix, changes, err := refresh.Registry(e.home, cfg, e.home.StateDir(), time.Now(), true)
 	if err != nil {
 		return 1, err
 	}
 	for _, ch := range changes {
+		for _, name := range ch.Adopted {
+			e.console.Step(console.OK, "linked", fmt.Sprintf("%s in %s: a repository waiting under repos/", name, ch.Project))
+		}
 		for _, name := range ch.Created {
 			e.console.Step(console.OK, "created", fmt.Sprintf("%s in %s", kbPath(name), ch.Project))
 		}
@@ -2003,7 +2006,7 @@ func (e *env) refresh(args []string) (int, error) {
 			e.console.Step(console.Fail, "missing", fmt.Sprintf("%s in %s: no knowledge base with that id", kbPath(name), ch.Project))
 		}
 		if ch.Error != "" {
-			e.console.Step(console.Fail, "mounts", ch.Project+": "+ch.Error)
+			e.console.Step(console.Fail, "refresh", ch.Project+": "+ch.Error)
 		}
 	}
 	for _, en := range entries {
@@ -2601,6 +2604,7 @@ func (e *env) config(args []string) (int, error) {
 	if len(args) == 0 {
 		row := func(label, value string) { c.Say("  %-18s %s", label, value) }
 		row("new-days", fmt.Sprintf("%d  (a vault is new for this many days after its creation; 0 turns it off)", cfg.NewDays()))
+		row("repo-changes", cfg.DefaultChanges()+"  (how a newly linked repository lands its changes: commit or pr)")
 		row("vaults dir", home.Display(cfg.VaultsDir))
 		row("claude command", cfg.ClaudeCode.Command)
 		row("plugin source", cfg.Plugin.Source)
@@ -2608,7 +2612,7 @@ func (e *env) config(args []string) (int, error) {
 		return 0, nil
 	}
 	if len(args) != 2 {
-		return 2, errors.New("usage: claude-atlas config [KEY VALUE]; keys: new-days")
+		return 2, errors.New("usage: claude-atlas config [KEY VALUE]; keys: new-days, repo-changes")
 	}
 	switch args[0] {
 	case "new-days":
@@ -2619,8 +2623,12 @@ func (e *env) config(args []string) (int, error) {
 		if err := cfg.SetNewDays(days); err != nil {
 			return 2, err
 		}
+	case "repo-changes":
+		if err := cfg.SetDefaultChanges(args[1]); err != nil {
+			return 2, err
+		}
 	default:
-		return 2, fmt.Errorf("unknown setting %q; keys: new-days", args[0])
+		return 2, fmt.Errorf("unknown setting %q; keys: new-days, repo-changes", args[0])
 	}
 	if err := e.home.Save(cfg); err != nil {
 		return 1, err

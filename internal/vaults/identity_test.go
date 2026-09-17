@@ -357,7 +357,7 @@ func TestAddCreateCloneRemoveAndEditRepos(t *testing.T) {
 	cfg, h, project, kb := fixtureEntries(t)
 
 	// CreateRepo(e, "hw", "") makes <project>/repos/hw/.git, identity gains
-	// {Name: "hw", Changes: ""}, no config entry.
+	// {Name: "hw", Changes: "commit"} from the atlas default, no config entry.
 	hw, hwPath, err := CreateRepo(h, cfg, project, "hw", "", identityNow)
 	if err != nil {
 		t.Fatal(err)
@@ -368,7 +368,7 @@ func TestAddCreateCloneRemoveAndEditRepos(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(hwPath, ".git")); err != nil {
 		t.Fatalf("no .git: %v", err)
 	}
-	if hw.Name != "hw" || hw.Changes != "" || hw.Remote != "" {
+	if hw.Name != "hw" || hw.Changes != cfg.DefaultChanges() || hw.Remote != "" {
 		t.Fatalf("repo: %+v", hw)
 	}
 	v, err := vault.Open(project.Path)
@@ -477,7 +477,15 @@ func TestAddCreateCloneRemoveAndEditRepos(t *testing.T) {
 		t.Fatalf("config mapping changed: %q, want %q", cfg.RepoPath(project.ID, "hw"), hwPathBefore)
 	}
 
-	// RemoveRepo("hw") → gone from identity, folder still exists.
+	// RemoveRepo("hw") is refused while its folder sits under repos/, since the next
+	// refresh would link it again. Moved out, it unlinks and the folder stays.
+	if err := RemoveRepo(h, cfg, project, "hw", identityNow); err == nil || !strings.Contains(err.Error(), "still under repos/") {
+		t.Fatalf("remove under repos/: %v", err)
+	}
+	hwMoved := filepath.Join(t.TempDir(), "hw")
+	if err := os.Rename(filepath.Join(project.Path, "repos", "hw"), hwMoved); err != nil {
+		t.Fatal(err)
+	}
 	if err := RemoveRepo(h, cfg, project, "hw", identityNow); err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +498,7 @@ func TestAddCreateCloneRemoveAndEditRepos(t *testing.T) {
 			t.Fatalf("hw should be gone: %+v", v.Config.Repos)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(project.Path, "repos", "hw")); err != nil {
+	if _, err := os.Stat(hwMoved); err != nil {
 		t.Fatalf("hw folder should still exist: %v", err)
 	}
 

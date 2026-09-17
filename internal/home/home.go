@@ -23,6 +23,14 @@ const (
 	DefaultPluginSource = "nathanaday/claude-atlas"
 	// DefaultNewDays is how many days after its creation a vault counts as new.
 	DefaultNewDays = 7
+
+	// The change policies a repository may carry. They mirror links.ChangesCommit and
+	// links.ChangesPR; home cannot import that package.
+	changesCommit = "commit"
+	changesPR     = "pr"
+	// DefaultRepoChanges is the policy a newly linked repository takes when the config
+	// names none.
+	DefaultRepoChanges = changesCommit
 )
 
 // HeatConfig tunes how the overview reads a vault's activity. NewDays is the age, in
@@ -60,6 +68,26 @@ type Config struct {
 	Vaults []string `json:"vaults,omitempty"`
 	// Repos holds repository paths outside their project's folder, keyed by RepoKey.
 	Repos map[string]string `json:"repos,omitempty"`
+	// DefaultRepoChanges is the change policy every newly linked repository takes,
+	// "commit" or "pr". Empty in a config written before the setting existed.
+	DefaultRepoChanges string `json:"default_repo_changes,omitempty"`
+}
+
+// DefaultChanges is the configured change policy for a new repository, or the default.
+func (c *Config) DefaultChanges() string {
+	if c.DefaultRepoChanges == "" {
+		return DefaultRepoChanges
+	}
+	return c.DefaultRepoChanges
+}
+
+// SetDefaultChanges records the policy; it must be "commit" or "pr".
+func (c *Config) SetDefaultChanges(changes string) error {
+	if changes != changesCommit && changes != changesPR {
+		return fmt.Errorf("the change policy is %s or %s, got %q", changesCommit, changesPR, changes)
+	}
+	c.DefaultRepoChanges = changes
+	return nil
 }
 
 // RepoKey is the Repos map key for a repository named name under project projectID.
@@ -224,6 +252,9 @@ func (h Home) Load() (*Config, error) {
 	}
 	if cfg.Heat != nil && cfg.Heat.NewDays < 0 {
 		return nil, fmt.Errorf("%s: heat.new_days must be 0 or more", h.ConfigPath())
+	}
+	if c := cfg.DefaultRepoChanges; c != "" && c != changesCommit && c != changesPR {
+		return nil, fmt.Errorf("%s: default_repo_changes is %s or %s, got %q", h.ConfigPath(), changesCommit, changesPR, c)
 	}
 	return &cfg, nil
 }

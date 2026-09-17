@@ -246,10 +246,12 @@ func checkRepoTarget(e registry.Entry, name, path string) error {
 }
 
 // recordRepo appends name's repository to e's identity file, and, when path is not the
-// project's own repos/<name>, records the path in the config too. It checks the name
-// against the file itself, since e may be older than the file.
+// project's own repos/<name>, records the path in the config too. Every new repository
+// takes the atlas's default change policy, so the identity file states it rather than
+// leaving it to be inferred from the remote. It checks the name against the file
+// itself, since e may be older than the file.
 func recordRepo(h home.Home, cfg *home.Config, e registry.Entry, name, path, remote string, now time.Time) (vault.Repo, string, error) {
-	repo := vault.Repo{Name: name, Remote: remote}
+	repo := vault.Repo{Name: name, Remote: remote, Changes: cfg.DefaultChanges()}
 	if err := vault.UpdateConfig(e.Path, "add repository "+name, now, func(c *vault.Config) error {
 		for _, r := range c.Repos {
 			if strings.EqualFold(r.Name, name) {
@@ -358,7 +360,10 @@ func CloneRepo(h home.Home, cfg *home.Config, e registry.Entry, url, at string, 
 	return recordRepo(h, cfg, e, name, dir, url, now)
 }
 
-// RemoveRepo drops a repository from the identity file and the config; the folder stays.
+// RemoveRepo drops a repository from the identity file and the config; the folder stays,
+// unless it is still under the project's own repos/. A git repository there is a
+// repository of the project, so the next refresh would link it again; the folder has to
+// move out first.
 func RemoveRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, now time.Time) error {
 	if err := requireProject(e); err != nil {
 		return err
@@ -368,6 +373,9 @@ func RemoveRepo(h home.Home, cfg *home.Config, e registry.Entry, name string, no
 	}
 	if !hasRepo(e, name) {
 		return fmt.Errorf("%s has no repository named %q", e.Name, name)
+	}
+	if dir := e.RepoDir(name); links.IsRepo(dir) {
+		return fmt.Errorf("%s is still under repos/; move the folder out of %s first, or the next refresh links it again", name, home.Display(dir))
 	}
 	if err := vault.UpdateConfig(e.Path, "remove repository "+name, now, func(c *vault.Config) error {
 		var keep []vault.Repo

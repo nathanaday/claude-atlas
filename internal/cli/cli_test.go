@@ -253,17 +253,25 @@ func TestRepoCommands(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(welcome, "repos", "upstream")); err != nil {
 		t.Fatal("the clone lands under repos/")
 	}
-	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "changes: pr") || !strings.Contains(h.out.String(), url) {
-		t.Fatalf("a clone records its remote and lands pull requests:\n%s", h.out.String())
+	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "changes: commit") || !strings.Contains(h.out.String(), url) {
+		t.Fatalf("a clone records its remote and takes the atlas default:\n%s", h.out.String())
 	}
-	if code := h.run("edit-repo", "welcome", "upstream", "--changes", "commit"); code != 0 {
+	if code := h.run("edit-repo", "welcome", "upstream", "--changes", "pr"); code != 0 {
 		t.Fatalf("edit-repo exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("repos", "welcome"); code != 0 || strings.Contains(h.out.String(), "changes: pr") {
+	if code := h.run("repos", "welcome"); code != 0 || !strings.Contains(h.out.String(), "changes: pr") {
 		t.Fatalf("after edit-repo:\n%s", h.out.String())
 	}
 	if code := h.run("edit-repo", "welcome", "upstream", "--changes", "later"); code != 2 {
 		t.Fatalf("bad policy exit %d", code)
+	}
+	// A repository still under repos/ cannot be unlinked; the folder decides membership.
+	if code := h.run("unlink", "welcome", "paper"); code != 1 || !strings.Contains(h.err.String(), "still under repos/") {
+		t.Fatalf("unlink under repos/: exit %d %s", code, h.err.String())
+	}
+	paperMoved := filepath.Join(t.TempDir(), "paper")
+	if err := os.Rename(filepath.Join(welcome, "repos", "paper"), paperMoved); err != nil {
+		t.Fatal(err)
 	}
 	if code := h.run("unlink", "welcome", "paper"); code != 0 {
 		t.Fatalf("unlink exit %d %s", code, h.err.String())
@@ -271,7 +279,7 @@ func TestRepoCommands(t *testing.T) {
 	if code := h.run("repos", "welcome"); code != 0 || strings.Contains(h.out.String(), "paper") {
 		t.Fatalf("paper should be gone:\n%s", h.out.String())
 	}
-	if _, err := os.Stat(filepath.Join(welcome, "repos", "paper", ".git")); err != nil {
+	if _, err := os.Stat(filepath.Join(paperMoved, ".git")); err != nil {
 		t.Fatal("unlink must leave the folder")
 	}
 	if code := h.run("repos"); code != 0 || !strings.Contains(h.out.String(), "welcome") || !strings.Contains(h.out.String(), "docs") {
@@ -979,5 +987,24 @@ func TestNewProjectInARepository(t *testing.T) {
 	}
 	if out := h.out.String(); !strings.Contains(out, "inside") || !strings.Contains(out, "the repository "+clone) {
 		t.Fatalf("adopt must name the repository:\n%s", out)
+	}
+}
+
+func TestConfigRepoChanges(t *testing.T) {
+	h, _ := setup(t)
+	if code := h.run("config"); code != 0 || !strings.Contains(h.out.String(), "repo-changes       commit") {
+		t.Fatalf("config exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("config", "repo-changes", "pr"); code != 0 {
+		t.Fatalf("set exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if cfg := h.config(t); cfg.DefaultChanges() != "pr" {
+		t.Fatalf("saved %q", cfg.DefaultChanges())
+	}
+	if code := h.run("config"); code != 0 || !strings.Contains(h.out.String(), "repo-changes       pr") {
+		t.Fatalf("config should show pr:\n%s", h.out.String())
+	}
+	if code := h.run("config", "repo-changes", "merge"); code != 2 {
+		t.Fatalf("only commit and pr are policies, exit %d", code)
 	}
 }
