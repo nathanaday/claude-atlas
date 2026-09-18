@@ -1,0 +1,9 @@
+{
+  "schema": "claude-atlas.vault.v3",
+  "id": "f9a46501-2d07-41aa-8c5d-60d4dab3b8e4",
+  "kind": "knowledge",
+  "name": "atlas_kb",
+  "mode": "generic",
+  "created": "2026-09-17",
+  "scope": "The design, decisions, and reference material behind claude-atlas: Obsidian vaults, Claude Code plugins and MCP, and the Go code that ties them together."
+}
