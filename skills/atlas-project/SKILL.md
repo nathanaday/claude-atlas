@@ -6,9 +6,9 @@ description: "Make the current folder a project, or change one: name, descriptio
 # Make or change a project
 
 Tools: `atlas`, `project` on the atlas MCP server. A project is a folder
-named `atlas/` inside the user's work, a repository or a folder of
-documents. It holds the project's identity, its tasks, its phases, and an
-inbox for task notes. It has no git of its own: when the work is a
+`atlas/<name>/` inside the user's work, a repository or a folder of
+documents. The folder takes the project's name. It holds the project's
+identity, its threads, its phases, and an inbox for notes. It has no git of its own: when the work is a
 repository, the repository tracks `atlas/` like any other folder. It uses
 one knowledge base.
 
@@ -26,7 +26,7 @@ Ask one question at a time. Offer the default; accept a yes.
 3. **Description.** One sentence saying what the project is. Draft it from the
    folder's README or CLAUDE.md when there is one, and read it back.
 4. **Knowledge base.** Read each scope from `atlas` and suggest the one that
-   fits. None is a valid answer; the task skills work without one, and
+   fits. None is a valid answer; the thread skills work without one, and
    `link` adds one later.
 
 State the whole change in one line. When the folder is in no git repository,
@@ -36,7 +36,7 @@ init makes it one, with no commit; say so in the line:
 
 On yes: `project` with `action: init`, `work`, `name`, `description`, and
 `knowledge`; add `no_git` when the user wants no repository. It writes
-`atlas/`, lists the folder in the atlas config, and reports `git`: created,
+`atlas/<name>/`, lists the folder in the atlas config, and reports `git`: created,
 existing, or enclosed.
 Report the result, then offer `describe`, which writes the project's page in
 the knowledge base, and say how to work: a session anywhere inside the work
@@ -49,12 +49,16 @@ answer; do not retry with a guess.
 
 - Link or unlink: `project` with `action: link` and `knowledge`, or
   `action: unlink`. Linking changes nothing in either folder; it is one
-  field in `atlas/project.json`.
+  field in `atlas/<name>/project.json`.
 - Rename or describe: `project` with `action: edit`, `name` or
-  `description`. The folder does not move; the work folder is the user's.
-- Forget: `project` with `action: forget`. The folder and its `atlas/`
-  stay. Deleting `atlas/` is how a project ends, and that is the user's to
-  do by hand.
+  `description`. A new name moves `atlas/<name>/` to match; say so in the
+  one-line statement. The work folder does not move; it is the user's.
+- Forget: `project` with `action: forget`. The work folder and its
+  `atlas/<name>/` stay. Deleting `atlas/<name>/` is how a project ends, and
+  that is the user's to do by hand.
+- A project that 2.2.0 or earlier made sits directly in `atlas/`, and the
+  tools refuse it with the command to run: `claude-atlas upgrade PATH`. That
+  command moves the user's files, so give it to the user to run.
 
 In a knowledge base session, `work` names the project by name; in a project
 session it is implied. Every question comes before the tool call, and the

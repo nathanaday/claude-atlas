@@ -11,7 +11,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -76,9 +76,9 @@ func TestNewestLogDate(t *testing.T) {
 	}
 }
 
-func TestActiveThreadsJoinsContinuationLines(t *testing.T) {
+func TestHotTopicsJoinsContinuationLines(t *testing.T) {
 	root := fakeVault(t, "", "# R\n\n## Recent Changes\n\n- ignored\n\n## Active Threads\n\n- First thread\n  continues here.\n- Second\n\n## Later\n\n- no\n", nil)
-	got := ActiveThreads(root)
+	got := HotTopics(root)
 	if strings.Join(got, "|") != "First thread continues here.|Second" {
 		t.Fatalf("got %v", got)
 	}
@@ -102,7 +102,7 @@ func TestDeriveTakesLaterOfLogAndMtime(t *testing.T) {
 	if state.DaysIdle == nil || *state.DaysIdle != 0 || state.Heat != "hot" {
 		t.Fatalf("idle %v heat %s", state.DaysIdle, state.Heat)
 	}
-	if !state.OK || state.Pages == nil || *state.Pages != 2 || state.Inbox == nil || *state.Inbox != 1 || state.Tasks != nil {
+	if !state.OK || state.Pages == nil || *state.Pages != 2 || state.Inbox == nil || *state.Inbox != 1 || state.Threads != nil {
 		t.Fatalf("got %+v", state)
 	}
 	if got := Derive(registry.Entry{Path: root, Error: "v1 vault"}, time.Now(), "t", 7); got.OK || got.Error != "v1 vault" {
@@ -156,19 +156,22 @@ func TestDeriveAProject(t *testing.T) {
 	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.Local)
 	cfg, e, p := projectFixture(t, now)
 	state := Derive(e, now, "t", 7)
-	if !state.OK || state.Git == nil || !state.Git.OK || state.Tasks == nil || state.Tasks.Counts.Open != 0 || state.Described != nil || state.Pages != nil {
+	if !state.OK || state.Git == nil || !state.Git.OK || state.Threads == nil || state.Threads.Counts.Open != 0 || state.Described != nil || state.Pages != nil {
 		t.Fatalf("fresh project: %+v", state)
 	}
 	if state.Heat != "new" || state.LastTouched == "" {
 		t.Fatalf("the last commit touches the project: %+v", state)
 	}
-	if _, err := tasks.CreatePhase(p, "Alpha", "", nil, now); err != nil {
+	if _, err := threads.CreatePhase(p, "Alpha", "", nil, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tasks.PlantTask(p, tasks.Plant{Title: "Blocked one", Phase: "Alpha"}, now); err != nil {
+	if _, err := threads.Start(p, threads.New{Title: "Blocked one", Phase: "Alpha"}, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tasks.PlantTask(p, tasks.Plant{Title: "Stale one", Plan: "1. Go.", Start: true}, now.AddDate(0, 0, -20)); err != nil {
+	if _, err := threads.Start(p, threads.New{Title: "Stale one"}, now.AddDate(0, 0, -20)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := threads.File(p, "Stale one", threads.Filing{Stage: threads.Plan, Text: "1. Go."}, now.AddDate(0, 0, -20)); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(p.Path("inbox/note.md"), []byte("later"), 0o644)
@@ -182,18 +185,18 @@ func TestDeriveAProject(t *testing.T) {
 	ix, _ := registry.Scan(cfg)
 	e = *ix.ByPath(e.Path)
 	state = Derive(e, now, "t", 7)
-	if state.Tasks == nil || state.Tasks.Counts.Open != 2 || state.Tasks.Counts.Stale != 1 || state.Tasks.Counts.Notes != 1 || len(state.Tasks.Open) != 2 {
-		t.Fatalf("tasks %+v", state.Tasks)
+	if state.Threads == nil || state.Threads.Counts.Open != 2 || state.Threads.Counts.Stale != 1 || state.Threads.Counts.Notes != 1 || len(state.Threads.Open) != 2 {
+		t.Fatalf("threads %+v", state.Threads)
 	}
-	if strings.Join(state.Tasks.Phases, ",") != "Alpha" || state.Tasks.Open[0].Title != "Stale one" || !state.Tasks.Open[0].Stale || state.Tasks.Open[1].Phase != "Alpha" || !filepath.IsAbs(state.Tasks.Open[1].Path) {
-		t.Fatalf("open %+v phases %v", state.Tasks.Open, state.Tasks.Phases)
+	if strings.Join(state.Threads.Phases, ",") != "Alpha" || state.Threads.Open[0].Title != "Stale one" || !state.Threads.Open[0].Stale || state.Threads.Open[1].Phase != "Alpha" || !filepath.IsAbs(state.Threads.Open[1].Path) {
+		t.Fatalf("open %+v phases %v", state.Threads.Open, state.Threads.Phases)
 	}
 	if state.Described == nil || state.Described.Page != "wiki/entities/code.md" || state.Described.Behind != 1 {
 		t.Fatalf("described %+v", state.Described)
 	}
 	e.State = state
 	got := strings.Join(Signals(e, now), "\n")
-	for _, want := range []string{"1 stale task"} {
+	for _, want := range []string{"1 stale thread"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
@@ -244,11 +247,11 @@ func TestRegistryDerivesEveryEntry(t *testing.T) {
 	for _, e := range entries {
 		switch {
 		case e.Kind == registry.Knowledge && e.Error == "":
-			if e.State == nil || !e.State.OK || e.State.Heat != "new" || e.State.Pages == nil || *e.State.Pages < 4 || e.State.Tasks != nil {
+			if e.State == nil || !e.State.OK || e.State.Heat != "new" || e.State.Pages == nil || *e.State.Pages < 4 || e.State.Threads != nil {
 				t.Errorf("knowledge base state %+v", e.State)
 			}
 		case e.Kind == registry.Project:
-			if e.State == nil || !e.State.OK || e.State.Tasks == nil || e.State.Git == nil {
+			if e.State == nil || !e.State.OK || e.State.Threads == nil || e.State.Git == nil {
 				t.Errorf("project state %+v", e.State)
 			}
 		default:
@@ -266,10 +269,10 @@ func TestRegistryDerivesEveryEntry(t *testing.T) {
 func TestSignalsOverAnEntry(t *testing.T) {
 	e := registry.Entry{Name: "p", Kind: registry.Project, Path: "/v/p",
 		Knowledge: &registry.Ref{Name: "gone", Error: "no knowledge base with id x on this machine"},
-		State:     &registry.State{OK: true, PendingRecovery: true, Tasks: &registry.TaskSummary{Open: []registry.TaskLine{{Title: "A", Status: "blocked"}, {Title: "B", Status: "active", Stale: true}}}},
+		State:     &registry.State{OK: true, PendingRecovery: true, Threads: &registry.ThreadSummary{Open: []registry.ThreadLine{{Title: "A", Stage: "stub", Blocked: "the vendor"}, {Title: "B", Stage: "plan", Stale: true}}}},
 	}
 	got := strings.Join(Signals(e, time.Now()), "\n")
-	for _, want := range []string{"interrupted", "knowledge base gone: no knowledge base", "1 blocked task: A", "1 stale task"} {
+	for _, want := range []string{"interrupted", "knowledge base gone: no knowledge base", "1 blocked thread: A", "1 stale thread"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}

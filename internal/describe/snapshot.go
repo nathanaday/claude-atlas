@@ -75,8 +75,11 @@ func TakeSnapshot(e registry.Entry, since string, now time.Time) (*Snapshot, err
 		}
 		s.FileName = fmt.Sprintf("%s-%s.md", e.Name, now.Format("2006-01-02"))
 	}
-	// The project's own atlas/ folder is state, not work, and so is a knowledge base in it.
-	for _, dir := range append(skip, project.Dir+"/") {
+	// The project's own folder is state, not work, and so is a knowledge base in it.
+	if folder, err := project.Locate(e.Path); err == nil {
+		skip = append(skip, project.Dir+"/"+folder+"/")
+	}
+	for _, dir := range skip {
 		files = without(files, dir)
 	}
 

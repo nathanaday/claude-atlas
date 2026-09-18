@@ -21,16 +21,17 @@ Two things, and only two:
   one domain: your product line, your research, your personal projects. You
   open it, read it, and edit it like any vault. Every change Claude makes is
   a plan you see first and one git commit you can undo.
-- A **project** is a folder named `atlas/` inside your work, a repository or
-  a folder of documents. It holds the project's tasks, grouped in phases, and
-  nothing else. It has no git of its own; your repository tracks it like any
-  other folder. A project uses one knowledge base. A knowledge base serves
+- A **project** is a folder `atlas/<name>/` inside your work, a repository
+  or a folder of documents. It holds the project's threads, grouped in phases,
+  and nothing else. The folder takes the project's name, so each project you
+  open in Obsidian shows its own name. It has no git of its own; your
+  repository tracks it like any other folder. A project uses one knowledge base. A knowledge base serves
   as many projects as you like.
 
 A session started anywhere inside the work is the project's session: it sees
-the open tasks, searches the knowledge base before it answers from the code,
-and writes progress on the task page as it goes. A session started in the
-knowledge base sees every project that uses it: plant work into any of them,
+the open threads, searches the knowledge base before it answers from the code,
+and writes progress in the thread's plan as it goes. A session started in the
+knowledge base sees every project that uses it: open a thread in any of them,
 ask what is going on across all of them, and file what you learned.
 
 - **Ingest from an inbox.** Files in, cited pages out; sources kept immutable.
@@ -38,11 +39,13 @@ ask what is going on across all of them, and file what you learned.
   missing.
 - **Review, then commit.** Preview every change; undo reverts it. Your own
   Obsidian edits are committed first and never touched.
-- **Tasks beside the code.** Plant an idea in a word, group tasks into phases,
-  plan one when ready, and every session starts knowing what is open. The
-  task pages are plain markdown in your repository.
+- **Threads beside the code.** A thread is one line of work: a bug, a
+  feature, a chore. It moves stub → spec → plan → receipt, and each stage is
+  a document in its own folder, so the state of every thread is a page you
+  can open. Every session starts knowing what is open. The pages are plain
+  markdown in your repository, with a colored card per stage in Obsidian.
 - **The knowledge base knows your projects.** One page per project says what
-  it is, how it is built, and what it has delivered. Finishing a task offers
+  it is, how it is built, and what it has delivered. Completing a thread offers
   to update it.
 - **One view.** Every knowledge base and every project on one screen, with a
   key to open the vault in Obsidian or start Claude Code in it.
@@ -87,16 +90,19 @@ in a project that uses it:
 claude-atlas new-knowledge ~/Vaults/product-x --scope "The thermal fire-detection product line."
 cd ~/code/webapp
 claude-atlas init --knowledge product-x
-claude-atlas plant webapp "Filter vehicle false alarms" --priority high
+claude-atlas thread webapp new "Filter vehicle false alarms" --priority high
 claude
 ```
 
-`init` writes `atlas/` beside your code and tells the atlas the project
-exists. The session in `~/code/webapp` starts with the open task in view.
+`init` writes `atlas/webapp/` beside your code and tells the atlas the project
+exists. `thread ... new` writes the thread's card and its stub. The session
+in `~/code/webapp` starts with the open thread in view.
 `/claude-atlas:describe` writes the project's page in the knowledge base;
-`/claude-atlas:task-plan` and `/claude-atlas:task-run` carry the task through;
-`/claude-atlas:task-finish` archives it and offers the knowledge base what the
-work taught.
+`/claude-atlas:thread-spec`, `/claude-atlas:thread-plan`, and
+`/claude-atlas:thread-run` carry the thread through, and each files its
+document; `/claude-atlas:thread-receipt` closes it and offers the knowledge
+base what the work taught. `claude-atlas threads` lists every open thread by
+stage, and `claude-atlas open-claude webapp --thread ID` continues one.
 
 Put a source in the knowledge base's inbox and open a session there:
 
@@ -108,7 +114,7 @@ claude-atlas open-claude product-x
 `/claude-atlas:wiki-ingest` reads the inbox and writes cited pages;
 `/claude-atlas:wiki-query` answers from them. Claude shows a preview before
 every change, and `claude-atlas undo` takes one back. From here, `work`
-names the projects a change touches and plants a task in each.
+names the projects a change touches and opens a thread in each.
 
 See everything at once:
 
@@ -117,8 +123,8 @@ claude-atlas
 ```
 
 Two tabs, Knowledge and Projects. Enter expands an entry, `o` opens a
-knowledge base in Obsidian, `c` starts Claude Code in either, `p` plants a
-task, `R` refreshes.
+knowledge base in Obsidian, `c` starts Claude Code in either, `n` opens a
+new thread, `R` refreshes.
 
 Every command, the slash menu, and configuration:
 [docs/usage.md](docs/usage.md).
@@ -129,20 +135,29 @@ Every command, the slash menu, and configuration:
 webapp/                       your repository, or a folder of documents
 ├── ...                       your work, untouched
 └── atlas/
-    ├── project.json          the project's identity and its knowledge base
-    ├── tasks/
-    │   ├── tasks.md          generated: every task, grouped by phase
-    │   ├── archive/          done and cancelled
-    │   └── <Title>.md        one page per task
-    ├── phases/
-    │   └── <Title>.md        a goal and an order; tasks name their phase
-    └── inbox/                task notes you drop in by hand
+    └── webapp/               the project's name; a rename moves the folder
+        ├── project.json      the project's identity and its knowledge base
+        ├── threads/
+        │   ├── threads.md    the board, generated: open threads by stage
+        │   ├── <Title>.md    the card of an open thread, generated
+        │   └── archive/      the cards of closed threads
+        ├── stubs/<Title>.md      where a thread begins, in your words
+        ├── specs/<Title>.md      what will be true when it is done, and why
+        ├── plans/<Title>.md      how the work will go, then its progress
+        ├── receipts/<Title>.md   how it ended: completed or killed
+        ├── phases/
+        │   └── <Title>.md    a goal and an order; threads name their phase
+        └── inbox/            notes you drop in by hand; each becomes a thread
 ```
 
-A task page carries its status, priority, phase, and due date in frontmatter,
-and four sections: Idea, Plan, Progress, Outcome. The tools change the
-frontmatter and move a finished page to the archive; Claude writes the
-sections. The user edits any page by hand.
+A thread's stage is never set: it is the furthest document that exists. The
+`thread` tool files a document, and that moves the thread. A stage may be
+skipped, and a receipt closes the thread. The card holds the thread's id,
+priority, phase, and what it waits on, and it embeds every document, so one
+page shows the thread end to end. Each document opens with a callout card in
+its stage's color that links the thread's other documents. The tools write
+the cards, the board, and those callouts; Claude writes the prose. The user
+edits any page by hand.
 
 ## Inside a knowledge base
 
@@ -169,15 +184,15 @@ with `claude-atlas mode product-x lyt`.
 ## The atlas
 
 A knowledge base carries its own identity file, `.claude-atlas.json`; a
-project carries `atlas/project.json`. Neither holds a path. The atlas keeps
-the paths in one place:
+project carries `atlas/<name>/project.json`. Neither holds a path. The atlas
+keeps the paths in one place:
 
 ```
 ~/.claude-atlas/
 ├── config.json               every knowledge base's folder, every project's
 │                             work folder, the plugin, heat
 └── state/registry.json       derived: every knowledge base with its projects,
-                              every project with its task counts and its page
+                              every project with its thread counts and its page
 ```
 
 The atlas never searches your disk. It knows a knowledge base or a project
@@ -195,11 +210,11 @@ Full reasoning in [docs/core-design.md](docs/core-design.md) and
   Claude's own file tools are refused inside the wiki.
 - Your edits come first. Hand edits are committed before any operation, so
   undo never touches them.
-- The core owns what it can derive: the log, the source ledger, the task
-  index, the health check. Claude writes pages.
+- The core owns what it can derive: the log, the source ledger, the thread
+  cards and board, the health check. Claude writes pages.
 - Ids travel, paths stay. A knowledge base and a project each hold their own
   facts and no path; the atlas holds the paths, and derives everything else.
-- Knowledge lives in the knowledge base. A project holds tasks and phases and
+- Knowledge lives in the knowledge base. A project holds threads and phases and
   nothing else the atlas reads.
 
 ## Documentation

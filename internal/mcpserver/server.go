@@ -25,7 +25,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/place"
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
@@ -100,7 +100,7 @@ func via(pl *place.Place) *ledger.Via {
 	return &ledger.Via{ID: pl.Project.Config.ID, Name: pl.Project.Name()}
 }
 
-// projectOf resolves the project a task tool acts on: the session's own when arg is
+// projectOf resolves the project a thread tool acts on: the session's own when arg is
 // empty, else one the atlas knows by name, id, or path. In a knowledge base session the
 // project must use that knowledge base.
 func (s *Server) projectOf(pl *place.Place, arg string) (*project.Project, *registry.Entry, error) {
@@ -167,10 +167,10 @@ type DescribedInfo struct {
 	Summary string `json:"summary"`
 }
 
-// ProjectTasks is a project's task counts and its phases in order.
-type ProjectTasks struct {
-	Counts tasks.Counts `json:"counts"`
-	Phases []string     `json:"phases"`
+// ProjectThreads is a project's thread counts and its phases in order.
+type ProjectThreads struct {
+	Counts threads.Counts `json:"counts"`
+	Phases []string       `json:"phases"`
 }
 
 // ProjectInfo is one project as a knowledge base sees it.
@@ -178,7 +178,7 @@ type ProjectInfo struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Path      string `json:"path"`
-	OpenTasks int    `json:"open_tasks"`
+	HotTopics int    `json:"open_threads"`
 	Described bool   `json:"described"`
 }
 
@@ -195,13 +195,13 @@ type Status struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 	// A project's fields.
-	Description    string         `json:"description,omitempty"`
-	Git            *GitInfo       `json:"git,omitempty"`
-	Knowledge      *KnowledgeRef  `json:"knowledge,omitempty"`
-	KnowledgeError string         `json:"knowledge_error,omitempty"`
-	Described      *DescribedInfo `json:"described,omitempty"`
-	Tasks          *ProjectTasks  `json:"tasks,omitempty"`
-	Notes          int            `json:"notes"`
+	Description    string          `json:"description,omitempty"`
+	Git            *GitInfo        `json:"git,omitempty"`
+	Knowledge      *KnowledgeRef   `json:"knowledge,omitempty"`
+	KnowledgeError string          `json:"knowledge_error,omitempty"`
+	Described      *DescribedInfo  `json:"described,omitempty"`
+	Threads        *ProjectThreads `json:"threads,omitempty"`
+	Notes          int             `json:"notes"`
 	// A knowledge base's fields.
 	Mode          string         `json:"mode,omitempty"`
 	Scope         string         `json:"scope,omitempty"`
@@ -271,29 +271,32 @@ func (s *Server) projectStatus(pl *place.Place, out *Status, now time.Time) {
 	default:
 		out.Warnings = append(out.Warnings, "this project uses no knowledge base; link one with `claude-atlas link KB`")
 	}
-	out.Notes = len(tasks.Notes(p))
-	if board, err := tasks.Load(p); err == nil {
-		pt := &ProjectTasks{Counts: board.Counts(now), Phases: []string{}}
+	out.Notes = len(threads.Notes(p))
+	if threads.Legacy(p) {
+		out.Warnings = append(out.Warnings, "this project holds task pages from before threads; `claude-atlas upgrade` turns each one into a thread")
+	}
+	if board, err := threads.Load(p); err == nil {
+		pt := &ProjectThreads{Counts: board.Counts(now), Phases: []string{}}
 		pt.Counts.Notes = out.Notes
 		for _, ph := range board.Phases {
 			pt.Phases = append(pt.Phases, ph.Title)
 		}
-		out.Tasks = pt
+		out.Threads = pt
 		var stale []string
 		for _, t := range board.Open() {
-			if tasks.Stale(t, now) {
+			if threads.Stale(t, now) {
 				stale = append(stale, t.Title)
 			}
 		}
 		if len(stale) > 0 {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("%d active task%s untouched for %d days: %s", len(stale), plural(len(stale)), tasks.StaleDays, strings.Join(stale, "; ")))
+			out.Warnings = append(out.Warnings, fmt.Sprintf("%d thread%s with a plan untouched for %d days: %s", len(stale), plural(len(stale)), threads.StaleDays, strings.Join(stale, "; ")))
 		}
 		for _, pr := range board.Problems {
-			out.Warnings = append(out.Warnings, "task page "+pr.Path+": "+pr.Reason)
+			out.Warnings = append(out.Warnings, pr.Path+": "+pr.Reason)
 		}
 	}
 	if out.Notes > 0 {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("%d task note%s wait in %s/%s/; the task-plant skill turns them into tasks", out.Notes, plural(out.Notes), project.Dir, project.InboxDir))
+		out.Warnings = append(out.Warnings, fmt.Sprintf("%d note%s wait in %s/%s/; the thread-stub skill opens a thread from each", out.Notes, plural(out.Notes), pl.Project.Rel(), project.InboxDir))
 	}
 }
 
@@ -326,8 +329,8 @@ func (s *Server) knowledgeStatus(pl *place.Place, out *Status, now time.Time) {
 		for _, e := range pl.Index.ProjectsOf(pl.Entry.ID) {
 			info := ProjectInfo{ID: e.ID, Name: e.Name, Path: e.Path, Described: describe.Page(e) != nil}
 			if p, err := project.Open(e.Path); err == nil {
-				if board, err := tasks.Load(p); err == nil {
-					info.OpenTasks = board.Counts(now).Open
+				if board, err := threads.Load(p); err == nil {
+					info.HotTopics = board.Counts(now).Open
 				}
 			}
 			out.Projects = append(out.Projects, info)
@@ -338,7 +341,7 @@ func (s *Server) knowledgeStatus(pl *place.Place, out *Status, now time.Time) {
 	}
 }
 
-// InboxOut is the knowledge base's inbox, and in a project session the task notes too.
+// InboxOut is the knowledge base's inbox, and in a project session the notes too.
 type InboxOut struct {
 	Vault string              `json:"vault"`
 	Files []capture.InboxFile `json:"files"`
@@ -359,7 +362,7 @@ func (s *Server) inbox(ctx context.Context, req *mcp.CallToolRequest, a Empty) (
 		out.Vault, out.Files = pl.Vault.Root, files
 	}
 	if pl.InProject() {
-		out.Notes = tasks.Notes(pl.Project)
+		out.Notes = threads.Notes(pl.Project)
 		if out.Notes == nil {
 			out.Notes = []string{}
 		}
@@ -448,48 +451,38 @@ func (s *Server) stub(ctx context.Context, req *mcp.CallToolRequest, a StubArgs)
 	return nil, res, nil
 }
 
-// ProjectArg names the project a task tool acts on.
+// ProjectArg names the project a thread tool acts on.
 type ProjectArg struct {
 	Project string `json:"project,omitempty" jsonschema:"the project, by name, id, or path; omit in a project session. In a knowledge base session it must be one of the projects that use it"`
 }
 
-type PlantArgs struct {
-	ProjectArg
-	Title    string `json:"title,omitempty" jsonschema:"the task's title; taken from the text when omitted"`
-	Text     string `json:"text,omitempty" jsonschema:"the idea in the user's words; kept verbatim on the page"`
-	Priority string `json:"priority,omitempty" jsonschema:"high, normal, low, or someday; default normal"`
-	Phase    string `json:"phase,omitempty" jsonschema:"the phase the task belongs to, by title; it must exist"`
-	Due      string `json:"due,omitempty" jsonschema:"YYYY-MM-DD"`
-	From     string `json:"from,omitempty" jsonschema:"the note under atlas/inbox/ this task comes from, atlas-relative; it is removed once the page exists"`
-	Plan     string `json:"plan,omitempty" jsonschema:"the Plan section's text: the approach, the steps, what done looks like; with it the task is planned"`
-	Start    bool   `json:"start,omitempty" jsonschema:"with plan: make the task active now, with a first Progress line; the work skill uses it"`
+// ThreadInfo is a thread with the absolute path of its card and of each document.
+type ThreadInfo struct {
+	threads.Thread
+	Stale bool `json:"stale,omitempty"`
+	// Card is the card's absolute path; code owns the card.
+	Card string `json:"card"`
+	// Files maps each stage that has a document to its absolute path.
+	Files map[string]string `json:"files"`
 }
 
-// PlantOut is the task planted and where its page is.
-type PlantOut struct {
-	tasks.Task
-	Project string `json:"project"`
-	// File is the page's absolute path.
-	File string `json:"file"`
+func threadInfo(p *project.Project, t threads.Thread, now time.Time) ThreadInfo {
+	info := ThreadInfo{Thread: t, Stale: threads.Stale(t, now), Card: p.Path(t.Path), Files: map[string]string{}}
+	for _, d := range t.Docs {
+		info.Files[d.Stage] = p.Path(d.Path)
+	}
+	return info
 }
 
-func (s *Server) plant(ctx context.Context, req *mcp.CallToolRequest, a PlantArgs) (*mcp.CallToolResult, PlantOut, error) {
-	pl, err := s.where()
-	if err != nil {
-		return nil, PlantOut{}, err
+func threadInfos(p *project.Project, list []threads.Thread, now time.Time) []ThreadInfo {
+	out := make([]ThreadInfo, 0, len(list))
+	for _, t := range list {
+		out = append(out, threadInfo(p, t, now))
 	}
-	p, _, err := s.projectOf(pl, a.Project)
-	if err != nil {
-		return nil, PlantOut{}, err
-	}
-	t, err := tasks.PlantTask(p, tasks.Plant{Title: a.Title, Text: a.Text, Priority: a.Priority, Phase: a.Phase, Due: a.Due, Plan: a.Plan, Start: a.Start, From: a.From}, s.opts.Now())
-	if err != nil {
-		return nil, PlantOut{}, err
-	}
-	return nil, PlantOut{Task: *t, Project: p.Name(), File: p.Path(t.Path)}, nil
+	return out
 }
 
-// PhaseInfo is one phase as the tasks tool lists it.
+// PhaseInfo is one phase as the threads tool lists it.
 type PhaseInfo struct {
 	Title    string `json:"title"`
 	Order    int    `json:"order"`
@@ -498,36 +491,42 @@ type PhaseInfo struct {
 	Path     string `json:"path"`
 }
 
-// ProjectBoard is one project's tasks.
+// ProjectBoard is one project's threads.
 type ProjectBoard struct {
-	Name     string          `json:"name"`
-	Path     string          `json:"path"`
-	Atlas    string          `json:"atlas"`
-	Counts   tasks.Counts    `json:"counts"`
-	Phases   []PhaseInfo     `json:"phases"`
-	Open     []tasks.Task    `json:"open"`
-	Archived []tasks.Task    `json:"archived"`
-	Problems []tasks.Problem `json:"problems,omitempty"`
-	Notes    []string        `json:"notes"`
+	Name     string            `json:"name"`
+	Path     string            `json:"path"`
+	Atlas    string            `json:"atlas"`
+	Board    string            `json:"board"`
+	Counts   threads.Counts    `json:"counts"`
+	Phases   []PhaseInfo       `json:"phases"`
+	Open     []ThreadInfo      `json:"open"`
+	Closed   []ThreadInfo      `json:"closed"`
+	Problems []threads.Problem `json:"problems,omitempty"`
+	Notes    []string          `json:"notes"`
 }
 
-// TasksOut is one board per project.
-type TasksOut struct {
+// ThreadsOut is one board per project.
+type ThreadsOut struct {
 	Projects []ProjectBoard `json:"projects"`
 }
 
-func (s *Server) tasks(ctx context.Context, req *mcp.CallToolRequest, a ProjectArg) (*mcp.CallToolResult, TasksOut, error) {
+type ThreadsArgs struct {
+	ProjectArg
+	ID string `json:"id,omitempty" jsonschema:"only this thread, by its id, its title, or the start of its title"`
+}
+
+func (s *Server) threads(ctx context.Context, req *mcp.CallToolRequest, a ThreadsArgs) (*mcp.CallToolResult, ThreadsOut, error) {
 	pl, err := s.where()
 	if err != nil {
-		return nil, TasksOut{}, err
+		return nil, ThreadsOut{}, err
 	}
-	out := TasksOut{Projects: []ProjectBoard{}}
+	out := ThreadsOut{Projects: []ProjectBoard{}}
 	var projects []*project.Project
 	switch {
 	case a.Project != "" || pl.InProject():
 		p, _, err := s.projectOf(pl, a.Project)
 		if err != nil {
-			return nil, TasksOut{}, err
+			return nil, ThreadsOut{}, err
 		}
 		projects = append(projects, p)
 	case pl.Index != nil && pl.Entry != nil:
@@ -541,55 +540,120 @@ func (s *Server) tasks(ctx context.Context, req *mcp.CallToolRequest, a ProjectA
 	}
 	now := s.opts.Now()
 	for _, p := range projects {
-		board, err := tasks.Load(p)
+		board, err := threads.Load(p)
 		if err != nil {
-			return nil, TasksOut{}, err
+			return nil, ThreadsOut{}, err
 		}
-		pb := ProjectBoard{Name: p.Name(), Path: p.Root, Atlas: p.Atlas(), Counts: board.Counts(now), Phases: []PhaseInfo{}, Open: board.Open(), Archived: board.Archived(), Problems: board.Problems, Notes: tasks.Notes(p)}
+		pb := ProjectBoard{Name: p.Name(), Path: p.Root, Atlas: p.Atlas(), Board: p.Path(project.ThreadsIndex), Counts: board.Counts(now), Phases: []PhaseInfo{}, Problems: board.Problems, Notes: threads.Notes(p)}
 		pb.Counts.Notes = len(pb.Notes)
-		for _, ph := range board.Phases {
-			pb.Phases = append(pb.Phases, PhaseInfo{Title: ph.Title, Order: ph.Order, Finished: board.Finished(ph.Title), Open: len(board.In(ph.Title)), Path: ph.Path})
-		}
-		if pb.Open == nil {
-			pb.Open = []tasks.Task{}
-		}
-		if pb.Archived == nil {
-			pb.Archived = []tasks.Task{}
-		}
 		if pb.Notes == nil {
 			pb.Notes = []string{}
 		}
+		for _, ph := range board.Phases {
+			pb.Phases = append(pb.Phases, PhaseInfo{Title: ph.Title, Order: ph.Order, Finished: board.Finished(ph.Title), Open: len(board.In(ph.Title)), Path: ph.Path})
+		}
+		if a.ID != "" {
+			t, err := board.Resolve(a.ID)
+			if err != nil {
+				if len(projects) > 1 {
+					continue
+				}
+				return nil, ThreadsOut{}, err
+			}
+			one := threadInfos(p, []threads.Thread{*t}, now)
+			pb.Open, pb.Closed = one, []ThreadInfo{}
+			if t.Closed() {
+				pb.Open, pb.Closed = []ThreadInfo{}, one
+			}
+		} else {
+			pb.Open, pb.Closed = threadInfos(p, board.Open(), now), threadInfos(p, board.Closed(), now)
+		}
 		out.Projects = append(out.Projects, pb)
+	}
+	if a.ID != "" && len(out.Projects) == 0 {
+		return nil, ThreadsOut{}, fmt.Errorf("no thread %q in any project of this knowledge base", a.ID)
 	}
 	return nil, out, nil
 }
 
-type TaskArgs struct {
+type ThreadArgs struct {
 	ProjectArg
-	ID       string  `json:"id" jsonschema:"the task's id, or its title"`
-	Status   *string `json:"status,omitempty" jsonschema:"planted, planned, active, blocked, done, or cancelled; done and cancelled move the page to tasks/archive/"`
-	Priority *string `json:"priority,omitempty" jsonschema:"high, normal, low, or someday"`
-	Phase    *string `json:"phase,omitempty" jsonschema:"a phase title; an empty string clears it"`
-	Due      *string `json:"due,omitempty" jsonschema:"YYYY-MM-DD; an empty string clears it"`
+	ID       string  `json:"id,omitempty" jsonschema:"the thread, by its id, its title, or the start of its title; omit to open a new thread"`
+	Title    *string `json:"title,omitempty" jsonschema:"a new thread's title, taken from the text when omitted; on an existing thread, a new title, which renames its card and documents"`
+	Stage    string  `json:"stage,omitempty" jsonschema:"on an existing thread, the document to file: spec, plan, or receipt (stub, when the thread lost its own). Filing it moves the thread to that stage. A stage may be skipped"`
+	Text     string  `json:"text,omitempty" jsonschema:"the document's text in markdown, without frontmatter: on a new thread the stub, in the user's words; with stage, that document. Revise a document that exists with Edit"`
+	Outcome  string  `json:"outcome,omitempty" jsonschema:"with stage receipt: completed or killed"`
+	Priority *string `json:"priority,omitempty" jsonschema:"high, normal, low, or someday; default normal"`
+	Phase    *string `json:"phase,omitempty" jsonschema:"the phase the thread belongs to, by title; it must exist; an empty string clears it"`
+	Blocked  *string `json:"blocked,omitempty" jsonschema:"what the thread waits on, in one line; an empty string unblocks it"`
+	From     string  `json:"from,omitempty" jsonschema:"a new thread only: the note under atlas/<name>/inbox/ it comes from, relative to the project folder; its content is the stub when text is omitted, and it is removed once the stub exists"`
+	Reopen   bool    `json:"reopen,omitempty" jsonschema:"delete a closed thread's receipt, which opens the thread again at the stage before it"`
 }
 
-func (s *Server) task(ctx context.Context, req *mcp.CallToolRequest, a TaskArgs) (*mcp.CallToolResult, PlantOut, error) {
+// ThreadOut is the thread after the change.
+type ThreadOut struct {
+	ThreadInfo
+	Project string `json:"project"`
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func (s *Server) thread(ctx context.Context, req *mcp.CallToolRequest, a ThreadArgs) (*mcp.CallToolResult, ThreadOut, error) {
 	pl, err := s.where()
 	if err != nil {
-		return nil, PlantOut{}, err
+		return nil, ThreadOut{}, err
 	}
 	p, _, err := s.projectOf(pl, a.Project)
 	if err != nil {
-		return nil, PlantOut{}, err
+		return nil, ThreadOut{}, err
 	}
-	if a.Status == nil && a.Priority == nil && a.Phase == nil && a.Due == nil {
-		return nil, PlantOut{}, errors.New("give at least one of status, priority, phase, or due")
+	now := s.opts.Now()
+	id := strings.TrimSpace(a.ID)
+	var t *threads.Thread
+	switch {
+	case id == "":
+		if a.Stage != "" && a.Stage != threads.Stub || a.Outcome != "" || a.Reopen {
+			return nil, ThreadOut{}, errors.New("a new thread starts with its stub; pass id to file a later document on a thread")
+		}
+		t, err = threads.Start(p, threads.New{Title: deref(a.Title), Text: a.Text, Priority: deref(a.Priority), Phase: deref(a.Phase), From: a.From}, now)
+		if err == nil && a.Blocked != nil {
+			t, err = threads.Set(p, t.ID, threads.Changes{Blocked: a.Blocked}, now)
+		}
+	case a.From != "":
+		return nil, ThreadOut{}, errors.New("from opens a new thread; omit id")
+	default:
+		ch := threads.Changes{Title: a.Title, Priority: a.Priority, Phase: a.Phase, Blocked: a.Blocked}
+		if a.Stage == "" && a.Text != "" {
+			return nil, ThreadOut{}, errors.New("text needs stage: name the document to file; revise one that exists with Edit")
+		}
+		if a.Reopen {
+			if t, err = threads.Reopen(p, id, now); err != nil {
+				return nil, ThreadOut{}, err
+			}
+			id = t.ID
+		}
+		if a.Stage != "" {
+			if t, err = threads.File(p, id, threads.Filing{Stage: a.Stage, Text: a.Text, Outcome: a.Outcome}, now); err != nil {
+				return nil, ThreadOut{}, err
+			}
+			id = t.ID
+		} else if a.Outcome != "" {
+			return nil, ThreadOut{}, errors.New("outcome needs stage: receipt")
+		}
+		// With nothing else to do, Set marks the thread as touched today.
+		if !ch.Empty() || t == nil {
+			t, err = threads.Set(p, id, ch, now)
+		}
 	}
-	t, err := tasks.Set(p, strings.TrimSpace(a.ID), tasks.Changes{Status: a.Status, Priority: a.Priority, Phase: a.Phase, Due: a.Due}, s.opts.Now())
 	if err != nil {
-		return nil, PlantOut{}, err
+		return nil, ThreadOut{}, err
 	}
-	return nil, PlantOut{Task: *t, Project: p.Name(), File: p.Path(t.Path)}, nil
+	return nil, ThreadOut{ThreadInfo: threadInfo(p, *t, now), Project: p.Name()}, nil
 }
 
 type PhaseArgs struct {
@@ -598,15 +662,15 @@ type PhaseArgs struct {
 	Title    string `json:"title" jsonschema:"the phase's title; on rename, the current one"`
 	Goal     string `json:"goal,omitempty" jsonschema:"create: what the phase delivers, in the user's words"`
 	Order    *int   `json:"order,omitempty" jsonschema:"create, reorder: its place in the timeline; create takes the next one when omitted"`
-	NewTitle string `json:"new_title,omitempty" jsonschema:"rename: the new title; every task that names the phase follows"`
+	NewTitle string `json:"new_title,omitempty" jsonschema:"rename: the new title; every thread that names the phase follows"`
 }
 
 // PhaseOut is the phase after the change, or what remove dropped.
 type PhaseOut struct {
-	Project string       `json:"project"`
-	Phase   *tasks.Phase `json:"phase,omitempty"`
-	File    string       `json:"file,omitempty"`
-	Removed string       `json:"removed,omitempty"`
+	Project string         `json:"project"`
+	Phase   *threads.Phase `json:"phase,omitempty"`
+	File    string         `json:"file,omitempty"`
+	Removed string         `json:"removed,omitempty"`
 }
 
 func (s *Server) phase(ctx context.Context, req *mcp.CallToolRequest, a PhaseArgs) (*mcp.CallToolResult, PhaseOut, error) {
@@ -619,19 +683,19 @@ func (s *Server) phase(ctx context.Context, req *mcp.CallToolRequest, a PhaseArg
 		return nil, PhaseOut{}, err
 	}
 	now := s.opts.Now()
-	var ph *tasks.Phase
+	var ph *threads.Phase
 	switch a.Action {
 	case "create":
-		ph, err = tasks.CreatePhase(p, a.Title, a.Goal, a.Order, now)
+		ph, err = threads.CreatePhase(p, a.Title, a.Goal, a.Order, now)
 	case "rename":
-		ph, err = tasks.RenamePhase(p, a.Title, a.NewTitle, now)
+		ph, err = threads.RenamePhase(p, a.Title, a.NewTitle, now)
 	case "reorder":
 		if a.Order == nil {
 			return nil, PhaseOut{}, errors.New("reorder needs order")
 		}
-		ph, err = tasks.ReorderPhase(p, a.Title, *a.Order, now)
+		ph, err = threads.ReorderPhase(p, a.Title, *a.Order, now)
 	case "remove":
-		if err := tasks.RemovePhase(p, a.Title, now); err != nil {
+		if err := threads.RemovePhase(p, a.Title, now); err != nil {
 			return nil, PhaseOut{}, err
 		}
 		return nil, PhaseOut{Project: p.Name(), Removed: a.Title}, nil
@@ -874,9 +938,9 @@ func ro() *mcp.ToolAnnotations {
 func (s *Server) MCP() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: Name, Title: "claude-atlas", Version: s.opts.Version}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "status", Annotations: ro(),
-		Description: "Describe where the session is. In a project: its knowledge base, the page that describes it, its task counts and phases, and warnings. In a knowledge base: mode, scope, page count, inbox, the projects that use it, git state, and warnings. Call this first."}, s.status)
+		Description: "Describe where the session is. In a project: its knowledge base, the page that describes it, its thread counts by stage, its phases, and warnings. In a knowledge base: mode, scope, page count, inbox, the projects that use it, git state, and warnings. Call this first."}, s.status)
 	mcp.AddTool(server, &mcp.Tool{Name: "inbox", Annotations: ro(),
-		Description: "List the files waiting in the knowledge base's inbox/ with size, kind, hash, and whether each already has a captured copy; in a project, the task notes waiting in atlas/inbox/ too."}, s.inbox)
+		Description: "List the files waiting in the knowledge base's inbox/ with size, kind, hash, and whether each already has a captured copy; in a project, the notes waiting in atlas/<name>/inbox/ too."}, s.inbox)
 	mcp.AddTool(server, &mcp.Tool{Name: "capture",
 		Description: "Copy files from the knowledge base's inbox into the immutable raw store and record them in the source ledger, as one commit. From a project the record names the project the source came through. Returns each file's source id and stored path; read the stored file afterwards with Read."}, s.capture)
 	mcp.AddTool(server, &mcp.Tool{Name: "route", Annotations: ro(),
@@ -893,22 +957,20 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "Run the deterministic wiki health check on the knowledge base: dead and ambiguous links, duplicate basenames, orphans, pages missing from every index, missing frontmatter, empty sections, stale index entries, and ledger problems. Read-only."}, s.lint)
 	mcp.AddTool(server, &mcp.Tool{Name: "stub",
 		Description: "Create seed pages in the knowledge base for the pages the wiki links to but nobody has written (lint's wanted pages). One commit, no plan preview; undo reverts it. Omit titles to stub every one of them with the mode's default type. Pass a title with a type when the name is a person, product, project, or organization (entity)."}, s.stub)
-	mcp.AddTool(server, &mcp.Tool{Name: "plant",
-		Description: "Plant a task in a project: write its page from a title and the idea's text; planted, or planned when plan is given, or active when start is set too. Give from to remove the atlas/inbox/ note it came from. In a knowledge base session, name the project."}, s.plant)
-	mcp.AddTool(server, &mcp.Tool{Name: "tasks", Annotations: ro(),
-		Description: "List a project's tasks from its pages: counts, the phases in order, the open tasks by status, priority, and age, the archive, and the notes waiting in atlas/inbox/. In a knowledge base session with no project, every project that uses it."}, s.tasks)
-	mcp.AddTool(server, &mcp.Tool{Name: "task",
-		Description: "Change a task's status, priority, phase, or due date by its id or title; the page's body stays. Done and cancelled move the page to tasks/archive/. Write Plan, Progress, and Outcome on the page with Edit."}, s.task)
+	mcp.AddTool(server, &mcp.Tool{Name: "threads", Annotations: ro(),
+		Description: "List a project's threads: counts by stage, the phases in order, the open threads with the furthest stage first, the closed ones, the notes waiting in atlas/<name>/inbox/, and the pages it could not read. Each thread carries the absolute path of each of its documents. Pass id for one thread. In a knowledge base session with no project, every project that uses it."}, s.threads)
+	mcp.AddTool(server, &mcp.Tool{Name: "thread",
+		Description: "Open a thread or move one along. A thread is one line of work with a document per stage: stub, spec, plan, receipt. Without id: open a thread from text, which becomes its stub. With id and stage: file that stage's document from text, which moves the thread to that stage; a receipt needs outcome (completed or killed) and closes the thread. With id and priority, phase, blocked, or title: change its card. With id alone: mark it touched today. The stage is never set directly; it is the furthest document that exists."}, s.thread)
 	mcp.AddTool(server, &mcp.Tool{Name: "phase",
-		Description: "Create, rename, reorder, or remove a phase of a project: a named slice of the timeline that tasks belong to. Rename follows every task that names it; remove refuses while one does."}, s.phase)
+		Description: "Create, rename, reorder, or remove a phase of a project: a named slice of the timeline that threads belong to. Rename follows every thread that names it; remove refuses while one does."}, s.phase)
 	mcp.AddTool(server, &mcp.Tool{Name: "mode",
 		Description: "Read the knowledge base's filing mode (generic or lyt) and the page types it files. Pass set to prepare a plan that changes it; apply that plan to make the change."}, s.mode)
 	mcp.AddTool(server, &mcp.Tool{Name: "atlas",
-		Description: "Read the whole atlas: every knowledge base with its scope, path, projects, and state; every project with its path, knowledge base, and open tasks; the folders the atlas cannot read; and the settings. Pass refresh to also rewrite the registry."}, s.atlasTool)
+		Description: "Read the whole atlas: every knowledge base with its scope, path, projects, and state; every project with its path, knowledge base, and open threads; the folders the atlas cannot read; and the settings. Pass refresh to also rewrite the registry."}, s.atlasTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "vault",
 		Description: "Create or adopt a knowledge base, edit its name or scope, or forget one the atlas lists (the folder stays); action is create, adopt, edit, or forget. State the change and get a yes before calling."}, s.vaultTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "project",
-		Description: "Make a folder a project (init), set or clear the knowledge base it uses (link, unlink), change its name or description (edit), or forget it (the folder and its atlas/ stay). State the change and get a yes before calling."}, s.projectTool)
+		Description: "Make a folder a project (init), set or clear the knowledge base it uses (link, unlink), change its name or description (edit), or forget it (the folder and its atlas/<name>/ stay). State the change and get a yes before calling."}, s.projectTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "settings",
 		Description: "Set an atlas setting and return them all: new_days, how long a knowledge base or project counts as new. With no arguments it only reads."}, s.settingsTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "stage",
@@ -923,7 +985,7 @@ func Run(ctx context.Context, opts Options) error {
 
 // ToolNames lists every tool MCP registers, sorted, for docs and tests.
 func ToolNames() []string {
-	names := []string{"apply", "atlas", "capture", "history", "inbox", "lint", "mode", "phase", "plan", "plant", "project", "route", "settings", "stage", "status", "stub", "task", "tasks", "undo", "vault"}
+	names := []string{"apply", "atlas", "capture", "history", "inbox", "lint", "mode", "phase", "plan", "project", "route", "settings", "stage", "status", "stub", "thread", "threads", "undo", "vault"}
 	sort.Strings(names)
 	return names
 }

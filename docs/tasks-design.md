@@ -1,5 +1,8 @@
 # Tasks
 
+Superseded by `threads-design.md` in 3.0.0: a project holds threads, not
+tasks. This document stays as the record of the task model.
+
 Status: implemented in 0.4.0; the `work` entry point and `repos` on a task
 page came with `docs/superpowers/specs/2026-09-17-working-from-a-project-design.md`. In v2 (`v2-design.md`) tasks exist only in a
 vault of kind `project`; the sections "Repos and the vault" and "The atlas

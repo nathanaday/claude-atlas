@@ -3,7 +3,6 @@ package tui
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +13,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -24,7 +23,7 @@ func knowledge(name, heat string) Item {
 		ID: "id-" + name, Kind: registry.Knowledge, Name: name, Path: "/v/" + name, Mode: vault.Generic,
 		Created: "2026-09-01", Scope: name + " sources",
 		State: &registry.State{OK: true, Heat: heat, Pages: &four, Inbox: &one,
-			GeneratedAt: "2026-09-12T18:00:00Z", OpenThreads: []string{"thread"}, LastOperation: "2026-09-10"},
+			GeneratedAt: "2026-09-12T18:00:00Z", HotTopics: []string{"thread"}, LastOperation: "2026-09-10"},
 	}}
 }
 
@@ -53,9 +52,9 @@ func sample() []Item {
 	zero := 0
 	items[0].Entry.Projects = []registry.Ref{{ID: "id-webapp", Name: "webapp"}, {ID: "id-firmware", Name: "firmware"}}
 	items[2].Entry.State.DaysIdle = &zero
-	items[2].Entry.State.Tasks = &registry.TaskSummary{
-		Counts: tasks.Counts{Open: 3, Active: 1, Planned: 2, Phases: 1},
-		Open:   []registry.TaskLine{{ID: "task-20260917-0001", Title: "Filter vehicle false alarms", Status: "active", Priority: "high", Phase: "Alarm quality"}},
+	items[2].Entry.State.Threads = &registry.ThreadSummary{
+		Counts: threads.Counts{Open: 3, Plan: 1, Spec: 2, Phases: 1},
+		Open:   []registry.ThreadLine{{ID: "thr-20260917-0001", Title: "Filter vehicle false alarms", Stage: "plan", Priority: "high", Phase: "Alarm quality"}},
 		Phases: []string{"Alarm quality", "Launch"},
 	}
 	items[2].Entry.State.Described = &registry.Description{Page: "wiki/entities/webapp.md", Commit: "abc1234", Behind: 2}
@@ -133,7 +132,7 @@ func TestTabBarAndArrows(t *testing.T) {
 		t.Fatalf("the Knowledge tab lists the knowledge bases: tab=%d rows=%d", v.tab, len(v.boards[0].rows))
 	}
 	v = pressV(v, tea.KeyRight)
-	if v.tab != tabProjects || !strings.Contains(v.View(), "A project is an atlas/ folder") || len(v.boards[1].rows) != 3 {
+	if v.tab != tabProjects || !strings.Contains(v.View(), "A project is an atlas/<name>/ folder") || len(v.boards[1].rows) != 3 {
 		t.Fatalf("right: tab=%d\n%s", v.tab, v.View())
 	}
 	v = pressV(v, tea.KeyRight)
@@ -169,7 +168,7 @@ func TestProjectsAreGroupedByKnowledgeBase(t *testing.T) {
 	v.goTo(tabProjects)
 	out := v.View()
 	t.Logf("\n%s", out)
-	for _, want := range []string{"papers", "no knowledge base", "webapp", "firmware", "thesis", "3 tasks open", "phase: Alarm quality", "touched today", "the webapp work", "/code/webapp"} {
+	for _, want := range []string{"papers", "no knowledge base", "webapp", "firmware", "thesis", "3 threads open", "phase: Alarm quality", "touched today", "the webapp work", "/code/webapp"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -191,7 +190,7 @@ func TestEnterExpandsInPlace(t *testing.T) {
 	v = pressV(v, tea.KeyEnter)
 	out := v.View()
 	t.Logf("\n%s", out)
-	for _, want := range []string{"Path", "/code/webapp", "Knowledge", "papers", "Described", "described in wiki/entities/webapp.md at abc1234, 2 commits behind", "Tasks", "3 open: 1 active", "Phases", "Alarm quality → Launch", "[active] Filter vehicle false alarms", "Enter collapse"} {
+	for _, want := range []string{"Path", "/code/webapp", "Knowledge", "papers", "Described", "described in wiki/entities/webapp.md at abc1234, 2 commits behind", "Threads", "3 open: 1 plan", "Phases", "Alarm quality → Launch", "[plan] Filter vehicle false alarms", "Enter collapse"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -203,7 +202,7 @@ func TestEnterExpandsInPlace(t *testing.T) {
 	v = findEntry(t, v, "papers")
 	v = pressV(v, tea.KeyEnter)
 	out = v.View()
-	for _, want := range []string{"Mode", "generic", "Scope", "papers sources", "Last operation", "2026-09-10", "Open threads", "- thread", "Unfinished"} {
+	for _, want := range []string{"Mode", "generic", "Scope", "papers sources", "Last operation", "2026-09-10", "Hot topics", "- thread", "Unfinished"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("knowledge base details miss %q:\n%s", want, out)
 		}
@@ -315,7 +314,7 @@ func TestClaudeStartsInEitherKind(t *testing.T) {
 
 func TestKeysOnAProblemRefuse(t *testing.T) {
 	v := findEntry(t, newView(sample(), Opener{}, actions.Atlas{}), "gateway")
-	for _, key := range []string{"o", "c", "p"} {
+	for _, key := range []string{"o", "c", "n"} {
 		v = keyV(v, key)
 		if !strings.Contains(v.errMsg, "not found") {
 			t.Fatalf("%s on a problem names the error: %q", key, v.errMsg)
@@ -348,68 +347,71 @@ func TestRefreshReloadsAndKeepsTheCursor(t *testing.T) {
 	}
 }
 
-func TestPlantPromptsForOneLineAndPlants(t *testing.T) {
-	var got tasks.Plant
+func TestNewThreadPromptsForOneLine(t *testing.T) {
+	var got threads.New
 	var into string
 	acts := actions.Atlas{
-		Plant: func(e registry.Entry, p tasks.Plant) (*tasks.Task, error) {
-			got, into = p, e.Name
-			return &tasks.Task{ID: "task-20260917-abcd", Title: tasks.TitleFromText(p.Text)}, nil
+		StartThread: func(e registry.Entry, n threads.New) (*threads.Thread, error) {
+			got, into = n, e.Name
+			return &threads.Thread{ID: "thr-20260917-abcd", Title: threads.TitleFromText(n.Text)}, nil
 		},
 	}
 	v := findEntry(t, newView(sample(), Opener{}, acts), "webapp")
-	v = keyV(v, "p")
-	if v.plant == nil || !strings.Contains(v.View(), "task for webapp:") || !strings.Contains(v.View(), "Enter plant") {
-		t.Fatalf("p opens the prompt:\n%s", v.View())
+	v = keyV(v, "n")
+	if v.stub == nil || !strings.Contains(v.View(), "new thread in webapp:") || !strings.Contains(v.View(), "Enter open the thread") {
+		t.Fatalf("n opens the prompt:\n%s", v.View())
 	}
 	for _, r := range "fix the login page" {
 		v = keyV(v, string(r))
 	}
 	v = keyV(v, "q") // q is text while the prompt is open
 	v = pressV(v, tea.KeyBackspace, tea.KeyEnter)
-	if v.plant != nil || into != "webapp" || got.Text != "fix the login page" {
-		t.Fatalf("Enter plants: into=%q text=%q", into, got.Text)
+	if v.stub != nil || into != "webapp" || got.Text != "fix the login page" {
+		t.Fatalf("Enter opens the thread: into=%q text=%q", into, got.Text)
 	}
-	if !v.changed || !strings.Contains(v.status, "planted fix the login page in webapp (task-20260917-abcd)") {
+	if !v.changed || !strings.Contains(v.status, "opened fix the login page in webapp (thr-20260917-abcd)") {
 		t.Fatalf("status=%q changed=%v", v.status, v.changed)
 	}
-	v = keyV(v, "p")
+	v = keyV(v, "n")
 	v = pressV(v, tea.KeyEsc)
-	if v.plant != nil {
+	if v.stub != nil {
 		t.Fatal("Esc cancels the prompt")
 	}
-	v = keyV(v, "p")
+	v = keyV(v, "n")
 	v = pressV(v, tea.KeyEnter)
-	if v.plant != nil || into != "webapp" || v.errMsg != "" {
-		t.Fatal("an empty line plants nothing and says nothing")
+	if v.stub != nil || into != "webapp" || v.errMsg != "" {
+		t.Fatal("an empty line opens nothing and says nothing")
 	}
 	v = findEntry(t, v, "papers")
-	v = keyV(v, "p")
-	if v.plant != nil || !strings.Contains(v.errMsg, "plant into a project") {
-		t.Fatalf("a knowledge base has no tasks: %q", v.errMsg)
+	v = keyV(v, "n")
+	if v.stub != nil || !strings.Contains(v.errMsg, "open one in a project") {
+		t.Fatalf("a knowledge base has no threads: %q", v.errMsg)
 	}
-	failing := actions.Atlas{Plant: func(registry.Entry, tasks.Plant) (*tasks.Task, error) { return nil, errors.New("no phase named x") }}
+	failing := actions.Atlas{StartThread: func(registry.Entry, threads.New) (*threads.Thread, error) {
+		return nil, errors.New("no phase named x")
+	}}
 	v = findEntry(t, newView(sample(), Opener{}, failing), "webapp")
-	v = keyV(v, "p")
+	v = keyV(v, "n")
 	v = keyV(v, "x")
 	v = pressV(v, tea.KeyEnter)
 	if v.errMsg != "no phase named x" {
-		t.Fatalf("a plant error reaches the footer: %q", v.errMsg)
+		t.Fatalf("an error reaches the footer: %q", v.errMsg)
 	}
 }
 
-func TestPlantWritesARealTaskPage(t *testing.T) {
+func TestNewThreadWritesARealStub(t *testing.T) {
 	work := t.TempDir()
-	p, _, err := project.Init(work, project.Options{Name: "webapp"}, time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC))
+	at := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	p, _, err := project.Init(work, project.Options{Name: "webapp"}, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	acts := actions.Atlas{Plant: func(e registry.Entry, plant tasks.Plant) (*tasks.Task, error) {
-		return tasks.PlantTask(p, plant, time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC))
+	acts := actions.Atlas{StartThread: func(e registry.Entry, n threads.New) (*threads.Thread, error) {
+		return threads.Start(p, n, at)
 	}}
 	items := []Item{{Entry: registry.Entry{ID: "id", Kind: registry.Project, Name: "webapp", Path: work}}}
 	v := findEntry(t, newView(items, Opener{}, acts), "webapp")
-	v = keyV(v, "p")
+	v = keyV(v, "n")
 	for _, r := range "Write the README" {
 		v = keyV(v, string(r))
 	}
@@ -417,16 +419,17 @@ func TestPlantWritesARealTaskPage(t *testing.T) {
 	if v.errMsg != "" {
 		t.Fatal(v.errMsg)
 	}
-	page := filepath.Join(work, project.Dir, project.TasksDir, "Write the README.md")
-	data, err := os.ReadFile(page)
+	data, err := os.ReadFile(p.Path(project.StubsDir + "/Write the README.md"))
 	if err != nil {
-		t.Fatalf("the page is written: %v", err)
+		t.Fatalf("the stub is written: %v", err)
 	}
-	if !strings.Contains(string(data), "status: planted") {
-		t.Fatalf("planted:\n%s", data)
+	if !strings.Contains(string(data), "type: stub") {
+		t.Fatalf("stub:\n%s", data)
 	}
-	if _, err := os.Stat(filepath.Join(work, project.Dir, project.TasksIndex)); err != nil {
-		t.Fatal("the index is generated")
+	for _, rel := range []string{project.ThreadsDir + "/Write the README.md", project.ThreadsIndex} {
+		if _, err := os.Stat(p.Path(rel)); err != nil {
+			t.Fatalf("%s is generated: %v", rel, err)
+		}
 	}
 }
 
@@ -442,8 +445,8 @@ func TestHelpTogglesTheFooter(t *testing.T) {
 		t.Fatalf("help on names every key:\n%s", out)
 	}
 	v = findEntry(t, keyV(v, "h"), "webapp")
-	if out := v.View(); !strings.Contains(out, "c Claude · p plant") || strings.Contains(out, "o Obsidian") {
-		t.Fatalf("a project offers Claude and plant, not Obsidian:\n%s", out)
+	if out := v.View(); !strings.Contains(out, "c Claude · n new thread") || strings.Contains(out, "o Obsidian") {
+		t.Fatalf("a project offers Claude and a new thread, not Obsidian:\n%s", out)
 	}
 }
 

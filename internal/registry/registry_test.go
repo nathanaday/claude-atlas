@@ -130,8 +130,8 @@ func TestScanFindsEveryEntryAndSortsThem(t *testing.T) {
 	if webapp == nil || webapp.Kind != Project || webapp.ID != ps["webapp"].Config.ID || webapp.Description != "The web app." || webapp.Created != "2026-09-15" {
 		t.Fatalf("project entry %+v", webapp)
 	}
-	if webapp.Atlas() != filepath.Join(webapp.Path, "atlas") || aiml.Wiki() != filepath.Join(aiml.Path, "wiki") {
-		t.Fatal("Atlas and Wiki")
+	if aiml.Wiki() != filepath.Join(aiml.Path, "wiki") {
+		t.Fatal("Wiki")
 	}
 }
 
@@ -238,7 +238,7 @@ func TestStateFileRoundTrips(t *testing.T) {
 		t.Fatalf("read before write: %v", err)
 	}
 	four := 4
-	ix.Entries[0].State = &State{GeneratedAt: "2026-09-15T12:00:00Z", OK: true, Pages: &four, Heat: "new", OpenThreads: []string{}}
+	ix.Entries[0].State = &State{GeneratedAt: "2026-09-15T12:00:00Z", OK: true, Pages: &four, Heat: "new", HotTopics: []string{}}
 	if err := Write(dir, ix.Entries, "2026-09-15T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestStateFileRoundTrips(t *testing.T) {
 		t.Fatalf("round trip %v %s %+v", err, generated, entries)
 	}
 	data, _ := os.ReadFile(File(dir))
-	if !strings.Contains(string(data), `"schema": "claude-atlas.registry.v2"`) {
+	if !strings.Contains(string(data), `"schema": "claude-atlas.registry.v3"`) {
 		t.Fatalf("file:\n%s", data)
 	}
 	os.WriteFile(File(dir), []byte(`{"schema":"claude-atlas.registry.v1","entries":[]}`), 0o644)
@@ -267,20 +267,23 @@ func TestScanMakesMissingEntries(t *testing.T) {
 	plain := filepath.Join(t.TempDir(), "plain")
 	os.MkdirAll(plain, 0o755)
 	broken := filepath.Join(t.TempDir(), "broken")
-	os.MkdirAll(filepath.Join(broken, project.Dir), 0o755)
-	os.WriteFile(project.MarkerPath(broken), []byte("{not json"), 0o644)
+	os.MkdirAll(filepath.Join(broken, project.Dir, "p"), 0o755)
+	os.WriteFile(filepath.Join(broken, project.Dir, "p", project.Marker), []byte("{not json"), 0o644)
 	future := filepath.Join(t.TempDir(), "future")
-	os.MkdirAll(filepath.Join(future, project.Dir), 0o755)
-	os.WriteFile(project.MarkerPath(future), []byte(`{"schema":"claude-atlas.project.v9","id":"x"}`), 0o644)
+	os.MkdirAll(filepath.Join(future, project.Dir, "p"), 0o755)
+	os.WriteFile(filepath.Join(future, project.Dir, "p", project.Marker), []byte(`{"schema":"claude-atlas.project.v9","id":"x"}`), 0o644)
 	noID := filepath.Join(t.TempDir(), "noid")
-	os.MkdirAll(filepath.Join(noID, project.Dir), 0o755)
-	os.WriteFile(project.MarkerPath(noID), []byte(`{"schema":"`+project.Schema+`","name":"x"}`), 0o644)
-	cfg.Projects = append(cfg.Projects, goneWork, plain, broken, future, noID)
+	os.MkdirAll(filepath.Join(noID, project.Dir, "p"), 0o755)
+	os.WriteFile(filepath.Join(noID, project.Dir, "p", project.Marker), []byte(`{"schema":"`+project.Schema+`","name":"x"}`), 0o644)
+	flat := filepath.Join(t.TempDir(), "flat")
+	os.MkdirAll(filepath.Join(flat, project.Dir), 0o755)
+	os.WriteFile(filepath.Join(flat, project.Dir, project.Marker), []byte(`{"schema":"`+project.Schema+`","id":"f","name":"flat"}`), 0o644)
+	cfg.Projects = append(cfg.Projects, goneWork, plain, broken, future, noID, flat)
 	ix, err := Scan(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{gone: ReasonMissing, goneWork: ReasonMissing, plain: ReasonNotProject, broken: ReasonUnreadable, future: ReasonSchema, noID: ReasonUnreadable}
+	want := map[string]string{gone: ReasonMissing, goneWork: ReasonMissing, plain: ReasonNotProject, broken: ReasonUnreadable, future: ReasonSchema, noID: ReasonUnreadable, flat: ReasonFlat}
 	for path, reason := range want {
 		e := ix.ByPath(path)
 		if e == nil || e.Reason != reason || e.Error == "" {

@@ -203,7 +203,7 @@ func kindErrors(root string) []PathFinding {
 	}
 	for _, rel := range []string{"wiki/tasks", "wiki/questions", "wiki/sessions", "kb", "repos"} {
 		if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err == nil && info.IsDir() {
-			out = append(out, PathFinding{Path: rel, Message: "a v2 project folder; tasks live in a project's atlas/ folder now, and knowledge pages move under wiki/"})
+			out = append(out, PathFinding{Path: rel, Message: "a v2 project folder; threads live in a project's atlas/<name>/ folder now, and knowledge pages move under wiki/"})
 		}
 	}
 	return out

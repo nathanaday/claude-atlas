@@ -10,9 +10,10 @@ for sources you have not processed, `ideas/` for the user's own scratch
 notes, `.raw/captured/` for immutable copies of ingested sources, and
 `wiki/` for the pages: sources, entities, and concepts. Every change to
 `wiki/` is one reviewed operation and one git commit. A **project** is a
-folder named `atlas/` inside the user's work, a repository or a folder of
-documents. It holds `project.json`, `tasks/`, `phases/`, and `inbox/` for task
-notes. It has no git of its own and no engine. A project uses one knowledge
+folder `atlas/<name>/` inside the user's work, a repository or a folder of
+documents. It holds `project.json`, the threads (`threads/`, and one folder per
+stage: `stubs/`, `specs/`, `plans/`, `receipts/`), `phases/`, and `inbox/`
+for notes. It has no git of its own and no engine. A project uses one knowledge
 base; a knowledge base serves many projects.
 
 The atlas MCP server (tools named `mcp__plugin_claude-atlas_atlas__<tool>`,
@@ -23,7 +24,7 @@ into a knowledge base.
 
 Call `status` first. In a project session it reports `kind: project`, the
 project's id, name, description, and path, its knowledge base (or why none
-resolves), the page that describes it there, and its task counts. In a
+resolves), the page that describes it there, and its thread counts by stage. In a
 knowledge base session it reports `kind: knowledge`, the mode, scope, page
 count, files waiting in the inbox, git state, warnings, and the projects that
 use it. The session hook's first line already names the place:
@@ -44,9 +45,11 @@ Write, Edit, MultiEdit, and NotebookEdit are refused under a knowledge base's
 only through `plan` and `apply`. The core writes `wiki/log.md` and the source
 ledger itself; a plan that names either is rejected.
 
-A project's task and phase pages are different: their prose is the model's to
-write with Edit. Only `atlas/tasks/tasks.md` and `atlas/project.json` are
-refused; the `task`, `phase`, and `project` tools change those.
+A project's stage documents and phase pages are different: their prose is the
+model's to write with Edit. The hook refuses everything under
+`atlas/<name>/threads/`, `atlas/<name>/project.json`, and a new file written
+straight into a stage folder; the `thread`, `phase`, and `project` tools make
+those changes.
 
 ## Route the request
 
@@ -60,11 +63,12 @@ refused; the `task`, `phase`, and `project` tools change those.
 | Roll up log entries | `wiki-fold` |
 | Describe a project in its knowledge base, or bring its page up to date | `describe` |
 | Make a change now: do this, implement, fix this | `work` |
-| See, move, review, or route tasks; create or change a phase | `task` |
-| Note an idea as a task, or plant the notes in a project's inbox | `task-plant` |
-| Decide how to do a task | `task-plan` |
-| Work on a task, or resume one | `task-run` |
-| Close a task as done or cancelled | `task-finish` |
+| See, change, review, or route threads; create or change a phase | `thread` |
+| Note an idea as a thread, or open threads from the notes in a project's inbox | `thread-stub` |
+| Define what done means for a thread | `thread-spec` |
+| Decide how to do a thread | `thread-plan` |
+| Work on a thread, or resume one | `thread-run` |
+| Close a thread as completed or killed | `thread-receipt` |
 | Work with an Obsidian Canvas | `canvas` |
 | Author a Bases `.base` view | `obsidian-bases` |
 | Obsidian syntax questions | `obsidian-markdown` |
@@ -77,7 +81,7 @@ Query is read-only. Keeping an answer is a separate `save` operation the user
 asks for. Never update the hot cache merely because a session ended.
 
 In a project session, the wiki tools act on the project's knowledge base.
-In a knowledge base session, the task tools take `project` to reach any
+In a knowledge base session, the thread tools take `project` to reach any
 project that uses it; the hook's `Projects:` line names them.
 
 ## The operation contract
@@ -107,7 +111,7 @@ when a user hesitates rather than skipping a review.
 Read only what the request needs:
 
 - [operations.md](references/operations.md) for the plan and apply contract;
-- [tasks.md](references/tasks.md) for a project's task and phase pages;
+- [threads.md](references/threads.md) for a project's threads and phase pages;
 - [provenance.md](references/provenance.md) when a source enters or a claim
   needs support;
 - [frontmatter.md](references/frontmatter.md) when defining or adopting page

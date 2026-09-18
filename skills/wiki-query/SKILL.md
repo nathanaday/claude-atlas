@@ -16,9 +16,9 @@ widen the question or change the knowledge base.
 
 In a knowledge base session, evidence is its `wiki/`. In a project session,
 evidence is the project's knowledge base: `status` gives its path under
-`knowledge`; read its pages by that absolute path. A project's task pages are
+`knowledge`; read its pages by that absolute path. A project's thread pages are
 not evidence about the domain; they are the project's own state, and the
-`tasks` tool reads them.
+`threads` tool reads them.
 
 ## Select depth
 

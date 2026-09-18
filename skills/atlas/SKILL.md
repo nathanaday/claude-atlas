@@ -13,7 +13,7 @@ not know.
 
 1. Call `atlas`. It returns every knowledge base with its path, scope, mode,
    state, and the projects that use it; every project with its path,
-   description, knowledge base, open task counts, and whether a page
+   description, knowledge base, open thread counts, and whether a page
    describes it; the folders the atlas cannot read, with a reason; and the
    settings.
 2. Show a compact picture: each knowledge base, then the projects under it,
@@ -21,7 +21,7 @@ not know.
    its reason. Keep it short; the user asked for orientation, not a dump.
 3. Say what needs attention: a project whose knowledge base is not on this
    machine, a project no page describes, a registered folder that is gone,
-   a blocked or stale task.
+   a blocked or stale thread.
 
 ## Route
 
@@ -30,7 +30,7 @@ not know.
 | Make this folder a project; link, unlink, rename, or forget one | `atlas-project` |
 | Create a knowledge base; change its scope or mode | `atlas-knowledge` |
 | Work inside a knowledge base or a project | `wiki` |
-| See or change tasks across projects | `task` |
+| See or change threads across projects | `thread` |
 
 ## Settings and refresh
 
@@ -50,5 +50,5 @@ tools. Name the command; do not run it through Bash unless the user asks.
 
 Every write here is reversible or leaves the folder alone, so no plan
 preview exists; the skill that writes states the change in one line and
-waits for yes. Never edit `.claude-atlas.json`, `atlas/project.json`,
+waits for yes. Never edit `.claude-atlas.json`, `atlas/<name>/project.json`,
 `~/.claude-atlas/config.json`, or `registry.json` with Write or Edit.

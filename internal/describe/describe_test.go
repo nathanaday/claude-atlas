@@ -23,11 +23,12 @@ func repoWork(t *testing.T) (string, string) {
 	}
 	code := filepath.Join(t.TempDir(), "code")
 	os.MkdirAll(filepath.Join(code, "docs"), 0o755)
-	os.MkdirAll(filepath.Join(code, "atlas", "tasks"), 0o755)
+	os.MkdirAll(filepath.Join(code, "atlas", "code", "tasks"), 0o755)
 	os.WriteFile(filepath.Join(code, "README.md"), []byte("# code\n\nA thing.\n"), 0o644)
 	os.WriteFile(filepath.Join(code, "CLAUDE.md"), []byte("# guide\n\n```go\nx\n```\n"), 0o644)
 	os.WriteFile(filepath.Join(code, "docs", "design.md"), []byte("# The design\n\ntext\n"), 0o644)
-	os.WriteFile(filepath.Join(code, "atlas", "tasks", "x.md"), []byte("task"), 0o644)
+	os.WriteFile(filepath.Join(code, "atlas", "code", "project.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(code, "atlas", "code", "tasks", "x.md"), []byte("task"), 0o644)
 	os.WriteFile(filepath.Join(code, "main.go"), []byte("package main\n"), 0o644)
 	r := gitx.Repo{Dir: code}
 	if err := r.Init(); err != nil {
@@ -139,10 +140,10 @@ func TestTakeSnapshotOverARepository(t *testing.T) {
 
 func TestTakeSnapshotOverAPlainFolder(t *testing.T) {
 	docs := filepath.Join(t.TempDir(), "thesis")
-	os.MkdirAll(filepath.Join(docs, "atlas"), 0o755)
+	os.MkdirAll(filepath.Join(docs, "atlas", "thesis"), 0o755)
 	os.MkdirAll(filepath.Join(docs, ".hidden"), 0o755)
 	os.MkdirAll(filepath.Join(docs, "node_modules", "x"), 0o755)
-	os.WriteFile(filepath.Join(docs, "atlas", "project.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(docs, "atlas", "thesis", "project.json"), []byte("{}"), 0o644)
 	os.WriteFile(filepath.Join(docs, ".hidden", "x"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(docs, "node_modules", "x", "i.js"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(docs, "chapter1.md"), []byte("# One\n"), 0o644)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -18,7 +19,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/place"
 	"github.com/nathanaday/claude-atlas/internal/project"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
@@ -28,14 +29,14 @@ import (
 const MaxContextBytes = 8 * 1024
 
 // ProjectSkills is the slash-menu line shown at the start of a project session.
-const ProjectSkills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  save  describe  work  task  task-plant  task-plan  task-run  task-finish  think  atlas  atlas-project  atlas-knowledge"
+const ProjectSkills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  save  describe  work  thread  thread-stub  thread-spec  thread-plan  thread-run  thread-receipt  think  atlas  atlas-project  atlas-knowledge"
 
 // KnowledgeSkills is the slash-menu line for a knowledge base session, where knowledge
 // enters and every project that uses it is in view.
-const KnowledgeSkills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  wiki-mode  wiki-fold  save  describe  work  task  task-plant  task-plan  task-run  task-finish  canvas  obsidian-markdown  obsidian-bases  think  atlas  atlas-project  atlas-knowledge"
+const KnowledgeSkills = "/claude-atlas:wiki  wiki-ingest  wiki-query  wiki-lint  wiki-mode  wiki-fold  save  describe  work  thread  thread-stub  thread-spec  thread-plan  thread-run  thread-receipt  canvas  obsidian-markdown  obsidian-bases  think  atlas  atlas-project  atlas-knowledge"
 
-// MaxTaskLines bounds how many open tasks the session start lists.
-const MaxTaskLines = 8
+// MaxThreadLines bounds how many open threads the session start lists.
+const MaxThreadLines = 8
 
 // SearchSentence tells a project session to check the knowledge base before answering
 // from the code alone.
@@ -65,7 +66,7 @@ func findPlace(in input, env Env, register bool) (*place.Place, error) {
 }
 
 // SessionStart prints the session's orientation: in a project, its knowledge base, its
-// page there, and its open tasks; in a knowledge base, the projects that use it, its
+// page there, and its open threads; in a knowledge base, the projects that use it, its
 // inbox, and its hot cache. Silence is the normal result elsewhere.
 func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now time.Time) error {
 	in := readInput(r)
@@ -77,6 +78,9 @@ func SessionStart(r io.Reader, w io.Writer, env Env, contextEnabled bool, now ti
 			return err
 		case errors.Is(err, vault.ErrProjectVault):
 			_, err := fmt.Fprintf(w, "claude-atlas: %v\n", err)
+			return err
+		case errors.Is(err, project.ErrFlat):
+			_, err := fmt.Fprintf(w, "claude-atlas: %v. It moves the project into atlas/<name>/; the atlas tools refuse the project until then.\n", err)
 			return err
 		}
 		return nil
@@ -159,7 +163,7 @@ func projectLines(b *strings.Builder, pl *place.Place, now time.Time) {
 		b.WriteString("Knowledge: none; link one with `claude-atlas link KB`.\n")
 	}
 	b.WriteString("Skills: " + ProjectSkills + "\n")
-	b.WriteString(taskLines(p, now))
+	b.WriteString(threadLines(p, now))
 }
 
 // knowledgeLines is the orientation of a knowledge base session.
@@ -184,9 +188,9 @@ func knowledgeLines(b *strings.Builder, pl *place.Place, now time.Time) {
 			for _, e := range projects {
 				part := fmt.Sprintf("%s (%s", e.Name, home.Display(e.Path))
 				if p, err := project.Open(e.Path); err == nil {
-					if board, err := tasks.Load(p); err == nil {
+					if board, err := threads.Load(p); err == nil {
 						c := board.Counts(now)
-						part += fmt.Sprintf(", %d open task%s", c.Open, plural(c.Open))
+						part += fmt.Sprintf(", %d open thread%s", c.Open, plural(c.Open))
 					}
 				}
 				parts = append(parts, part+")")
@@ -194,7 +198,7 @@ func knowledgeLines(b *strings.Builder, pl *place.Place, now time.Time) {
 					undescribed = append(undescribed, e.Name)
 				}
 			}
-			b.WriteString("Projects: " + strings.Join(parts, ", ") + ". Plant into one with the task tools; read its work through its path.\n")
+			b.WriteString("Projects: " + strings.Join(parts, ", ") + ". Open a thread in one with the thread tool; read its work through its path.\n")
 			if len(undescribed) > 0 {
 				b.WriteString("Not yet described here: " + strings.Join(undescribed, ", ") + "; the describe skill writes the page.\n")
 			}
@@ -256,21 +260,27 @@ func namesList(names []string) string {
 	return strings.Join(names, ", ")
 }
 
-// taskLines summarizes a project's open tasks: counts, phases, then the tasks
-// themselves, active first.
-func taskLines(p *project.Project, now time.Time) string {
-	board, err := tasks.Load(p)
+// threadLines brings the generated pages up to date, then summarizes the project's open
+// threads: counts by stage, then the threads themselves, the furthest stage first.
+func threadLines(p *project.Project, now time.Time) string {
+	var b strings.Builder
+	if threads.Legacy(p) {
+		fmt.Fprintf(&b, "This project holds task pages from before threads; `claude-atlas upgrade %s` turns each one into a thread.\n", home.Display(p.Root))
+	}
+	board, err := threads.Sync(p, now)
 	if err != nil {
-		return ""
+		return b.String()
 	}
 	counts := board.Counts(now)
-	notes := len(tasks.Notes(p))
-	var b strings.Builder
+	notes := len(threads.Notes(p))
 	if counts.Open == 0 && notes == 0 {
-		b.WriteString("Open tasks: none. Plant one with the task-plant skill.\n")
+		b.WriteString("Open threads: none. Open one with the thread-stub skill.\n")
 	}
 	if counts.Open > 0 {
-		fmt.Fprintf(&b, "Open tasks: %d (active %d, blocked %d, planned %d, planted %d", counts.Open, counts.Active, counts.Blocked, counts.Planned, counts.Planted)
+		fmt.Fprintf(&b, "Open threads: %d (plan %d, spec %d, stub %d", counts.Open, counts.Plan, counts.Spec, counts.Stub)
+		if counts.Blocked > 0 {
+			fmt.Fprintf(&b, "; %d blocked", counts.Blocked)
+		}
 		if counts.Stale > 0 {
 			fmt.Fprintf(&b, "; %d stale", counts.Stale)
 		}
@@ -278,27 +288,27 @@ func taskLines(p *project.Project, now time.Time) string {
 		if counts.Phases > 0 {
 			fmt.Fprintf(&b, " in %d phase%s", counts.Phases, plural(counts.Phases))
 		}
-		b.WriteString(". Continue one with the task-run skill; see them all with the tasks tool.\n")
+		b.WriteString(". A thread moves stub, spec, plan, receipt, and each stage is a document the thread tool files; the thread skills say how. Work that belongs to a thread goes on its documents.\n")
 	}
 	for i, t := range board.Open() {
-		if i == MaxTaskLines {
+		if i == MaxThreadLines {
 			fmt.Fprintf(&b, "- … and %d more\n", len(board.Open())-i)
 			break
 		}
-		line := fmt.Sprintf("- [%s] %s (%s)", t.Status, t.Title, t.ID)
+		line := fmt.Sprintf("- [%s] %s (%s)", t.Stage, t.Title, t.ID)
 		if t.Phase != "" {
 			line += " · " + t.Phase
 		}
 		if t.Priority != "normal" {
 			line += " · " + t.Priority
 		}
-		if t.Due != "" {
-			line += " · due " + t.Due
-		}
 		if t.Updated != "" {
 			line += " · updated " + t.Updated
 		}
-		if tasks.Stale(t, now) {
+		if t.Blocked != "" {
+			line += " · blocked: " + t.Blocked
+		}
+		if threads.Stale(t, now) {
 			line += " · stale"
 		}
 		b.WriteString(line + "\n")
@@ -308,10 +318,10 @@ func taskLines(p *project.Project, now time.Time) string {
 		if notes == 1 {
 			verb = "waits"
 		}
-		fmt.Fprintf(&b, "%d task note%s %s in %s/%s/; the task-plant skill turns them into tasks.\n", notes, plural(notes), verb, project.Dir, project.InboxDir)
+		fmt.Fprintf(&b, "%d note%s %s in %s/%s/; the thread-stub skill opens a thread from each.\n", notes, plural(notes), verb, p.Rel(), project.InboxDir)
 	}
 	for _, pr := range board.Problems {
-		fmt.Fprintf(&b, "Not readable as a task: %s (%s).\n", pr.Path, pr.Reason)
+		fmt.Fprintf(&b, "Not readable: %s (%s).\n", pr.Path, pr.Reason)
 	}
 	return b.String()
 }
@@ -338,8 +348,9 @@ func hotText(v *vault.Vault) string {
 
 // Guard denies Write and Edit tools on paths the core owns: everything under a
 // knowledge base's wiki/, its raw store, its identity file, and its internal state; and
-// a project's generated task index. Task and phase pages are open to Edit, because their
-// prose is the model's to write.
+// a project's cards, board, and identity file. A stage document is open to Edit, because
+// its prose is the model's to write, but a new one comes from the thread tool, which
+// gives it the thread's id.
 func Guard(r io.Reader, w io.Writer) error {
 	in := readInput(r)
 	var ti struct {
@@ -359,14 +370,21 @@ func Guard(r io.Reader, w io.Writer) error {
 	}
 	reason := ""
 	if work := project.FindAbove(filepath.Dir(target)); work != "" {
-		rel, err := filepath.Rel(filepath.Join(work, project.Dir), target)
+		folder, err := project.Locate(work)
+		var rel string
+		if err == nil {
+			rel, err = filepath.Rel(filepath.Join(work, project.Dir, folder), target)
+		}
 		if err == nil {
 			rel = filepath.ToSlash(rel)
-			switch rel {
-			case project.TasksIndex:
-				reason = "tasks/tasks.md is generated from the task pages; change a task on its own page or with the task tool"
-			case project.Marker:
+			switch {
+			case threads.Owned(rel):
+				reason = "the cards and the board under threads/ are generated; write in the thread's documents, and change its card with the thread tool"
+			case rel == project.Marker:
 				reason = "the project's identity file changes only through the project tool and the CLI (link, unlink, edit)"
+			case threads.DocStage(rel) != "" && !exists(target):
+				stage := threads.DocStage(rel)
+				reason = fmt.Sprintf("a new %s comes from the thread tool (id, stage: %s, text), which names its thread and moves the thread to that stage; revise it with Edit afterwards", stage, stage)
 			}
 		}
 	}
@@ -400,6 +418,41 @@ func Guard(r io.Reader, w io.Writer) error {
 		"permissionDecisionReason": "claude-atlas: " + reason,
 	}}
 	return json.NewEncoder(w).Encode(out)
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// Touched runs after a Write or an Edit. When the file is a stage document, the thread
+// that owns it becomes updated today, so nobody has to say so.
+func Touched(r io.Reader, now time.Time) error {
+	in := readInput(r)
+	var ti struct {
+		FilePath string `json:"file_path"`
+	}
+	json.Unmarshal(in.ToolInput, &ti)
+	target := ti.FilePath
+	if target == "" {
+		return nil
+	}
+	if !filepath.IsAbs(target) && in.Cwd != "" {
+		target = filepath.Join(in.Cwd, target)
+	}
+	work := project.FindAbove(filepath.Dir(target))
+	if work == "" {
+		return nil
+	}
+	p, err := project.Open(work)
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(p.Atlas(), target)
+	if err != nil {
+		return nil
+	}
+	return threads.Touch(p, filepath.ToSlash(rel), now)
 }
 
 // Stop warns when an operation was interrupted in the session's knowledge base.

@@ -6,7 +6,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 )
 
 func TestBoxLinesForEachKind(t *testing.T) {
@@ -18,7 +18,7 @@ func TestBoxLinesForEachKind(t *testing.T) {
 		}
 	}
 	pr := strings.Join(boxLines(items[2].Entry, 60), "\n")
-	for _, want := range []string{"webapp", "/code/webapp", "the webapp work", "touched today", "3 tasks open", "phase: Alarm quality"} {
+	for _, want := range []string{"webapp", "/code/webapp", "the webapp work", "touched today", "3 threads open", "phase: Alarm quality"} {
 		if !strings.Contains(pr, want) {
 			t.Errorf("project box misses %q:\n%s", want, pr)
 		}
@@ -37,9 +37,9 @@ func TestDetailLinesForAProject(t *testing.T) {
 	e := sample()[2].Entry
 	dirty := 2
 	e.State.Git = &links.Link{OK: true, Branch: "main", Dirty: &dirty, LastCommit: "2026-09-16"}
-	e.State.Tasks.Open = append(e.State.Tasks.Open, registry.TaskLine{ID: "task-20260917-0002", Title: "Blocked one", Status: "blocked", Stale: true})
+	e.State.Threads.Open = append(e.State.Threads.Open, registry.ThreadLine{ID: "thr-20260917-0002", Title: "Blocked one", Stage: "stub", Blocked: "the vendor", Stale: true})
 	out := strings.Join(detailLines(e), "\n")
-	for _, want := range []string{"Path", "/code/webapp", "Knowledge", "papers", "Git", "main · 2 uncommitted · last commit 2026-09-16", "Described", "2 commits behind", "Tasks", "3 open", "Phases", "Alarm quality → Launch", "[active] Filter vehicle false alarms", "Alarm quality", "[blocked] Blocked one", "stale", "Signal", "1 blocked task"} {
+	for _, want := range []string{"Path", "/code/webapp", "Knowledge", "papers", "Git", "main · 2 uncommitted · last commit 2026-09-16", "Described", "2 commits behind", "Threads", "3 open", "Phases", "Alarm quality → Launch", "[plan] Filter vehicle false alarms", "Alarm quality", "[stub] Blocked one", "blocked", "stale", "Signal", "1 blocked thread"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
@@ -58,27 +58,27 @@ func TestDetailLinesForAProject(t *testing.T) {
 	}
 }
 
-func TestDetailLinesBoundTheOpenTasks(t *testing.T) {
+func TestDetailLinesBoundTheOpenThreads(t *testing.T) {
 	e := sample()[2].Entry
-	e.State.Tasks.Open = nil
-	for i := 0; i < maxDetailTasks+3; i++ {
-		e.State.Tasks.Open = append(e.State.Tasks.Open, registry.TaskLine{Title: "t", Status: "planted"})
+	e.State.Threads.Open = nil
+	for i := 0; i < maxDetailThreads+3; i++ {
+		e.State.Threads.Open = append(e.State.Threads.Open, registry.ThreadLine{Title: "t", Stage: "stub"})
 	}
 	out := strings.Join(detailLines(e), "\n")
-	if strings.Count(out, "[planted] t") != maxDetailTasks || !strings.Contains(out, "… and 3 more") {
+	if strings.Count(out, "[stub] t") != maxDetailThreads || !strings.Contains(out, "… and 3 more") {
 		t.Errorf("bounded:\n%s", out)
 	}
 }
 
-func TestTaskSummaryText(t *testing.T) {
-	if got := taskSummaryText(&registry.TaskSummary{}); got != "none open" {
+func TestThreadSummaryText(t *testing.T) {
+	if got := threadSummaryText(&registry.ThreadSummary{}); got != "none open" {
 		t.Fatal(got)
 	}
-	if got := taskSummaryText(&registry.TaskSummary{Counts: tasks.Counts{Notes: 2}}); got != "none open · 2 notes waiting" {
+	if got := threadSummaryText(&registry.ThreadSummary{Counts: threads.Counts{Notes: 2}}); got != "none open · 2 notes waiting" {
 		t.Fatal(got)
 	}
-	got := taskSummaryText(&registry.TaskSummary{Counts: tasks.Counts{Open: 2, Active: 1, Planted: 1, Stale: 1, Notes: 1}})
-	if !strings.Contains(got, "2 open: 1 active · 0 blocked · 0 planned · 1 planted") || !strings.Contains(got, "1 stale") || !strings.Contains(got, "1 note waiting") {
+	got := threadSummaryText(&registry.ThreadSummary{Counts: threads.Counts{Open: 2, Plan: 1, Stub: 1, Blocked: 1, Stale: 1, Notes: 1}})
+	if !strings.Contains(got, "2 open: 1 plan · 0 spec · 1 stub · 1 blocked") || !strings.Contains(got, "1 stale") || !strings.Contains(got, "1 note waiting") {
 		t.Fatal(got)
 	}
 }

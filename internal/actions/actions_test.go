@@ -12,7 +12,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
@@ -110,17 +110,17 @@ func TestKnowledgeBasesCreateEditAndForget(t *testing.T) {
 	}
 }
 
-func TestProjectsInitLinkTasksAndPhases(t *testing.T) {
+func TestProjectsInitLinkThreadsAndPhases(t *testing.T) {
 	h, cfg, kb := atlas(t)
 	a := Bind(h, cfg, nil)
 	work := filepath.Join(t.TempDir(), "webapp")
 	os.MkdirAll(work, 0o755)
 	made, err := a.InitProject(InitProject{Work: work, Description: "The web app.", Knowledge: "kb"})
-	if err != nil || made.Project.Config.Knowledge == nil || made.Project.Config.Knowledge.ID != kb.ID || len(made.Written) != 5 || made.Git != vaults.GitCreated {
+	if err != nil || made.Project.Config.Knowledge == nil || made.Project.Config.Knowledge.ID != kb.ID || len(made.Written) != len(project.Folders)+2 || made.Git != vaults.GitCreated {
 		t.Fatalf("init: %+v %v", made, err)
 	}
 	e := entry(t, a, work)
-	if e.Kind != registry.Project || e.KnowledgePath() != kb.Path || e.State == nil || e.State.Tasks == nil {
+	if e.Kind != registry.Project || e.KnowledgePath() != kb.Path || e.State == nil || e.State.Threads == nil {
 		t.Fatalf("project: %+v", e)
 	}
 	if err := a.UnlinkProject(e); err != nil {
@@ -147,29 +147,35 @@ func TestProjectsInitLinkTasksAndPhases(t *testing.T) {
 	if err != nil || !staged.New || !strings.HasPrefix(staged.To, "inbox/Web App-") {
 		t.Fatalf("stage: %+v %v", staged, err)
 	}
-	// Tasks and phases.
+	// Threads and phases.
 	ph, err := a.AddPhase(e, "Alpha", "First.", nil)
 	if err != nil || ph.Order != 1 {
 		t.Fatalf("phase: %+v %v", ph, err)
 	}
-	task, err := a.Plant(e, tasks.Plant{Title: "Fix it", Phase: "Alpha"})
-	if err != nil || task.Phase != "Alpha" {
-		t.Fatalf("plant: %+v %v", task, err)
+	th, err := a.StartThread(e, threads.New{Title: "Fix it", Phase: "Alpha"})
+	if err != nil || th.Phase != "Alpha" || th.Stage != threads.Stub {
+		t.Fatalf("start: %+v %v", th, err)
 	}
-	board, notes, err := a.Tasks(e)
-	if err != nil || len(board.Tasks) != 1 || len(board.Phases) != 1 || len(notes) != 0 {
-		t.Fatalf("tasks: %+v %v %v", board, notes, err)
+	board, notes, err := a.Threads(e)
+	if err != nil || len(board.Threads) != 1 || len(board.Phases) != 1 || len(notes) != 0 {
+		t.Fatalf("threads: %+v %v %v", board, notes, err)
 	}
 	high := "high"
-	set, err := a.SetTask(e, task.ID, tasks.Changes{Priority: &high})
+	set, err := a.SetThread(e, th.ID, threads.Changes{Priority: &high})
 	if err != nil || set.Priority != "high" {
 		t.Fatalf("set: %+v %v", set, err)
 	}
+	if filed, err := a.FileThread(e, th.ID, threads.Filing{Stage: threads.Receipt, Outcome: threads.Completed, Text: "Fixed."}); err != nil || !filed.Closed() {
+		t.Fatalf("file: %+v %v", filed, err)
+	}
+	if opened, err := a.Reopen(e, th.ID); err != nil || opened.Closed() {
+		t.Fatalf("reopen: %+v %v", opened, err)
+	}
 	if err := a.RemovePhase(e, "Alpha"); err == nil {
-		t.Fatal("a phase with a task is not removed")
+		t.Fatal("a phase with a thread is not removed")
 	}
 	none := ""
-	if _, err := a.SetTask(e, task.ID, tasks.Changes{Phase: &none}); err != nil {
+	if _, err := a.SetThread(e, th.ID, threads.Changes{Phase: &none}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.RemovePhase(e, "Alpha"); err != nil {

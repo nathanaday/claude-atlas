@@ -28,7 +28,7 @@ func TestInitProjectRegistersAndLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, written := made.Project, made.Written
-	if p.Name() != "firmware" || p.Config.Knowledge == nil || p.Config.Knowledge.ID != kb.ID || p.Config.Knowledge.Name != "ai-ml" || len(written) != 5 {
+	if p.Name() != "firmware" || p.Config.Knowledge == nil || p.Config.Knowledge.ID != kb.ID || p.Config.Knowledge.Name != "ai-ml" || len(written) != len(project.Folders)+2 {
 		t.Fatalf("project %+v written %v", p.Config, written)
 	}
 	if made.Git != GitSkipped || exists(filepath.Join(work, ".git")) {
@@ -116,11 +116,12 @@ func TestRegisterProjectHeals(t *testing.T) {
 	}
 	// A copy of a listed project at another readable path replaces the old entry.
 	copied := filepath.Join(t.TempDir(), "copied")
-	if err := os.MkdirAll(filepath.Join(copied, project.Dir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(copied, project.Dir, "p"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(project.MarkerPath(proj.Path))
-	os.WriteFile(project.MarkerPath(copied), data, 0o644)
+	orig, _ := project.Open(proj.Path)
+	data, _ := os.ReadFile(orig.Path(project.Marker))
+	os.WriteFile(filepath.Join(copied, project.Dir, "p", project.Marker), data, 0o644)
 	c, _ := project.Open(copied)
 	if heal, err := RegisterProject(h, cfg, c); err != nil || heal != HealMoved || !cfg.HasProject(copied) || cfg.HasProject(proj.Path) {
 		t.Fatalf("moved by id: %q %v %v", heal, err, cfg.Projects)
@@ -128,8 +129,8 @@ func TestRegisterProjectHeals(t *testing.T) {
 	// The only listed path that is gone is taken for a moved project's old home.
 	os.RemoveAll(copied)
 	moved := filepath.Join(t.TempDir(), "moved")
-	os.MkdirAll(filepath.Join(moved, project.Dir), 0o755)
-	os.WriteFile(project.MarkerPath(moved), data, 0o644)
+	os.MkdirAll(filepath.Join(moved, project.Dir, "p"), 0o755)
+	os.WriteFile(filepath.Join(moved, project.Dir, "p", project.Marker), data, 0o644)
 	m, _ := project.Open(moved)
 	if heal, err := RegisterProject(h, cfg, m); err != nil || heal != HealMoved || !cfg.HasProject(moved) || cfg.HasProject(copied) {
 		t.Fatalf("moved by absence: %q %v %v", heal, err, cfg.Projects)

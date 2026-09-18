@@ -121,8 +121,8 @@ func NewestWikiMtime(vault string) (time.Time, bool) {
 	return dateOf(newest), true
 }
 
-// ActiveThreads lists the bullets under `## Active Threads` in wiki/hot.md. Prose, so best effort.
-func ActiveThreads(vault string) []string {
+// HotTopics lists the bullets under `## Active Threads` in wiki/hot.md. Prose, so best effort.
+func HotTopics(vault string) []string {
 	data, err := os.ReadFile(filepath.Join(vault, "wiki", "hot.md"))
 	if err != nil {
 		return nil

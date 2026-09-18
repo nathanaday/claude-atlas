@@ -13,15 +13,15 @@ one tool from a Claude Code session, so scripts, muscle memory, and the
 |---|---|---|
 | Enter on an entry | `show NAME` | `atlas`, `status` |
 | `o` open a knowledge base in Obsidian | `open-vault KB` | — |
-| `c` start Claude Code in a knowledge base or a project | `open-claude NAME [--task ID]` | — |
-| `p` plant a task on a project | `plant PROJECT TEXT` | `plant` |
+| `c` start Claude Code in a knowledge base or a project | `open-claude NAME [--thread ID]` | — |
+| `n` open a new thread in a project | `thread PROJECT new TEXT` | `thread` |
 | `R` refresh | `refresh` | `atlas` with `refresh` |
 | `←` `→` switch tabs; `h` shows every key; `q` quits | — | — |
 | — | `new-knowledge PATH`, `adopt PATH`, `edit KB`, `remove KB` | `vault` |
 | — | `init`, `link KB`, `unlink`, `forget PROJECT` | `project` |
 | — | `describe PROJECT` | `stage`, then the `describe` skill |
 | — | `ingest KB [PATH...]` | `stage`, then the `wiki-ingest` skill |
-| — | `tasks [PROJECT]`, `task PROJECT ID …`, `phase PROJECT …` | `tasks`, `task`, `phase` |
+| — | `threads [PROJECT]`, `thread PROJECT new\|show\|file\|close\|set\|reopen …`, `phase PROJECT …` | `threads`, `thread`, `phase` |
 | — | `config new-days N` | `settings` |
 | — | `stub KB [TITLE...]` | `stub` |
 | — | `lint`, `history`, `undo`, `mode`, `recover`, `upgrade`, `apply` | `lint`, `history`, `undo`, `mode` |
@@ -31,8 +31,10 @@ one tool from a Claude Code session, so scripts, muscle memory, and the
 
 A **knowledge base** is an Obsidian vault with an inbox, sources, entities,
 and concepts. Every change to it is one reviewed operation and one git
-commit. A **project** is a folder named `atlas/` inside your work, holding
-tasks, phases, and an inbox for task notes. It has no git of its own. A
+commit. A **project** is a folder `atlas/<name>/` inside your work, holding
+threads, phases, and an inbox for notes. The folder takes the project's
+name, so Obsidian shows each project by its own name. It has no git of its
+own. A
 project uses one knowledge base; a knowledge base serves many projects.
 
 ## Create a knowledge base
@@ -90,15 +92,21 @@ claude-atlas init --no-knowledge                    # ask nothing
 claude-atlas init ~/code/notes --no-git             # another folder, and no repository
 ```
 
-`init` writes `atlas/` in the current folder, with `project.json`, `tasks/`,
-`tasks/archive/`, `phases/`, and `inbox/`, and lists the folder in the atlas
-config. When the folder is in no git repository, `init` runs `git init` there
-on `main` and commits nothing; `--no-git` skips that. It leaves a repository
-as it is, and it makes no repository in a folder inside another one. The
-repository tracks `atlas/` like any other folder, on the branch you are on. In a terminal with no flags it asks for the description
-and offers the knowledge bases the atlas knows, with none as a choice. It
-refuses a folder that already has `atlas/` without a `project.json`, and a
-folder inside another project or inside a knowledge base.
+`init` writes `atlas/<name>/` in the current folder, with `project.json`,
+`threads/`, `threads/archive/`, `stubs/`, `specs/`, `plans/`, `receipts/`,
+`phases/`, `inbox/`, and `.obsidian/snippets/claude-atlas.css`, the CSS
+snippet that gives each stage its color and icon in Obsidian. It lists the
+folder in the atlas config. The folder's name is the project's name, less the
+characters Obsidian cannot use; `edit --name` moves the folder to match. When
+the folder is in no git repository, `init` runs `git init` there on `main`
+and commits nothing; `--no-git` skips that. It leaves a repository as it is,
+and it makes no repository in a folder inside another one. The repository
+tracks `atlas/` like any other folder, on the branch you are on. In a
+terminal with no flags it asks for the name and the description and offers
+the knowledge bases the atlas knows, with none as a choice. It refuses an
+`atlas/<name>/` that already holds something, a folder that is a project
+already, and a folder inside another project or inside a knowledge base. A
+work folder holds one project.
 
 Then, from inside the work:
 
@@ -106,11 +114,11 @@ Then, from inside the work:
 claude-atlas link product-x                         # set the knowledge base
 claude-atlas unlink                                 # clear it
 claude-atlas link product-x --project webapp        # from anywhere
-claude-atlas forget webapp                          # drop it from the config; atlas/ stays
+claude-atlas forget webapp                          # drop it from the config; atlas/webapp/ stays
 claude-atlas describe webapp                        # stage a snapshot for the describe skill
 ```
 
-Deleting `atlas/` is how a project ends.
+Deleting `atlas/<name>/` is how a project ends.
 
 **A moved project heals itself.** The config holds the work folder's path.
 Move the folder, then start a session in it: the hook finds the project's id
@@ -126,88 +134,143 @@ out, what it has delivered, the concepts it introduces. The snapshot holds
 the work's CLAUDE.md and README, its files (folders only past 2000), the
 first heading of every markdown file under `docs/`, and, once a page exists,
 the git log since that page's commit. The session hook says when the page is
-missing or has fallen behind, and `task-finish` offers the update when a
-task lands.
+missing or has fallen behind, and `thread-receipt` offers the update when a
+thread completes.
 
-## Tasks and phases
+## Threads and phases
 
-A task is a page, `atlas/tasks/<Title>.md`, with a status that moves from
-`planted` through `planned`, `active`, and `blocked` to `done` or
-`cancelled`. Finished tasks move to `atlas/tasks/archive/`. The core renders
-`atlas/tasks/tasks.md` from the pages, grouped by phase; a session started in
-the work sees the open tasks at its start, so a task lives across sessions.
+A thread is one line of work: a bug, a feature, a chore. It moves through
+four stages, and each stage is a document in its own folder under
+`atlas/<name>/`:
 
-Plant a task without ceremony, from anywhere:
+| Stage | Folder | The document holds |
+|---|---|---|
+| stub | `stubs/` | where the thread begins, in your words |
+| spec | `specs/` | what will be true when the thread is done, and why |
+| plan | `plans/` | how the work will go, then its progress |
+| receipt | `receipts/` | how the thread ended: completed or killed |
+
+The stage is never set. It is the furthest document that exists, so a thread
+moves only when its document is filed, and every change of stage leaves a
+page you can open. A stage may be skipped. A receipt closes the thread.
+
+The thread's card, `atlas/<name>/threads/<Title>.md`, holds its id (like
+`thr-20260917-3f2a`), priority, phase, and what it waits on. It links and
+embeds every document, so one page shows the thread end to end. The card of
+a closed thread moves to `threads/archive/`. The core renders the board,
+`atlas/<name>/threads/threads.md`, from the cards and the documents: the
+open threads by stage, the phases, the closed threads. In Obsidian each
+document opens with a callout card in its stage's color that links the
+thread's other documents. A session started in the work sees the open
+threads at its start, so a thread lives across sessions.
+
+PROJECT is a name or a path, and `.` is the project you are in. ID is a
+thread's id, its title, or the start of its title.
+
+Open a thread without ceremony, from anywhere:
 
 ```bash
-claude-atlas plant webapp "Filter vehicle false alarms"
-claude-atlas plant webapp "Write the fault taxonomy" --priority high --phase "Alarm quality" --due 2026-10-01
+claude-atlas thread webapp new "Filter vehicle false alarms"
+claude-atlas thread webapp new "Write the fault taxonomy" --priority high --phase "Alarm quality"
+claude-atlas thread . new "Cars trip the alarm at dusk." --title "Filter vehicle false alarms"
 ```
 
-Or drop a note into the project's `atlas/inbox/` folder; the next session's
-`/claude-atlas:task-plant` turns each note into a task and removes the note.
+Or drop a note into the project's `atlas/<name>/inbox/` folder; the next
+session's `/claude-atlas:thread-stub` opens a thread from each note and
+removes the note.
 
-A phase is a named slice of the timeline: a page under `atlas/phases/` with a
-goal and an order. Tasks name their phase; a phase never lists its tasks.
+File a document to move the thread. The text comes from `--text`, from
+`--file PATH`, or from stdin:
+
+```bash
+claude-atlas thread webapp file "Filter vehicle" spec --file spec.md
+claude-atlas thread webapp file "Filter vehicle" plan --text "1. Mask the road. 2. Replay the July set."
+cat receipt.md | claude-atlas thread webapp file "Filter vehicle" receipt --outcome completed
+claude-atlas thread webapp close "Filter vehicle" "Shipped in 3.2; the July set replays clean."
+claude-atlas thread webapp close "Drop jQuery" "Already gone since 3.1." --killed
+claude-atlas thread webapp reopen "Drop jQuery"          # deletes the receipt
+```
+
+`close` files the receipt: completed, or killed with `--killed`. A document
+that exists is never filed again; edit the page.
+
+See what is open, read one thread, and change a card:
+
+```bash
+claude-atlas threads webapp
+claude-atlas threads                                # every project
+claude-atlas threads webapp --all                   # the closed ones too
+claude-atlas threads webapp --stage plan
+claude-atlas threads webapp --json
+claude-atlas thread webapp show thr-20260917-3f2a   # its state and the path of each document
+claude-atlas thread webapp show "Filter vehicle" --json
+claude-atlas thread webapp set "Filter vehicle" --phase "Alarm quality" --priority high
+claude-atlas thread webapp set "Filter vehicle" --blocked "the July field data"
+claude-atlas thread webapp set "Filter vehicle" --blocked ""     # unblock
+claude-atlas thread webapp set "Filter vehicle" --title "Filter vehicles at dusk"
+```
+
+A new title renames the card and every document.
+
+A phase is a named slice of the timeline: a page under `atlas/<name>/phases/`
+with a goal and an order. Threads name their phase; a phase never lists its
+threads. A phase is finished when every thread in it is closed.
 
 ```bash
 claude-atlas phase webapp create "Alarm quality" --goal "False alarms under 1 per camera-day." --order 1
 claude-atlas phase webapp rename "Alarm quality" --to "Alarm precision"
 claude-atlas phase webapp reorder "Alarm precision" --order 2
-claude-atlas phase webapp remove "Alarm precision"      # refused while a task names it
+claude-atlas phase webapp remove "Alarm precision"      # refused while a thread names it
 ```
 
-See what is open, change a task, and finish one:
+The tools write the cards, the board, and each document's frontmatter and
+first callout. The rest of a document is prose Claude writes with its
+ordinary editing tools, and you may edit any page by hand in any editor.
+Delete a document by hand and the thread moves back to the stage before it.
+Off limits to the model: everything under `threads/`, `project.json`, and a
+new file written straight into a stage folder, because a new document comes
+from the `thread` tool, which gives it the thread's id. The plugin's
+`touched` hook runs after every Write and Edit: an edit to a stage document
+marks its thread as updated today.
+
+Work a thread in a session. The skills carry the ceremony: `thread` shows
+the board, routes, and reviews; `thread-stub` opens a thread; `thread-spec`
+researches, asks only what it cannot find, and files the spec;
+`thread-plan` files the approach; `thread-run` does the work, commits and
+tests along the way, and writes progress in the plan; `thread-receipt`
+closes the thread and offers the knowledge base what the work taught.
+`open-claude --thread` starts the session in the work with the skill for the
+thread's next stage as the first message:
 
 ```bash
-claude-atlas tasks webapp
-claude-atlas tasks                                  # every project
-claude-atlas task webapp task-20260917-3f2a --status blocked
-claude-atlas task webapp "Filter vehicle" --phase "Alarm quality" --priority high
-claude-atlas task webapp task-20260917-3f2a --status done   # moves the page to archive/
+claude-atlas open-claude webapp --thread thr-20260917-3f2a
+claude-atlas open-claude webapp --thread "Filter vehicle"    # a title prefix works
 ```
 
-The status is the truth and the folder follows it. The tools change the
-frontmatter; the Plan, Progress, and Outcome sections are prose Claude writes
-with its ordinary editing tools, and you may edit any page by hand in any
-editor. Only `tasks.md` and `project.json` are off limits to the model.
-
-Work a task in a session. The skills carry the ceremony: `task` lists,
-routes, and reviews, `task-plan` asks what changes the plan and writes it,
-`task-run` works the plan and writes progress at every stopping point,
-`task-finish` closes the task, archives it, and offers the knowledge base
-what the work taught. `open-claude --task` starts the session in the work
-with `task-run` as the first message:
-
-```bash
-claude-atlas open-claude webapp --task task-20260917-3f2a
-claude-atlas open-claude webapp --task "Filter vehicle"      # a title prefix works
-```
-
-`show` counts a project's tasks and signals the blocked ones and the stale
-ones, active but untouched for 14 days.
+`show` counts a project's threads by stage and signals the blocked ones and
+the stale ones, which have a plan and no update for 14 days.
 
 ## Work in a session
 
 A session started anywhere inside a project's work is the project's session,
 except inside a knowledge base in the work, which is the knowledge base's.
 Its start says which project this is, which knowledge base it uses, whether
-a page describes it there, and what tasks are open:
+a page describes it there, and what threads are open:
 
 ```text
 claude-atlas: project webapp at ~/code/webapp (git, main)
 Knowledge: product-x · The thermal fire-detection product line … · 140 pages · ~/Vaults/product-x
 This project has no page in product-x; the describe skill writes it.
 Search the knowledge base (the wiki-query skill) before answering from the code alone. Change wiki pages only through the atlas MCP tools (plan, then apply).
-Open tasks: 4 (active 1, blocked 0, planned 1, planted 2) in 2 phases. Continue one with the task-run skill; see them all with the tasks tool.
-- [active] Filter vehicle false alarms (task-20260917-3f2a) · Alarm quality · high · updated 2026-09-17
+Open threads: 4 (plan 1, spec 1, stub 2) in 2 phases. A thread moves stub, spec, plan, receipt, and each stage is a document the thread tool files; the thread skills say how. Work that belongs to a thread goes on its documents.
+- [plan] Filter vehicle false alarms (thr-20260917-3f2a) · Alarm quality · high · updated 2026-09-17
 ```
 
 A session started in the knowledge base sees every project that uses it:
 
 ```text
 claude-atlas: knowledge base product-x (generic mode) at ~/Vaults/product-x
-Projects: webapp (~/code/webapp, 4 open tasks), firmware (~/code/fw, 0 open tasks). Plant into one with the task tools; read its work through its path.
+Projects: webapp (~/code/webapp, 4 open threads), firmware (~/code/fw, 0 open threads). Open a thread in one with the thread tool; read its work through its path.
 Not yet described here: firmware; the describe skill writes the page.
 Inbox: 2 sources waiting; the wiki-ingest skill files them.
 ```
@@ -217,12 +280,13 @@ In the session, the skills are on the slash menu:
 | Skill | What it does |
 |---|---|
 | `/claude-atlas:wiki` | orient and route to the right skill |
-| `/claude-atlas:work` | take a change from a sentence to a task with a plan; from a knowledge base, one per project it touches |
-| `/claude-atlas:task` | list open tasks by phase, move one, create or change a phase, review the list |
-| `/claude-atlas:task-plant` | plant a task from a sentence, the notes in `atlas/inbox/`, or into any project from its knowledge base |
-| `/claude-atlas:task-plan` | ask what matters, choose an approach, write the plan |
-| `/claude-atlas:task-run` | work the plan and write progress |
-| `/claude-atlas:task-finish` | close as done or cancelled, archive, offer the knowledge base what was learned |
+| `/claude-atlas:work` | take a change from a sentence to a thread with a plan; from a knowledge base, one per project it touches |
+| `/claude-atlas:thread` | show the board by stage, change a card, create or change a phase, review the board |
+| `/claude-atlas:thread-stub` | open a thread from a sentence, the notes in `atlas/<name>/inbox/`, or in any project from its knowledge base |
+| `/claude-atlas:thread-spec` | research, ask only what reading cannot answer, file the spec |
+| `/claude-atlas:thread-plan` | explore the code with the spec in hand, file the plan |
+| `/claude-atlas:thread-run` | do the work, commit and test along the way, write progress in the plan |
+| `/claude-atlas:thread-receipt` | close as completed or killed, file the receipt, offer the knowledge base what was learned |
 | `/claude-atlas:describe` | describe a project in its knowledge base from a snapshot, or bring its page up to date |
 | `/claude-atlas:wiki-ingest` | read what is in the inbox and write cited pages |
 | `/claude-atlas:wiki-query` | answer from the knowledge base, with citations |
@@ -242,7 +306,7 @@ Claude shows a preview of every change to the knowledge base before it
 applies it. Each applied change is one git commit there. In a project
 session, the wiki tools act on the project's knowledge base, and a source
 captured from there records the project as provenance. In a knowledge base
-session, `plant`, `tasks`, `task`, `phase`, and `stage` take `project` to
+session, `threads`, `thread`, `phase`, and `stage` take `project` to
 reach any project that uses it.
 
 ## Ingest sources
@@ -346,14 +410,26 @@ session start. Restore it:
 claude-atlas recover product-x
 ```
 
-`upgrade` brings a knowledge base made by an older version to the current
-layout: it raises a v2 identity file to v3, dropping access and grants, and
-adds the template files the vault lacks, `inbox/` and `ideas/` among them.
+`upgrade` brings a knowledge base or a project made by an older version to
+the current layout. For a knowledge base, it raises a v2 identity file to v3,
+dropping access and grants, and adds the template files the vault lacks,
+`inbox/` and `ideas/` among them. For a project that 2.2.0 or earlier made
+directly in `atlas/`, it moves everything in `atlas/` into `atlas/<name>/`.
+Until then, a session in that project stops with the command to run. For a
+project that holds task pages from 2.x, it turns each one into a thread: Idea
+becomes the stub, Plan and Progress the plan, Outcome the receipt; `done`
+becomes `completed` and `cancelled` becomes `killed`. A page it cannot read
+stays where it is. For every project it also rewrites the CSS snippet.
 
 ```bash
 claude-atlas upgrade product-x
+claude-atlas upgrade ~/code/webapp                  # a project, by path
 claude-atlas upgrade --all
 ```
+
+If you opened the old `atlas/` folder in Obsidian, remove it from Obsidian's
+vault list and open `atlas/<name>/` instead. Its `.obsidian/` settings move
+with the rest.
 
 ## Open in Obsidian
 
@@ -371,7 +447,7 @@ claude-atlas open-vault
 `claude-atlas` with no command, or `claude-atlas view`, is one screen with
 two tabs. The Knowledge tab lists every knowledge base with its scope, page
 count, inbox count, and the projects that use it. The Projects tab lists
-every project grouped by knowledge base, with its path, open task count,
+every project grouped by knowledge base, with its path, open thread count,
 current phase, and a mark when the path is missing. Enter expands an entry
 in place with what `show` prints. The view is for seeing what exists and
 getting there; creating and changing things is the CLI's and the session's
@@ -384,7 +460,7 @@ job.
 | Enter | expand the entry under the cursor, or collapse it |
 | `o` | open the knowledge base in Obsidian |
 | `c` | start Claude Code in the knowledge base or the project |
-| `p` | plant a task on the project |
+| `n` | open a new thread in the project |
 | `R` | refresh in the background |
 | `h` | show every key; again to hide them |
 | `q` | quit |
@@ -408,7 +484,7 @@ afresh before it acts.
 `refresh` runs the scan, reads each entry, and rewrites
 `~/.claude-atlas/state/registry.json`: every knowledge base with its page
 count, heat, inbox count, and projects; every project with its knowledge
-base, task counts, phases, the page that describes it, and what git says
+base, thread counts, phases, the page that describes it, and what git says
 about the work. Everything in that file is derived, so deleting it costs one
 refresh.
 

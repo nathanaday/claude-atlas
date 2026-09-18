@@ -245,9 +245,9 @@ type ProjectToolArgs struct {
 // wrote, or the path forget dropped.
 type ProjectToolOut struct {
 	Project   *registry.Entry `json:"project,omitempty"`
-	Written   []string        `json:"written,omitempty" jsonschema:"init: what was written under atlas/"`
+	Written   []string        `json:"written,omitempty" jsonschema:"init: what was written under atlas/<name>/"`
 	Git       string          `json:"git,omitempty" jsonschema:"init: created (the work is now a repository with no commit), existing, or enclosed (the work sits inside another repository)"`
-	Forgotten string          `json:"forgotten,omitempty" jsonschema:"the path the atlas no longer lists; the folder and its atlas/ stay"`
+	Forgotten string          `json:"forgotten,omitempty" jsonschema:"the path the atlas no longer lists; the folder and its atlas/<name>/ stay"`
 }
 
 func (s *Server) projectTool(ctx context.Context, req *mcp.CallToolRequest, a ProjectToolArgs) (*mcp.CallToolResult, ProjectToolOut, error) {

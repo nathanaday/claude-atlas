@@ -12,7 +12,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
@@ -67,14 +67,16 @@ type Atlas struct {
 	// StageProject writes a snapshot of a project into the inbox of its knowledge base,
 	// for the describe skill to ingest.
 	StageProject func(registry.Entry) (*capture.ProjectStage, error)
-	// The task calls, on a project: read the board and the notes waiting in its inbox,
-	// plant a task, change one, and the phase calls.
-	Tasks       func(registry.Entry) (*tasks.Board, []string, error)
-	Plant       func(registry.Entry, tasks.Plant) (*tasks.Task, error)
-	SetTask     func(registry.Entry, string, tasks.Changes) (*tasks.Task, error)
-	AddPhase    func(registry.Entry, string, string, *int) (*tasks.Phase, error)
-	RenamePhase func(registry.Entry, string, string) (*tasks.Phase, error)
-	OrderPhase  func(registry.Entry, string, int) (*tasks.Phase, error)
+	// The thread calls, on a project: read the board and the notes waiting in its inbox,
+	// open a thread, file a document, change a card, reopen, and the phase calls.
+	Threads     func(registry.Entry) (*threads.Board, []string, error)
+	StartThread func(registry.Entry, threads.New) (*threads.Thread, error)
+	FileThread  func(registry.Entry, string, threads.Filing) (*threads.Thread, error)
+	SetThread   func(registry.Entry, string, threads.Changes) (*threads.Thread, error)
+	Reopen      func(registry.Entry, string) (*threads.Thread, error)
+	AddPhase    func(registry.Entry, string, string, *int) (*threads.Phase, error)
+	RenamePhase func(registry.Entry, string, string) (*threads.Phase, error)
+	OrderPhase  func(registry.Entry, string, int) (*threads.Phase, error)
 	RemovePhase func(registry.Entry, string) error
 }
 
@@ -160,58 +162,72 @@ func Bind(h home.Home, cfg *home.Config, c *console.Console) Atlas {
 			}
 			return capture.StageProject(v, en, time.Now())
 		},
-		Tasks: func(en registry.Entry) (*tasks.Board, []string, error) {
+		Threads: func(en registry.Entry) (*threads.Board, []string, error) {
 			p, err := openProject(en)
 			if err != nil {
 				return nil, nil, err
 			}
-			board, err := tasks.Load(p)
+			board, err := threads.Load(p)
 			if err != nil {
 				return nil, nil, err
 			}
-			return board, tasks.Notes(p), nil
+			return board, threads.Notes(p), nil
 		},
-		Plant: func(en registry.Entry, plant tasks.Plant) (*tasks.Task, error) {
+		StartThread: func(en registry.Entry, n threads.New) (*threads.Thread, error) {
 			p, err := openProject(en)
 			if err != nil {
 				return nil, err
 			}
-			return tasks.PlantTask(p, plant, time.Now())
+			return threads.Start(p, n, time.Now())
 		},
-		SetTask: func(en registry.Entry, id string, ch tasks.Changes) (*tasks.Task, error) {
+		FileThread: func(en registry.Entry, id string, f threads.Filing) (*threads.Thread, error) {
 			p, err := openProject(en)
 			if err != nil {
 				return nil, err
 			}
-			return tasks.Set(p, id, ch, time.Now())
+			return threads.File(p, id, f, time.Now())
 		},
-		AddPhase: func(en registry.Entry, title, goal string, order *int) (*tasks.Phase, error) {
+		SetThread: func(en registry.Entry, id string, ch threads.Changes) (*threads.Thread, error) {
 			p, err := openProject(en)
 			if err != nil {
 				return nil, err
 			}
-			return tasks.CreatePhase(p, title, goal, order, time.Now())
+			return threads.Set(p, id, ch, time.Now())
 		},
-		RenamePhase: func(en registry.Entry, old, title string) (*tasks.Phase, error) {
+		Reopen: func(en registry.Entry, id string) (*threads.Thread, error) {
 			p, err := openProject(en)
 			if err != nil {
 				return nil, err
 			}
-			return tasks.RenamePhase(p, old, title, time.Now())
+			return threads.Reopen(p, id, time.Now())
 		},
-		OrderPhase: func(en registry.Entry, title string, order int) (*tasks.Phase, error) {
+		AddPhase: func(en registry.Entry, title, goal string, order *int) (*threads.Phase, error) {
 			p, err := openProject(en)
 			if err != nil {
 				return nil, err
 			}
-			return tasks.ReorderPhase(p, title, order, time.Now())
+			return threads.CreatePhase(p, title, goal, order, time.Now())
+		},
+		RenamePhase: func(en registry.Entry, old, title string) (*threads.Phase, error) {
+			p, err := openProject(en)
+			if err != nil {
+				return nil, err
+			}
+			return threads.RenamePhase(p, old, title, time.Now())
+		},
+		OrderPhase: func(en registry.Entry, title string, order int) (*threads.Phase, error) {
+			p, err := openProject(en)
+			if err != nil {
+				return nil, err
+			}
+			return threads.ReorderPhase(p, title, order, time.Now())
 		},
 		RemovePhase: func(en registry.Entry, title string) error {
 			p, err := openProject(en)
 			if err != nil {
 				return err
 			}
-			return tasks.RemovePhase(p, title, time.Now())
+			return threads.RemovePhase(p, title, time.Now())
 		},
 	}
 }

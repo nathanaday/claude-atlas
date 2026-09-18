@@ -11,7 +11,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/project"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
@@ -98,7 +98,7 @@ func TestSessionStartInAKnowledgeBase(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
-	for _, absent := range []string{"type: meta", "Open tasks", "Projects:", "Stubs:", "Wanted:"} {
+	for _, absent := range []string{"type: meta", "Open threads", "Projects:", "Stubs:", "Wanted:"} {
 		if strings.Contains(text, absent) {
 			t.Errorf("%q should not be there:\n%s", absent, text)
 		}
@@ -162,7 +162,7 @@ func TestSessionStartInAProject(t *testing.T) {
 		"This project has no page in ai-ml; the describe skill writes it.",
 		SearchSentence + " " + WriteSentence,
 		"Skills: " + ProjectSkills,
-		"Open tasks: none. Plant one with the task-plant skill.",
+		"Open threads: none. Open one with the thread-stub skill.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
@@ -173,32 +173,39 @@ func TestSessionStartInAProject(t *testing.T) {
 			t.Errorf("%q should not be there:\n%s", absent, text)
 		}
 	}
-	// Tasks, phases, notes, and a page in the knowledge base.
+	// Threads, phases, notes, and a page in the knowledge base.
 	p, _ := project.Open(work)
-	if _, err := tasks.CreatePhase(p, "Alpha", "", nil, now); err != nil {
+	if _, err := threads.CreatePhase(p, "Alpha", "", nil, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tasks.PlantTask(p, tasks.Plant{Title: "Fix the dialog", Text: "It quits on Enter.", Phase: "Alpha", Priority: "high", Due: "2026-10-01"}, now); err != nil {
+	if _, err := threads.Start(p, threads.New{Title: "Fix the dialog", Text: "It quits on Enter.", Phase: "Alpha", Priority: "high"}, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tasks.PlantTask(p, tasks.Plant{Title: "Stale one", Plan: "1. Go.", Start: true}, now.AddDate(0, 0, -20)); err != nil {
+	old := now.AddDate(0, 0, -20)
+	if _, err := threads.Start(p, threads.New{Title: "Stale one"}, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := threads.File(p, "Stale one", threads.Filing{Stage: threads.Plan, Text: "1. Go."}, old); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(p.Path("inbox/idea.md"), []byte("An idea."), 0o644)
-	os.WriteFile(p.Path("tasks/broken.md"), []byte("x"), 0o644)
+	os.WriteFile(p.Path("specs/broken.md"), []byte("x"), 0o644)
+	os.MkdirAll(p.Path("tasks"), 0o755)
+	os.WriteFile(p.Path("tasks/Old.md"), []byte("---\ntype: task\n---\n"), 0o644)
 	head, _ := (gitx.Repo{Dir: work}).Head()
 	os.MkdirAll(filepath.Join(kb, "wiki", "entities"), 0o755)
 	os.WriteFile(filepath.Join(kb, "wiki", "entities", "code.md"), []byte("---\ntitle: code\ntype: entity\nentity_type: project\nproject: "+p.Config.ID+"\ncommit: "+head+"\nstatus: developing\ncreated: 2026-09-17\nupdated: 2026-09-17\ntags:\n  - entity\n---\n\n# code\n"), 0o644)
 	text = run(t, work, e, false, now)
 	for _, want := range []string{
 		"This project is described in wiki/entities/code.md at " + head[:7] + ", current.",
-		"Open tasks: 2 (active 1, blocked 0, planned 0, planted 1; 1 stale) in 1 phase. Continue one with the task-run skill; see them all with the tasks tool.",
-		"- [active] Stale one (task-",
+		"Open threads: 2 (plan 1, spec 0, stub 1; 1 stale) in 1 phase. A thread moves stub, spec, plan, receipt",
+		"- [plan] Stale one (thr-",
 		" · stale\n",
-		"- [planted] Fix the dialog (task-",
-		" · Alpha · high · due 2026-10-01 · updated " + now.Format("2006-01-02") + "\n",
-		"1 task note waits in atlas/inbox/; the task-plant skill turns them into tasks.",
-		"Not readable as a task: tasks/broken.md (",
+		"- [stub] Fix the dialog (thr-",
+		" · Alpha · high · updated " + now.Format("2006-01-02") + "\n",
+		"1 note waits in atlas/code/inbox/; the thread-stub skill opens a thread from each.",
+		"Not readable: specs/broken.md (",
+		"task pages from before threads; `claude-atlas upgrade",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
@@ -209,7 +216,7 @@ func TestSessionStartInAProject(t *testing.T) {
 	}
 	// A knowledge base session lists its projects and the ones without a page.
 	text = run(t, kb, e, false, now)
-	for _, want := range []string{"claude-atlas: knowledge base ai-ml (generic mode)", "Scope: Machine learning.", "Projects: code (" + home.Display(work) + ", 2 open tasks). Plant into one with the task tools"} {
+	for _, want := range []string{"claude-atlas: knowledge base ai-ml (generic mode)", "Scope: Machine learning.", "Projects: code (" + home.Display(work) + ", 2 open threads). Open a thread in one with the thread tool"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in knowledge base session:\n%s", want, text)
 		}
@@ -246,9 +253,10 @@ func TestSessionStartHealsTheConfigAndNamesAMissingKnowledgeBase(t *testing.T) {
 		t.Fatal("the config lists the clone now")
 	}
 	copied := filepath.Join(t.TempDir(), "copied")
-	os.MkdirAll(filepath.Join(copied, project.Dir), 0o755)
-	data, _ := os.ReadFile(project.MarkerPath(work))
-	os.WriteFile(project.MarkerPath(copied), data, 0o644)
+	os.MkdirAll(filepath.Join(copied, project.Dir, "p"), 0o755)
+	orig, _ := project.Open(work)
+	data, _ := os.ReadFile(orig.Path(project.Marker))
+	os.WriteFile(filepath.Join(copied, project.Dir, "p", project.Marker), data, 0o644)
 	if text = run(t, copied, e, false, now); !strings.Contains(text, "The atlas config listed this project at another path; it now points here.") {
 		t.Errorf("missing the moved line:\n%s", text)
 	}
@@ -304,6 +312,12 @@ func TestSessionStartNamesOldVaults(t *testing.T) {
 	if text := run(t, old, env(t, nil), true, time.Now()); !strings.Contains(text, "v2 project vault") || !strings.Contains(text, "claude-atlas init") {
 		t.Errorf("a v2 project vault:\n%s", text)
 	}
+	flat := t.TempDir()
+	os.MkdirAll(filepath.Join(flat, project.Dir), 0o755)
+	os.WriteFile(filepath.Join(flat, project.Dir, project.Marker), []byte(`{"schema":"`+project.Schema+`","id":"f","name":"flat"}`), 0o644)
+	if text := run(t, flat, env(t, nil), true, time.Now()); !strings.Contains(text, "sits directly in atlas/; run claude-atlas upgrade") {
+		t.Errorf("a flat project:\n%s", text)
+	}
 }
 
 func TestGuard(t *testing.T) {
@@ -313,23 +327,31 @@ func TestGuard(t *testing.T) {
 	if _, _, err := project.Init(work, project.Options{}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	wp, _ := project.Open(work)
+	if _, err := threads.Start(wp, threads.New{Title: "Fix it"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string]bool{
-		v.Path("wiki/concepts/A.md"):                          true,
-		v.Path(".raw/captured/x.pdf"):                         true,
-		v.Path(".claude-atlas.json"):                          true,
-		v.Path(".vault-meta/lock"):                            true,
-		v.Path("inbox/paper.md"):                              false,
-		v.Path("ideas/note.md"):                               false,
-		v.Path("notes.md"):                                    false,
-		filepath.Join(t.TempDir(), "wiki/x.md"):               false,
-		filepath.Join(work, "atlas", "tasks", "tasks.md"):     true,
-		filepath.Join(work, "atlas", "project.json"):          true,
-		filepath.Join(work, "atlas", "tasks", "Fix it.md"):    false,
-		filepath.Join(work, "atlas", "phases", "Alpha.md"):    false,
-		filepath.Join(work, "atlas", "inbox", "note.md"):      false,
-		filepath.Join(work, "src", "main.go"):                 false,
-		filepath.Join(work, "tasks", "tasks.md"):              false,
-		filepath.Join(work, "atlas", "tasks", "archive", "x"): false,
+		v.Path("wiki/concepts/A.md"):                                            true,
+		v.Path(".raw/captured/x.pdf"):                                           true,
+		v.Path(".claude-atlas.json"):                                            true,
+		v.Path(".vault-meta/lock"):                                              true,
+		v.Path("inbox/paper.md"):                                                false,
+		v.Path("ideas/note.md"):                                                 false,
+		v.Path("notes.md"):                                                      false,
+		filepath.Join(t.TempDir(), "wiki/x.md"):                                 false,
+		filepath.Join(work, "atlas", "work", "threads", "threads.md"):           true,
+		filepath.Join(work, "atlas", "work", "threads", "Fix it.md"):            true,
+		filepath.Join(work, "atlas", "work", "threads", "archive", "Fix it.md"): true,
+		filepath.Join(work, "atlas", "work", "project.json"):                    true,
+		filepath.Join(work, "atlas", "work", "stubs", "Fix it.md"):              false,
+		filepath.Join(work, "atlas", "work", "specs", "New.md"):                 true,
+		filepath.Join(work, "atlas", "work", "phases", "Alpha.md"):              false,
+		filepath.Join(work, "atlas", "work", "inbox", "note.md"):                false,
+		filepath.Join(work, "src", "main.go"):                                   false,
+		filepath.Join(work, "threads", "threads.md"):                            false,
+		filepath.Join(work, "atlas", "threads", "threads.md"):                   false,
+		filepath.Join(work, "atlas", "work", "specs", "notes.txt"):              false,
 	}
 	for path, deny := range cases {
 		var out bytes.Buffer
@@ -346,9 +368,14 @@ func TestGuard(t *testing.T) {
 		t.Fatal("relative paths resolve against cwd")
 	}
 	out.Reset()
-	Guard(strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"`+filepath.Join(work, "atlas", "tasks", "tasks.md")+`"}}`), &out)
-	if !strings.Contains(out.String(), "generated from the task pages") {
-		t.Errorf("the index's reason: %q", out.String())
+	Guard(strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"`+filepath.Join(work, "atlas", "work", "threads", "threads.md")+`"}}`), &out)
+	if !strings.Contains(out.String(), "are generated") {
+		t.Errorf("the board's reason: %q", out.String())
+	}
+	out.Reset()
+	Guard(strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"`+filepath.Join(work, "atlas", "work", "plans", "New.md")+`"}}`), &out)
+	if !strings.Contains(out.String(), "a new plan comes from the thread tool (id, stage: plan, text)") {
+		t.Errorf("a new document's reason: %q", out.String())
 	}
 	out.Reset()
 	Guard(strings.NewReader(`{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"`+v.Path("wiki/x.ipynb")+`"}}`), &out)
@@ -359,5 +386,31 @@ func TestGuard(t *testing.T) {
 	Guard(strings.NewReader(`{"tool_name":"Write","tool_input":{}}`), &out)
 	if out.Len() != 0 {
 		t.Fatal("no path, no decision")
+	}
+}
+
+func TestTouchedMarksTheThread(t *testing.T) {
+	work := filepath.Join(t.TempDir(), "work")
+	os.MkdirAll(work, 0o755)
+	day := time.Date(2026, 9, 17, 12, 0, 0, 0, time.Local)
+	p, _, err := project.Init(work, project.Options{}, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := threads.Start(p, threads.New{Title: "Fix it"}, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := `{"tool_name":"Edit","cwd":"` + work + `","tool_input":{"file_path":"` + p.Path(th.Docs[0].Path) + `"}}`
+	if err := Touched(strings.NewReader(in), day.AddDate(0, 0, 3)); err != nil {
+		t.Fatal(err)
+	}
+	board, _ := threads.Load(p)
+	if got := board.Find(th.ID).Updated; got != "2026-09-20" {
+		t.Fatalf("updated %s", got)
+	}
+	// Any other file is none of its business.
+	if err := Touched(strings.NewReader(`{"tool_input":{"file_path":"`+filepath.Join(work, "main.go")+`"}}`), day); err != nil {
+		t.Fatal(err)
 	}
 }

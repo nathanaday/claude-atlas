@@ -28,8 +28,8 @@ report lists, with exact paths and lines:
 | `kind_errors` | a folder from a v2 project vault, such as `wiki/tasks/`: move its pages under `wiki/` or remove it |
 
 Report only what the tool found. It does not judge prose, style, or
-contradictions. A project's task pages are not linted here; the `tasks` tool
-reports a task page it cannot read.
+contradictions. A project's thread pages are not linted here; the `threads`
+tool reports a page it cannot read.
 
 A `wanted_pages` entry, a page a link names but nobody has written, is not a
 finding; the `stub` tool seeds it.

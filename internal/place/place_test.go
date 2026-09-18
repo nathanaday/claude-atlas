@@ -142,9 +142,10 @@ func TestResolveHealsTheConfig(t *testing.T) {
 	}
 	// Moved: the same id at another readable path.
 	copied := filepath.Join(t.TempDir(), "copied")
-	os.MkdirAll(filepath.Join(copied, project.Dir), 0o755)
-	data, _ := os.ReadFile(project.MarkerPath(work))
-	os.WriteFile(project.MarkerPath(copied), data, 0o644)
+	os.MkdirAll(filepath.Join(copied, project.Dir, "p"), 0o755)
+	orig, _ := project.Open(work)
+	data, _ := os.ReadFile(orig.Path(project.Marker))
+	os.WriteFile(filepath.Join(copied, project.Dir, "p", project.Marker), data, 0o644)
 	pl, err = Resolve(h, "", "", copied, true)
 	if err != nil || pl.Heal != vaults.HealMoved || pl.Entry == nil || pl.Entry.Path != copied || pl.Vault == nil {
 		t.Fatalf("moved by id: %+v %v", pl, err)
@@ -156,8 +157,8 @@ func TestResolveHealsTheConfig(t *testing.T) {
 	// Moved: the only listed path that is gone.
 	os.RemoveAll(copied)
 	moved := filepath.Join(t.TempDir(), "moved")
-	os.MkdirAll(filepath.Join(moved, project.Dir), 0o755)
-	os.WriteFile(project.MarkerPath(moved), data, 0o644)
+	os.MkdirAll(filepath.Join(moved, project.Dir, "p"), 0o755)
+	os.WriteFile(filepath.Join(moved, project.Dir, "p", project.Marker), data, 0o644)
 	pl, err = Resolve(h, "", "", moved, true)
 	if err != nil || pl.Heal != vaults.HealMoved || pl.Entry == nil || pl.Entry.Path != moved {
 		t.Fatalf("moved by absence: %+v %v", pl, err)

@@ -2,6 +2,10 @@
 
 Status: designed and built 2026-09-17. The plugin and the binary are 2.0.0.
 
+`threads-design.md` supersedes the task model here: the section "Tasks and
+phases" and every task row in the tool, CLI, view, and skill tables. A
+project now holds threads, each with a stub, a spec, a plan, and a receipt.
+
 This version replaces the project vault, mounts, clusters, access, grants,
 and linked repositories from `v2-design.md`. The knowledge base and its
 engine stay as `core-design.md` describes them. `tasks-design.md` still
@@ -33,10 +37,10 @@ v3 keeps two things and drops the rest:
 | Entity | v2 | v3 |
 |---|---|---|
 | Knowledge base | a vault, no inbox, guarded by grants | a vault with an inbox; the place you open and work from |
-| Project | a vault under the vaults directory, mounts, repositories | a folder named `atlas/` inside the work, no git of its own, one knowledge base |
+| Project | a vault under the vaults directory, mounts, repositories | a folder `atlas/<name>/` inside the work, no git of its own, one knowledge base |
 | Cluster, grant, access, mount, linked repository | entities | gone |
-| Task | a page in the project vault | a page in `atlas/tasks/`, with a phase |
-| Phase | none | a page in `atlas/phases/`; tasks name it |
+| Task | a page in the project vault | a page in `atlas/<name>/tasks/`, with a phase |
+| Phase | none | a page in `atlas/<name>/phases/`; tasks name it |
 
 The knowledge base is now the center. It is the Obsidian vault the user
 opens. It holds every durable fact about an ecosystem, one page per project
@@ -82,7 +86,7 @@ then `apply`; undo; the source ledger; lint; the hot cache; modes.
 **Projects in the knowledge base.** A project that uses a knowledge base
 should have a page there, `wiki/entities/<project name>.md`, `type: entity`,
 which says what the project is, how it is laid out, and what it has
-delivered. The `describe` skill writes it from the project's folder, the way
+delivered. The `describe` skill writes it from the work folder, the way
 `repo-map` writes a repository page today: a snapshot staged into the inbox,
 read, and filed as an entity page with the commit it was written from. A
 project that is not a git repository is described from its files without a
@@ -106,25 +110,39 @@ nothing to search.
 
 ## The project
 
-Any folder becomes a project by gaining a folder named `atlas/`:
+Any folder becomes a project by gaining a folder `atlas/<name>/`:
 
 ```text
 webapp/                                 a repository, or a folder of documents
 ├── ...                                 the user's work, untouched
 └── atlas/
-    ├── project.json                    identity
-    ├── tasks/
-    │   ├── tasks.md                    generated: every task, grouped by phase
-    │   ├── archive/                    done and cancelled
-    │   └── <Title>.md
-    ├── phases/
-    │   └── <Title>.md
-    └── inbox/                          task notes, dropped by hand
+    └── webapp/                         the project's name
+        ├── project.json                identity
+        ├── tasks/
+        │   ├── tasks.md                generated: every task, grouped by phase
+        │   ├── archive/                done and cancelled
+        │   └── <Title>.md
+        ├── phases/
+        │   └── <Title>.md
+        └── inbox/                      task notes, dropped by hand
 ```
 
-- `atlas/` is not a git repository and not an Obsidian vault. When the work
-  is a repository, the repository tracks `atlas/` like any other folder, on
-  the branch the user is on. When it is not, nothing tracks it. There is no
+- The project folder takes the project's name, cleaned by
+  `links.CleanName` as a knowledge base's folder is. The atlas does not
+  register it as an Obsidian vault, but a user may open it as one, and
+  Obsidian names a vault after its folder. With every project in a folder
+  named `atlas/`, Obsidian's vault list read "atlas, atlas, atlas". A new name
+  moves the folder (`project.Save`), and a taken folder refuses the edit.
+- `atlas/` holds one project folder. `project.Locate` finds it as the
+  one child that holds `project.json`, and refuses two. Other folders in
+  `atlas/` are the user's.
+- A project made by 2.2.0 or earlier sits directly in `atlas/`.
+  `project.Open` refuses it with `ErrFlat`, the scan files it under
+  `ReasonFlat`, and `claude-atlas upgrade` moves `atlas/` whole into
+  `atlas/<name>/`. Nothing moves the user's files without that command.
+- `atlas/<name>/` is not a git repository. When the work is a repository,
+  the repository tracks `atlas/` like any other folder, on the branch the
+  user is on. When it is not, nothing tracks it. There is no
   operation, no ledger, no undo, no `.raw/`, no wiki, no hot cache, and no
   `kb/` symlink. The engine does not run here.
 - `project.json` is visible because the folder is the user's and the file
@@ -157,23 +175,24 @@ claude-atlas init --name "Web App" --knowledge product-x --description "…"
 claude-atlas init --no-knowledge                 # ask nothing
 ```
 
-`init` writes `atlas/` with its four entries, adds the folder to the atlas
+`init` writes `atlas/<name>/` with its four entries, adds the folder to the atlas
 config, runs `git init` when the folder is in no repository (no commit;
 `--no-git` skips it), and prints what it did and what comes next: describe the project in
 the knowledge base, plant a task. In a terminal with no flags it asks for the
 description and offers the knowledge bases the atlas knows, with none as a
-choice. It refuses a folder that already has `atlas/` without a
-`project.json`, and a folder inside another project or inside a vault.
+choice. It refuses an `atlas/<name>/` that already holds something, a folder
+that is a project already, and a folder inside another project or inside a
+vault.
 
 `link KB` and `unlink` change `knowledge`. `forget` removes the folder from
-the config and leaves `atlas/` alone. Deleting `atlas/` is how a project
-ends.
+the config and leaves `atlas/<name>/` alone. Deleting `atlas/<name>/` is how
+a project ends.
 
 ## Tasks and phases
 
 ### A task page
 
-`atlas/tasks/<Title>.md`, as `tasks-design.md` describes it, with `phase`
+`atlas/<name>/tasks/<Title>.md`, as `tasks-design.md` describes it, with `phase`
 added and `workdir`, `repos`, and `tags` removed:
 
 ```yaml
@@ -204,7 +223,7 @@ follows it.
 ### A phase page
 
 A phase is a named group of tasks with an order: a slice of the timeline.
-`atlas/phases/<Title>.md`:
+`atlas/<name>/phases/<Title>.md`:
 
 ```yaml
 ---
@@ -280,7 +299,7 @@ There is no engine here, so the rules are simpler than a vault's:
 Three doors, one result: a page with status `planted`.
 
 1. A sentence in a project session: the `task-plant` skill calls `plant`.
-2. A note in `atlas/inbox/`: the `task-plant` skill turns each note into a
+2. A note in `atlas/<name>/inbox/`: the `task-plant` skill turns each note into a
    page and removes the note.
 3. From outside the project: `claude-atlas plant PROJECT "text"`, the `p` key
    in the view, or `plant` with `project` set from a knowledge base session.
@@ -303,7 +322,7 @@ concept page or a change to one. The offer is a `plan` the user sees and an
 A session finds its place by walking up from the working directory:
 
 1. `CLAUDE_ATLAS_VAULT` or an explicit `vault`, as today.
-2. The nearer of the nearest ancestor that holds `atlas/project.json`, a
+2. The nearer of the nearest ancestor that holds `atlas/<name>/project.json`, a
    project session anywhere inside the work, and the nearest ancestor that
    holds `.claude-atlas.json`, a knowledge base session. A knowledge base
    inside a project is its own session.
@@ -522,10 +541,11 @@ atlas rules with:
 
 | Question | Decision |
 |---|---|
-| Where a project lives | `atlas/` inside the work, always; no standalone project vault |
+| Where a project lives | `atlas/<name>/` inside the work, always; no standalone project vault |
+| The project folder's name | the project's name, so Obsidian tells projects apart; a rename moves it |
 | Git on the project side | none of its own; the host repository tracks `atlas/` if there is one |
-| Obsidian on the project side | none; the knowledge base is the vault the user opens |
-| The identity file's name and place | `atlas/project.json`, visible |
+| Obsidian on the project side | none from the atlas; the user may open `atlas/<name>/` as a vault |
+| The identity file's name and place | `atlas/<name>/project.json`, visible |
 | Knowledge bases per project | one; many is left for later |
 | A knowledge base inside a project | allowed; it commits into the project's repository, or into its own when the project is in none |
 | Clusters, access, grants | removed |
@@ -539,16 +559,14 @@ atlas rules with:
 | The project's page in the knowledge base | `wiki/entities/<name>.md`, written by `describe`, refreshed by `task-finish` |
 | Registering a project | `init` writes the config; the hook heals a moved or cloned one by id |
 | The view | list and launch only |
-| Migration | none; recreate the projects with `init` |
+| Migration | v2 to v3: none; recreate the projects with `init`. The flat `atlas/` of 2.2.0 and earlier: `upgrade` |
 
 ## Left for later
 
 - Many knowledge bases on one project, once one is not enough in practice.
-- `promote`: a task's Outcome, or a page from a project's folder, into the
+- `promote`: a task's Outcome, or a page from a project folder, into the
   knowledge base with links rewritten.
 - A `search` tool across a knowledge base and the tasks of its projects.
 - A Tasks tab in the view, if the CLI's `tasks` proves too far away.
-- `init --dir NAME` for a repository that already uses a folder named
-  `atlas/` for something else.
 - A Stop hook line when the session's active task page was not touched.
 - Dependencies between tasks, and between phases, beyond `order`.

@@ -58,7 +58,7 @@ type Config struct {
 	Heat *HeatConfig `json:"heat,omitempty"`
 	// Knowledge holds every knowledge base's root.
 	Knowledge []string `json:"knowledge,omitempty"`
-	// Projects holds every project's work folder, the parent of its atlas/ folder.
+	// Projects holds every project's work folder, the parent of its atlas/<name>/ folder.
 	Projects []string `json:"projects,omitempty"`
 }
 

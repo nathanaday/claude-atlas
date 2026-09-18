@@ -16,7 +16,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/actions"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 )
 
 // Item is one entry in the view: what the scan found, with the state the last refresh
@@ -95,7 +95,7 @@ var tabNames = map[tab]string{tabKnowledge: "Knowledge", tabProjects: "Projects"
 // captions say what each tab holds, for a user who is new to the two kinds.
 var captions = map[tab]string{
 	tabKnowledge: "A knowledge base is the wiki you open and work from. Projects use it; sources enter through its inbox.",
-	tabProjects:  "A project is an atlas/ folder inside your work: its tasks and phases, and the one knowledge base it uses.",
+	tabProjects:  "A project is an atlas/<name>/ folder inside your work: its threads and phases, and the one knowledge base it uses.",
 	tabProblems:  "Entries the atlas found but could not read.",
 }
 
@@ -118,10 +118,10 @@ type view struct {
 	tab     tab
 	boards  [3]board // knowledge, projects, problems
 	changed bool
-	// plant is the one-line prompt for a new task, open while not nil, and the project
-	// it plants into.
-	plant     *textinput.Model
-	plantInto *Item
+	// stub is the one-line prompt for a new thread, open while not nil, and the project
+	// the thread opens in.
+	stub      *textinput.Model
+	stubInto  *Item
 	busy      string // message while an open or a refresh runs in the background
 	status    string
 	errMsg    string
@@ -261,7 +261,7 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			v.status = "back from Claude Code in " + msg.name
 		}
-		// A session may have planted or finished tasks; read everything again.
+		// A session may have opened or closed threads; read everything again.
 		return v.refresh()
 	case openedMsg:
 		v.busy = ""
@@ -290,8 +290,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyCtrlC {
 			return v, tea.Quit
 		}
-		if v.plant != nil {
-			return v.updatePlant(msg)
+		if v.stub != nil {
+			return v.updateStub(msg)
 		}
 		if msg.String() == "q" {
 			return v, tea.Quit
@@ -315,7 +315,7 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.help = !v.help
 			v.board().ensureVisible(v.bodyHeight())
 			return v, nil
-		case "o", "c", "p":
+		case "o", "c", "n":
 			item := v.current()
 			if item == nil {
 				return v, nil
@@ -327,8 +327,8 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "c":
 				return v.claude(item)
-			case "p":
-				return v.openPlant(item)
+			case "n":
+				return v.openStub(item)
 			}
 			return v.open(item)
 		}
@@ -376,52 +376,52 @@ func (v view) refresh() (tea.Model, tea.Cmd) {
 	return v, v.refreshCmd()
 }
 
-// openPlant opens the one-line prompt that plants a task in a project.
-func (v view) openPlant(item *Item) (tea.Model, tea.Cmd) {
+// openStub opens the one-line prompt that opens a thread in a project.
+func (v view) openStub(item *Item) (tea.Model, tea.Cmd) {
 	if item.Entry.Kind != registry.Project {
-		v.errMsg = "a knowledge base has no tasks; plant into a project"
+		v.errMsg = "a knowledge base has no threads; open one in a project"
 		return v, nil
 	}
-	if v.acts.Plant == nil {
-		v.errMsg = "planting is not available here"
+	if v.acts.StartThread == nil {
+		v.errMsg = "opening a thread is not available here"
 		return v, nil
 	}
 	in := textinput.New()
-	in.Prompt = "  task for " + entryName(item.Entry) + ": "
+	in.Prompt = "  new thread in " + entryName(item.Entry) + ": "
 	in.Width = max(20, v.width-lipgloss.Width(in.Prompt)-4)
 	in.Focus()
-	v.plant, v.plantInto = &in, item
+	v.stub, v.stubInto = &in, item
 	return v, textinput.Blink
 }
 
-// updatePlant forwards keys to the prompt; Enter plants, Esc cancels.
-func (v view) updatePlant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// updateStub forwards keys to the prompt; Enter opens the thread, Esc cancels.
+func (v view) updateStub(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
-		v.plant, v.plantInto = nil, nil
+		v.stub, v.stubInto = nil, nil
 		return v, nil
 	case tea.KeyEnter:
-		text := strings.TrimSpace(v.plant.Value())
-		item := v.plantInto
-		v.plant, v.plantInto = nil, nil
+		text := strings.TrimSpace(v.stub.Value())
+		item := v.stubInto
+		v.stub, v.stubInto = nil, nil
 		if text == "" {
 			return v, nil
 		}
-		t, err := v.acts.Plant(item.Entry, tasks.Plant{Text: text})
+		t, err := v.acts.StartThread(item.Entry, threads.New{Text: text})
 		if err != nil {
 			v.errMsg = err.Error()
 			return v, nil
 		}
 		v.changed = true
-		v.status = fmt.Sprintf("planted %s in %s (%s)", t.Title, entryName(item.Entry), t.ID)
+		v.status = fmt.Sprintf("opened %s in %s (%s)", t.Title, entryName(item.Entry), t.ID)
 		if cmd := v.refreshCmd(); cmd != nil {
 			v.busy = "reading every knowledge base and project…"
 			return v, cmd
 		}
 		return v, nil
 	}
-	in, cmd := v.plant.Update(msg)
-	v.plant = &in
+	in, cmd := v.stub.Update(msg)
+	v.stub = &in
 	return v, cmd
 }
 
@@ -454,8 +454,8 @@ func (v view) open(item *Item) (tea.Model, tea.Cmd) {
 // footer renders the prompt, progress, or status lines under a screen.
 func (v view) footer(hints ...string) string {
 	switch {
-	case v.plant != nil:
-		return v.plant.View() + "\n" + v.wrapped(dim, "Enter plant · Esc cancel")
+	case v.stub != nil:
+		return v.stub.View() + "\n" + v.wrapped(dim, "Enter open the thread · Esc cancel")
 	case v.busy != "":
 		return "  " + okSt.Render(v.busy) + "\n"
 	}
@@ -602,7 +602,7 @@ func entryKeys(e registry.Entry) string {
 	case e.Kind == registry.Knowledge:
 		return "o Obsidian · c Claude"
 	}
-	return "c Claude · p plant"
+	return "c Claude · n new thread"
 }
 
 // boardHints lists the keys for the entry under the cursor.
@@ -617,7 +617,7 @@ func (v view) boardHints() string {
 }
 
 // RunView shows the atlas until the user quits. It reports whether anything changed: a
-// plant or a refresh happened, so the caller reads the registry again.
+// new thread or a refresh happened, so the caller reads the registry again.
 func RunView(items []Item, opener Opener, acts actions.Atlas) (bool, error) {
 	final, err := tea.NewProgram(newView(items, opener, acts), tea.WithAltScreen()).Run()
 	if err != nil {

@@ -16,7 +16,7 @@ argument.
 | Tool | Use |
 |---|---|
 | `status` | the place: a project with its knowledge base, or a knowledge base with its projects; mode, inbox, git state, warnings |
-| `inbox` | files waiting in the knowledge base's `inbox/`, with hashes and capture state; in a project session, also `notes`, the task notes |
+| `inbox` | files waiting in the knowledge base's `inbox/`, with hashes and capture state; in a project session, also `notes`, the notes that wait to become threads |
 | `capture` | copy inbox files into `.raw/captured/` and the source ledger; a project session records the project as provenance |
 | `route` | where a new page of a type belongs, whether it exists, and a skeleton |
 | `plan` | validate writes and hold them; returns `plan_id`, preview, warnings |
@@ -27,7 +27,7 @@ argument.
 | `mode` | read or prepare a change of filing mode |
 | `stub` | seed a page for every wanted link, or for `titles[]` (each `title` and `type`); `type` sets the default for titles that name none |
 | `stage` | copy files from outside into `inbox/`, or write a project's snapshot there |
-| `plant`, `tasks`, `task`, `phase` | a project's tasks and phases; see [tasks.md](tasks.md) |
+| `threads`, `thread`, `phase` | a project's threads and phases; see [threads.md](threads.md) |
 
 ## Workflow
 

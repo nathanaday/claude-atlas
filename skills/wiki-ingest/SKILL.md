@@ -21,8 +21,8 @@ ingest: say so and hand off to `atlas-project`, which links one.
 
 1. Call `status`, then `inbox`. `inbox` lists what waits in the knowledge
    base's inbox and whether each file is already captured. In a project
-   session it also lists `notes`, the project's task notes: those are not
-   sources; leave them to `task-plant` and say so. A file whose frontmatter
+   session it also lists `notes`, the notes that wait to become threads: those are not
+   sources; leave them to `thread-stub` and say so. A file whose frontmatter
    says `type: project-snapshot` is a project snapshot: leave it to
    `describe` and say so.
 2. Infer the budget; do not ask for one. A batch of up to five files, or one

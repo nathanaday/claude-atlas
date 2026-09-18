@@ -16,7 +16,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/links"
 	"github.com/nathanaday/claude-atlas/internal/project"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -44,7 +44,8 @@ const (
 	ReasonUnreadable = "unreadable"  // the identity file is not JSON
 	ReasonSchema     = "schema"      // an identity file from a later version
 	ReasonMissing    = "missing"     // a registered path whose folder is gone
-	ReasonNotProject = "not-project" // a registered work folder with no atlas/project.json
+	ReasonNotProject = "not-project" // a registered work folder with no atlas/<name>/project.json
+	ReasonFlat       = "flat"        // a project directly in atlas/; upgrade moves it into atlas/<name>/
 	ReasonNotVault   = "not-vault"   // a registered knowledge base folder with no identity file
 )
 
@@ -94,14 +95,14 @@ type State struct {
 	LastOperation   string     `json:"last_operation,omitempty"`
 	Pages           *int       `json:"pages,omitempty"`
 	Inbox           *int       `json:"inbox,omitempty"`
-	OpenThreads     []string   `json:"open_threads,omitempty"`
+	HotTopics       []string   `json:"hot_topics,omitempty"`
 	Unfinished      Unfinished `json:"unfinished"`
 	// Both kinds.
 	LastTouched string `json:"last_touched,omitempty"`
 	DaysIdle    *int   `json:"days_idle"`
 	Heat        string `json:"heat"`
 	// A project's state.
-	Tasks *TaskSummary `json:"tasks,omitempty"`
+	Threads *ThreadSummary `json:"threads,omitempty"`
 	// Described is the page in the project's knowledge base that describes it, when one
 	// does.
 	Described *Description `json:"described,omitempty"`
@@ -187,23 +188,23 @@ func (u Unfinished) Total() *int {
 	return total
 }
 
-// TaskLine is one open task as the atlas shows it.
-type TaskLine struct {
+// ThreadLine is one open thread as the atlas shows it.
+type ThreadLine struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
-	Status   string `json:"status"`
+	Stage    string `json:"stage"`
 	Priority string `json:"priority"`
 	Phase    string `json:"phase,omitempty"`
-	Due      string `json:"due,omitempty"`
+	Blocked  string `json:"blocked,omitempty"`
 	Updated  string `json:"updated"`
-	Path     string `json:"path"` // absolute path of the task page
+	Path     string `json:"path"` // absolute path of the document of the thread's stage
 	Stale    bool   `json:"stale,omitempty"`
 }
 
-// TaskSummary is what refresh read from a project's task pages.
-type TaskSummary struct {
-	Counts tasks.Counts `json:"counts"`
-	Open   []TaskLine   `json:"open"`
+// ThreadSummary is what refresh read from a project's threads.
+type ThreadSummary struct {
+	Counts threads.Counts `json:"counts"`
+	Open   []ThreadLine   `json:"open"`
 	// Phases lists the phases in order, finished ones last.
 	Phases []string `json:"phases,omitempty"`
 }
@@ -317,19 +318,26 @@ func scanRoot(ix *Index, root string) {
 	}
 }
 
-// scanProject reads atlas/project.json under a registered work folder.
+// scanProject reads atlas/<name>/project.json under a registered work folder.
 func scanProject(ix *Index, work string) {
 	info, err := os.Stat(work)
 	if err != nil || !info.IsDir() {
 		fail(ix, work, "not found; work in it again to heal the path, or run claude-atlas forget", ReasonMissing)
 		return
 	}
+	if _, err := project.Locate(work); err != nil {
+		switch {
+		case errors.Is(err, project.ErrFlat):
+			fail(ix, work, "the project sits directly in "+project.Dir+"/; run claude-atlas upgrade "+work, ReasonFlat)
+		case errors.Is(err, project.ErrNotProject):
+			fail(ix, work, "no "+project.Dir+"/<name>/"+project.Marker+"; run claude-atlas init there, or claude-atlas forget", ReasonNotProject)
+		default:
+			fail(ix, work, err.Error(), ReasonUnreadable)
+		}
+		return
+	}
 	cfg, ok := project.ReadConfig(work)
 	if !ok {
-		if !project.IsProject(work) {
-			fail(ix, work, "no "+project.Dir+"/"+project.Marker+"; run claude-atlas init there, or claude-atlas forget", ReasonNotProject)
-			return
-		}
 		fail(ix, work, "identity file is not JSON", ReasonUnreadable)
 		return
 	}
@@ -567,9 +575,6 @@ func (e Entry) Rel() string {
 // Wiki is a knowledge base's wiki folder.
 func (e Entry) Wiki() string { return filepath.Join(e.Path, vault.WikiDir) }
 
-// Atlas is a project's atlas/ folder.
-func (e Entry) Atlas() string { return filepath.Join(e.Path, project.Dir) }
-
 // KnowledgePath is the root of the knowledge base a project uses, or "".
 func (e Entry) KnowledgePath() string {
 	if e.Knowledge == nil || e.Knowledge.Error != "" {
@@ -579,7 +584,7 @@ func (e Entry) KnowledgePath() string {
 }
 
 // StateSchema is the schema the registry state file declares.
-const StateSchema = "claude-atlas.registry.v2"
+const StateSchema = "claude-atlas.registry.v3"
 
 // registryFile is the on-disk shape of the state file.
 type registryFile struct {

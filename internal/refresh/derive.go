@@ -14,7 +14,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/lint"
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
@@ -31,7 +31,7 @@ func Derive(e registry.Entry, today time.Time, generatedAt string, newDays int) 
 }
 
 func deriveKnowledge(e registry.Entry, today time.Time, generatedAt string, newDays int) *registry.State {
-	state := &registry.State{GeneratedAt: generatedAt, OpenThreads: []string{}}
+	state := &registry.State{GeneratedAt: generatedAt, HotTopics: []string{}}
 	root := e.Path
 
 	var touched time.Time
@@ -44,9 +44,9 @@ func deriveKnowledge(e registry.Entry, today time.Time, generatedAt string, newD
 		touched, touchedFound = mt, true
 	}
 	setHeat(state, e.Created, touched, touchedFound, today, newDays)
-	state.OpenThreads = ActiveThreads(root)
-	if state.OpenThreads == nil {
-		state.OpenThreads = []string{}
+	state.HotTopics = HotTopics(root)
+	if state.HotTopics == nil {
+		state.HotTopics = []string{}
 	}
 
 	report, err := lint.Run(root, lint.Options{AsOf: today})
@@ -96,9 +96,9 @@ func deriveProject(e registry.Entry, today time.Time, generatedAt string, newDay
 			touched, touchedFound = t, true
 		}
 	}
-	state.Tasks = taskSummaryFor(p, today)
-	if state.Tasks != nil {
-		for _, t := range state.Tasks.Open {
+	state.Threads = threadSummaryFor(p, today)
+	if state.Threads != nil {
+		for _, t := range state.Threads.Open {
 			if u, ok := parseDate(t.Updated); ok && (!touchedFound || u.After(touched)) {
 				touched, touchedFound = u, true
 			}
@@ -129,19 +129,23 @@ func setHeat(state *registry.State, created string, touched time.Time, touchedFo
 	}
 }
 
-// taskSummaryFor reads the project's task pages; nil only when the folder cannot be
+// threadSummaryFor reads the project's threads; nil only when the folder cannot be
 // read.
-func taskSummaryFor(p *project.Project, today time.Time) *registry.TaskSummary {
-	board, err := tasks.Load(p)
+func threadSummaryFor(p *project.Project, today time.Time) *registry.ThreadSummary {
+	board, err := threads.Load(p)
 	if err != nil {
 		return nil
 	}
-	sum := &registry.TaskSummary{Counts: board.Counts(today), Open: []registry.TaskLine{}}
-	sum.Counts.Notes = len(tasks.Notes(p))
+	sum := &registry.ThreadSummary{Counts: board.Counts(today), Open: []registry.ThreadLine{}}
+	sum.Counts.Notes = len(threads.Notes(p))
 	for _, t := range board.Open() {
-		sum.Open = append(sum.Open, registry.TaskLine{
-			ID: t.ID, Title: t.Title, Status: t.Status, Priority: t.Priority, Phase: t.Phase, Due: t.Due,
-			Updated: t.Updated, Path: p.Path(t.Path), Stale: tasks.Stale(t, today),
+		file := p.Path(t.Path)
+		if d := t.Current(); d != nil {
+			file = p.Path(d.Path)
+		}
+		sum.Open = append(sum.Open, registry.ThreadLine{
+			ID: t.ID, Title: t.Title, Stage: t.Stage, Priority: t.Priority, Phase: t.Phase, Blocked: t.Blocked,
+			Updated: t.Updated, Path: file, Stale: threads.Stale(t, today),
 		})
 	}
 	var open, finished []string
@@ -210,10 +214,10 @@ func Signals(e registry.Entry, today time.Time) []string {
 			notes = append(notes, fmt.Sprintf("its page in the knowledge base is %d commits behind; the describe skill brings it up to date", d.Behind))
 		}
 	}
-	if state.Tasks != nil {
+	if state.Threads != nil {
 		var blocked, stale []string
-		for _, t := range state.Tasks.Open {
-			if t.Status == "blocked" {
+		for _, t := range state.Threads.Open {
+			if t.Blocked != "" {
 				blocked = append(blocked, t.Title)
 			}
 			if t.Stale {
@@ -221,10 +225,10 @@ func Signals(e registry.Entry, today time.Time) []string {
 			}
 		}
 		if len(blocked) > 0 {
-			notes = append(notes, fmt.Sprintf("%d blocked task%s: %s", len(blocked), plural(len(blocked)), strings.Join(blocked, "; ")))
+			notes = append(notes, fmt.Sprintf("%d blocked thread%s: %s", len(blocked), plural(len(blocked)), strings.Join(blocked, "; ")))
 		}
 		if len(stale) > 0 {
-			notes = append(notes, fmt.Sprintf("%d stale task%s, active but untouched for %d days: %s", len(stale), plural(len(stale)), tasks.StaleDays, strings.Join(stale, "; ")))
+			notes = append(notes, fmt.Sprintf("%d stale thread%s, planned but untouched for %d days: %s", len(stale), plural(len(stale)), threads.StaleDays, strings.Join(stale, "; ")))
 		}
 	}
 	return notes

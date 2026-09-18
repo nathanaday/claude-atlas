@@ -1,0 +1,31 @@
+/* claude-atlas: one color and one icon per stage of a thread.
+   Written by claude-atlas; safe to replace with the next upgrade. */
+
+:root {
+  --atlas-thread: 197, 134, 192;
+  --atlas-stub: 229, 192, 123;
+  --atlas-spec: 79, 193, 255;
+  --atlas-plan: 78, 201, 176;
+  --atlas-receipt: 106, 153, 85;
+  --atlas-killed: 209, 105, 105;
+  --atlas-phase: 156, 220, 254;
+  --atlas-inbox: 128, 128, 128;
+}
+
+/* The card at the top of every page, and the groups of the board. */
+.callout[data-callout='thread']  { --callout-color: var(--atlas-thread);  --callout-icon: lucide-git-branch; }
+.callout[data-callout='stub']    { --callout-color: var(--atlas-stub);    --callout-icon: lucide-sprout; }
+.callout[data-callout='spec']    { --callout-color: var(--atlas-spec);    --callout-icon: lucide-ruler; }
+.callout[data-callout='plan']    { --callout-color: var(--atlas-plan);    --callout-icon: lucide-map; }
+.callout[data-callout='receipt'] { --callout-color: var(--atlas-receipt); --callout-icon: lucide-check; }
+.callout[data-callout='killed']  { --callout-color: var(--atlas-killed);  --callout-icon: lucide-x; }
+.callout[data-callout='phase']   { --callout-color: var(--atlas-phase);   --callout-icon: lucide-flag; }
+
+/* The same colors on the folders. */
+.nav-files-container .nav-folder-title[data-path^="threads"]  { color: rgb(var(--atlas-thread)); }
+.nav-files-container .nav-folder-title[data-path^="stubs"]    { color: rgb(var(--atlas-stub)); }
+.nav-files-container .nav-folder-title[data-path^="specs"]    { color: rgb(var(--atlas-spec)); }
+.nav-files-container .nav-folder-title[data-path^="plans"]    { color: rgb(var(--atlas-plan)); }
+.nav-files-container .nav-folder-title[data-path^="receipts"] { color: rgb(var(--atlas-receipt)); }
+.nav-files-container .nav-folder-title[data-path^="phases"]   { color: rgb(var(--atlas-phase)); }
+.nav-files-container .nav-folder-title[data-path^="inbox"]    { color: rgb(var(--atlas-inbox)); }

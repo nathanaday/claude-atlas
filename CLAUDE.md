@@ -11,11 +11,12 @@ Read `README.md` first. This file holds what the code and README do not say.
 
 | Thing | Location |
 |---|---|
-| v3: a project is an `atlas/` folder in the work, one knowledge base, phases (built; 2.0.0) | `docs/v3-design.md` |
+| Threads: a project's state as stub, spec, plan, receipt documents (built; 3.0.0) | `docs/threads-design.md` |
+| v3: a project is an `atlas/<name>/` folder in the work, one knowledge base, phases (built; 2.0.0); its task sections are superseded by `threads-design.md` | `docs/v3-design.md` |
 | v2: knowledge bases, projects, mounts, access (superseded by `v3-design.md`) | `docs/v2-design.md` |
 | Core design and the reasons behind it | `docs/core-design.md` |
 | The atlas side before v2 (superseded) | `docs/atlas-design.md` |
-| Tasks: the page contract; the engine, ledger, and repository parts are superseded by `v3-design.md` | `docs/tasks-design.md` |
+| Tasks (superseded by `threads-design.md`) | `docs/tasks-design.md` |
 | Working from a project in v2 (superseded) | `docs/superpowers/specs/2026-09-17-working-from-a-project-design.md` |
 | The atlas tools and the `atlas` skills in v2 (superseded in part) | `docs/superpowers/specs/2026-09-16-atlas-tools-design.md` |
 | Original brainstorm (not a contract) | `docs/spec.md` |
@@ -42,17 +43,23 @@ safety net, and adds the cross-vault view.
 
 ## Three rules for a project
 
-1. A project is files. It has no git of its own, no Obsidian vault, and no
-   engine: `atlas/project.json`, `tasks/`, `phases/`, `inbox/`. The `plant`,
-   `task`, and `phase` tools change frontmatter and regenerate
-   `atlas/tasks/tasks.md`; the model writes Plan, Progress, and Outcome with
-   Edit; the guard refuses only `tasks.md` and `project.json`.
-2. A task names its phase; a phase never lists its tasks. A task's status is
-   the truth and its folder follows it: finished tasks sit in
-   `tasks/archive/`, and `task` moves the page when the status crosses that
-   line. A phase has no status; it is finished when every task in it is.
-3. Nothing reaches the knowledge base from a task until the task is finished,
-   and then only through a plan the user sees.
+1. A project is files. It has no git of its own and no engine:
+   `atlas/<name>/project.json`, `threads/`, `stubs/`, `specs/`, `plans/`,
+   `receipts/`, `phases/`, `inbox/`. The folder takes the project's name
+   because a user may open it in Obsidian, which names a vault after its
+   folder. Code owns the cards and the board under `threads/`, every
+   document's frontmatter, and the first callout of every document; the
+   model writes the rest of a document with Edit. The guard refuses
+   `threads/`, `project.json`, and a new file written straight into a stage
+   folder.
+2. A thread's stage is never set: it is the furthest document that exists
+   (stub, spec, plan, receipt). The `thread` tool files a document, and that
+   is the only way a thread moves, so every change of state is a page the
+   user can see. A receipt closes the thread and its card moves to
+   `threads/archive/`. A thread names its phase; a phase never lists its
+   threads and has no status.
+3. Nothing reaches the knowledge base from a thread until the thread is
+   completed, and then only through a plan the user sees.
 
 ## Three rules for the atlas
 
@@ -71,19 +78,20 @@ safety net, and adds the cross-vault view.
 Three carriers, and a new capability splits across them rather than picking one.
 
 1. A tool is a fact or a commit. Code owns whatever two correct runs must
-   answer the same way (`status`, `route`, `tasks`, `history`, `lint`) and
+   answer the same way (`status`, `route`, `threads`, `history`, `lint`) and
    every path that changes bytes (`capture`, `plan`, `apply`, `undo`,
-   `plant`, `task`, `phase`, `stub`, `mode`). No tool writes prose.
+   `thread`, `phase`, `stub`, `mode`). No tool writes prose; `thread` files
+   the text the model gives it.
 2. A skill is a procedure and a policy: which depth to read at, what counts
    as adequate evidence, how to cite, when to stop, which skill comes next.
    A skill is advice. When the model must be refused instead of advised, the
    rule belongs in a tool or in a hook, which is why `PreToolUse` guards
    `wiki/` and no skill asks nicely.
 3. Tools and skills do not pair one to one, and naming them alike is the
-   trap. `plan` and `apply` serve every writing skill; `think` and
-   `task-plan` call no tool of their own. Tools are nouns and stay few,
-   because every description sits in every session's context; skills are
-   verbs and load when they trigger. A wanted `wiki-query` tool means the
+   trap. `plan` and `apply` serve every writing skill, and `thread` serves
+   every stage skill; `think` calls no tool of its own. Tools are nouns and
+   stay few, because every description sits in every session's context;
+   skills are verbs and load when they trigger. A wanted `wiki-query` tool means the
    split has not happened yet: the code part of querying is candidate
    selection (`search`) and a source's standing in the ledger, and the skill
    keeps the rest.
@@ -92,10 +100,10 @@ Three carriers, and a new capability splits across them rather than picking one.
 
 `view` is the whole atlas as one screen, for seeing and launching only; every
 command is one thing; the atlas tools (`atlas`, `vault`, `project`,
-`settings`, `stage`, and the task tools) are the same things from a Claude
+`settings`, `stage`, and the thread tools) are the same things from a Claude
 Code session. The rule: an action lives once, as a function in
 `internal/vaults`, `internal/refresh`, `internal/vault`, `internal/project`,
-`internal/tasks`, `internal/txn`, or `internal/capture`. The CLI exposes it
+`internal/threads`, `internal/txn`, or `internal/capture`. The CLI exposes it
 as one subcommand. The TUI and the tools reach it through `actions.Atlas`,
 which `actions.Bind` builds in one place. The TUI and the tools are subsets
 of the CLI, never the reverse: a new key or a new tool gets a command in the
@@ -107,7 +115,7 @@ same change, and `docs/usage.md` carries the table that maps them.
 .claude-plugin/         plugin.json and marketplace.json; this repo is its own marketplace
 .mcp.json               the atlas MCP server: scripts/atlas mcp
 scripts/atlas           sh wrapper that finds the installed binary
-hooks/hooks.json        SessionStart context, PreToolUse guard, Stop warning
+hooks/hooks.json        SessionStart context, PreToolUse guard, PostToolUse touch, Stop warning
 skills/                 one directory per skill; skills/wiki/references/ is shared
 agents/                 wiki-ingest worker, wiki-lint interpreter
 cmd/claude-atlas/       main
@@ -115,17 +123,17 @@ internal/cli/           argument parsing and one method per subcommand
 internal/actions/       every atlas action as one struct of functions, and Bind, the one place it is built
 internal/wizard/        the setup flow
 internal/vault/         a knowledge base: identity file, layout, templates, Init, Adopt, Upgrade, mode routing, page skeletons
-internal/project/       a project: atlas/project.json, Init, Open, FindAbove; writes only the identity file
+internal/project/       a project: atlas/<name>/project.json, Init, Open, Locate, FindAbove, Upgrade; writes only the identity file, the folder's name, and the Obsidian snippet (templates/)
 internal/place/         where a session is: the project (anywhere inside the work) or the knowledge base, and the config heal
 internal/gitx/          the git commands the core needs
 internal/txn/           plans, preview, apply, recovery, undo, history
-internal/tasks/         task and phase pages over plain files: parse, plant, set, phases, the generated tasks.md
+internal/threads/       threads over plain files: cards, stage documents, phases, Sync (the generated cards, callouts, and board), Migrate from 2.x tasks
 internal/describe/      the page that describes a project in its knowledge base, how far the work moved since, and the snapshot a page cites; reads only, capture writes the snapshot
 internal/capture/       inbox listing, staging into inbox/ (files, and a project's snapshot), capture into .raw/captured/
 internal/ledger/        the source ledger
 internal/lint/          the health check (ported from claude-obsidian's engine)
 internal/mcpserver/     the tools, thin over the packages above
-internal/hooks/         session-start (the project line with its knowledge base, page, and open tasks, or the knowledge base line with its projects and inbox), guard, stop
+internal/hooks/         session-start (the project line with its knowledge base, page, and open threads, or the knowledge base line with its projects and inbox), guard, touched, stop
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a knowledge base or a project
 internal/registry/      the scan of the knowledge bases and projects the config lists, the resolved entries, the registry state file
 internal/refresh/       derive one entry's state, rewrite the registry, list an entry's signals
@@ -183,25 +191,46 @@ not list it (`vaults.RegisterKnowledge`, `vaults.RegisterProject`).
   vault's folder takes its name: `vaults.EditIdentity` renames the leaf and
   keeps the parent, a taken folder refuses the whole edit, and the folder name
   is `links.CleanName` of the vault's name.
-- A project's identity is `atlas/project.json` (`project.Config`: schema, id,
-  name, description, created, and the one `knowledge` it uses, by id and
-  name). `project.Init` writes it and the folders and nothing else;
-  `project.Save` is the only other writer, for link, unlink, and edit.
+- A project's identity is `atlas/<name>/project.json` (`project.Config`:
+  schema, id, name, description, created, and the one `knowledge` it uses,
+  by id and name). `project.Init` writes it and the folders and nothing
+  else; `project.Save` is the only other writer, for link, unlink, and edit.
+  The project folder is `links.CleanName` of the project's name; `Save`
+  moves it when the name changes, and a taken folder refuses the save.
+  `project.Locate` finds the folder as the one child of `atlas/` that holds
+  `project.json`, and refuses two. A project in the flat layout of 2.2.0
+  and earlier (`atlas/project.json`) is refused with `project.ErrFlat` and
+  scanned as `ReasonFlat`; only `claude-atlas upgrade` moves it
+  (`project.Upgrade`).
   `vaults.InitProject` also runs `git init` in a work folder that is in no
   repository (on `main`, no commit), unless the caller asks for none. A
   project session heals the config (`vaults.RegisterProject`): an unknown
   project is added, one whose id sits at another path is moved, and one
   listed at a path that is gone is taken for the moved one only when it is the
   only one gone.
-- The project side has no engine. `tasks` reads and writes plain files:
-  `Parse` validates a page, `PlantTask`, `Set`, `CreatePhase`, `RenamePhase`,
-  `ReorderPhase`, and `RemovePhase` change frontmatter and regenerate
-  `tasks/tasks.md` (`WriteIndex`); `setField` rewrites one frontmatter line
-  and keeps every other line, so a hand-added property survives. A task's
-  `phase` must name a phase page; `Set` refuses an unknown one, `RemovePhase`
-  refuses while a task names it, `RenamePhase` rewrites every task that does.
-  There is no task ledger; `updated` on the page is the last touch, and
-  `Stale` reads it.
+- The project side has no engine. `threads` reads and writes plain files.
+  `Load` reads the cards and the documents and derives each thread's stage;
+  a page it cannot use is a `Problem`, never an error. `Start`, `File`,
+  `Set`, `Reopen`, `Touch`, and the phase functions change pages, and every
+  one ends in `Sync`, which rewrites each card's `stage`, `outcome`, body,
+  and folder, the first callout of each document (`replaceLead`, which
+  replaces only a callout of a stage's own type), and `threads/threads.md`.
+  `Sync` writes a file only when its content differs and never changes
+  `updated`; the session-start hook runs it. `setField` rewrites one
+  frontmatter line and keeps every other line, so a hand-added property
+  survives. A document names its thread by id, never by file name. A
+  thread's `phase` must name a phase page; `Set` refuses an unknown one,
+  `RemovePhase` refuses while a thread names it, `RenamePhase` rewrites
+  every card that does. There is no ledger; `updated` on the card is the
+  last touch, `Stale` reads it, and the `touched` hook sets it when a
+  document is edited.
+- `project.Init` and `EnsureFolders` write `.obsidian/snippets/claude-atlas.css`
+  (the stage callouts and folder colors) into the project folder, and
+  `appearance.json` only when there is none, so a user who turned the
+  snippet off keeps it off. `upgrade` rewrites the snippet.
+- In the atlas, "thread" means a project's thread only. The bullets under
+  `## Active Threads` in a knowledge base's `wiki/hot.md` are shown as "Hot
+  topics" (`refresh.HotTopics`).
 - A kind bounds a plan's writes (`txn.allowed`). Reserved: `wiki/log.md`, the
   source ledger, `ideas/`, `.git`, `.vault-meta`, `.obsidian`, `.raw` except
   through capture, `inbox` except deletes in an ingest.
@@ -222,18 +251,18 @@ not list it (`vaults.RegisterKnowledge`, `vaults.RegisterProject`).
   out of `Behind` (`describe.KnowledgeDirs`).
 - The server and the hooks resolve the session through `place.Resolve`: an
   explicit path, `CLAUDE_ATLAS_VAULT`, then the nearer of the nearest
-  `atlas/project.json` and the nearest `.claude-atlas.json` at or above the
+  `atlas/<name>/project.json` and the nearest `.claude-atlas.json` at or above the
   working directory, so a knowledge base inside a project is its own place. A
   project session's knowledge base comes from the registry by the id in
   `project.json`; a project whose knowledge base is not on this machine still
-  works for tasks, and the place carries `KnowledgeError`.
+  works for threads, and the place carries `KnowledgeError`.
 - A source captured from a project session records `via`, the project's id
   and name, as provenance (`capture.Capture` with a `*ledger.Via`).
 - The scan is the truth. `registry.Scan` reads the identity file under every
-  path in `config.knowledge` and `atlas/project.json` under every path in
-  `config.projects`, and nothing else. An entry the atlas knows but cannot
+  path in `config.knowledge` and `atlas/<name>/project.json` under every path
+  in `config.projects`, and nothing else. An entry the atlas knows but cannot
   read becomes an entry with a `Path`, an `Error`, and a `Reason` code
-  (`ReasonV1`, `ReasonV2Project`, `ReasonUnreadable`, `ReasonSchema`,
+  (`ReasonV1`, `ReasonV2Project`, `ReasonFlat`, `ReasonUnreadable`, `ReasonSchema`,
   `ReasonMissing`, `ReasonNotProject`, `ReasonNotVault`); `list` and `doctor` decide on the code, and the view
   files it under `problems`. Every command that acts on an entry scans
   afresh; `registry.json` is for display only.
@@ -308,7 +337,8 @@ took the whole of it. 2.0.0 is v3: a project is an `atlas/` folder in the
 work, one knowledge base per project, phases, and no mounts, clusters,
 grants, or linked repositories. 2.1.0 lists every knowledge base in the
 config and drops the vaults directory and `relocate`; `init` makes the work
-a git repository.
+a git repository. 3.0.0 puts a project in `atlas/<name>/` and replaces tasks
+with threads; `upgrade` moves a 2.x project over.
 
 ## Open questions
 

@@ -30,8 +30,15 @@ const IngestPrompt = "/claude-atlas:wiki-ingest"
 // DescribePrompt is the first message that writes the page describing a project.
 const DescribePrompt = "/claude-atlas:describe"
 
-// TaskPrompt is the first message that continues a task.
-func TaskPrompt(taskID string) string { return "/claude-atlas:task-run " + taskID }
+// ThreadPrompt is the first message that continues a thread: the skill that files the
+// document after the thread's stage, or runs its plan.
+func ThreadPrompt(stage, threadID string) string {
+	skill := map[string]string{"stub": "thread-spec", "spec": "thread-plan", "plan": "thread-run"}[stage]
+	if skill == "" {
+		skill = "thread"
+	}
+	return "/claude-atlas:" + skill + " " + threadID
+}
 
 // LaunchCommand builds the process that runs Claude Code in a knowledge base or a
 // project's work folder, with the place selected explicitly so the plugin never has to

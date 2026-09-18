@@ -15,7 +15,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -157,7 +157,7 @@ func TestToolsListAndStatus(t *testing.T) {
 	if msg := c.call("status", nil, &st); msg != "" {
 		t.Fatal(msg)
 	}
-	if st.Kind != "project" || st.Name != "webapp" || st.Path != a.work || st.Description != "The app." || st.Git == nil || st.Knowledge == nil || st.Knowledge.Path != a.kb.Root || st.Tasks == nil || st.Described != nil {
+	if st.Kind != "project" || st.Name != "webapp" || st.Path != a.work || st.Description != "The app." || st.Git == nil || st.Knowledge == nil || st.Knowledge.Path != a.kb.Root || st.Threads == nil || st.Described != nil {
 		t.Fatalf("project status %+v", st)
 	}
 	if !strings.Contains(strings.Join(st.Warnings, " "), registry.NotDescribed) {
@@ -290,7 +290,7 @@ func TestPlanRefusalsAndModeFromAKnowledgeBase(t *testing.T) {
 	}
 }
 
-func TestTaskToolsInAProject(t *testing.T) {
+func TestThreadToolsInAProject(t *testing.T) {
 	a := newAtlas(t, true)
 	c := a.inProject(t)
 	os.WriteFile(a.p.Path("inbox/note.md"), []byte("# Fix the login\n\nIt loops.\n"), 0o644)
@@ -302,59 +302,88 @@ func TestTaskToolsInAProject(t *testing.T) {
 	if ph.Project != "webapp" || ph.Phase == nil || ph.Phase.Order != 1 || ph.File != a.p.Path("phases/Alarm quality.md") {
 		t.Fatalf("phase %+v", ph)
 	}
-	if msg := c.call("plant", map[string]any{"title": "Filter vehicles", "text": "Cars trip the alarm.", "phase": "Nope"}, nil); !strings.Contains(msg, "no phase named") {
+	if msg := c.call("thread", map[string]any{"title": "Filter vehicles", "text": "Cars trip the alarm.", "phase": "Nope"}, nil); !strings.Contains(msg, "no phase named") {
 		t.Fatalf("an unknown phase is refused: %q", msg)
 	}
-	var planted PlantOut
-	if msg := c.call("plant", map[string]any{"title": "Filter vehicles", "text": "Cars trip the alarm.", "phase": "alarm quality", "priority": "high"}, &planted); msg != "" {
+	var opened ThreadOut
+	if msg := c.call("thread", map[string]any{"title": "Filter vehicles", "text": "Cars trip the alarm.", "phase": "alarm quality", "priority": "high"}, &opened); msg != "" {
 		t.Fatal(msg)
 	}
-	if planted.Status != "planted" || planted.Phase != "Alarm quality" || planted.Priority != "high" || planted.File != a.p.Path("tasks/Filter vehicles.md") {
-		t.Fatalf("planted %+v", planted)
+	if opened.Stage != threads.Stub || opened.Phase != "Alarm quality" || opened.Priority != "high" || opened.Files["stub"] != a.p.Path("stubs/Filter vehicles.md") || opened.Card != a.p.Path("threads/Filter vehicles.md") {
+		t.Fatalf("opened %+v", opened)
 	}
-	var fromNote PlantOut
-	if msg := c.call("plant", map[string]any{"text": "# Fix the login\n\nIt loops.\n", "from": "inbox/note.md"}, &fromNote); msg != "" {
+	var fromNote ThreadOut
+	if msg := c.call("thread", map[string]any{"from": "inbox/note.md"}, &fromNote); msg != "" {
 		t.Fatal(msg)
 	}
 	if fromNote.Title != "Fix the login" {
-		t.Fatalf("title from text: %+v", fromNote)
+		t.Fatalf("title from the note: %+v", fromNote)
 	}
 	if _, err := os.Stat(a.p.Path("inbox/note.md")); !os.IsNotExist(err) {
-		t.Fatal("the note is removed once the page exists")
+		t.Fatal("the note is removed once the stub exists")
 	}
-	var board TasksOut
-	if msg := c.call("tasks", nil, &board); msg != "" {
+	if msg := c.call("thread", map[string]any{"title": "x", "stage": "plan", "text": "x"}, nil); !strings.Contains(msg, "starts with its stub") {
+		t.Fatalf("a new thread with a later stage: %q", msg)
+	}
+	if msg := c.call("thread", map[string]any{"id": opened.ID, "text": "x"}, nil); !strings.Contains(msg, "text needs stage") {
+		t.Fatalf("text with no stage: %q", msg)
+	}
+
+	// File documents, with a card change in the same call.
+	var filed ThreadOut
+	if msg := c.call("thread", map[string]any{"id": opened.ID, "stage": "spec", "text": "Vehicles never alarm.", "priority": "normal"}, &filed); msg != "" {
 		t.Fatal(msg)
 	}
-	if len(board.Projects) != 1 || board.Projects[0].Name != "webapp" || len(board.Projects[0].Open) != 2 || len(board.Projects[0].Phases) != 1 || board.Projects[0].Phases[0].Open != 1 || board.Projects[0].Counts.Open != 2 {
-		t.Fatalf("tasks %+v", board)
+	if filed.Stage != threads.Spec || filed.Priority != "normal" || filed.Files["spec"] != a.p.Path("specs/Filter vehicles.md") {
+		t.Fatalf("filed %+v", filed)
 	}
-	var set PlantOut
-	if msg := c.call("task", map[string]any{"id": planted.ID, "status": "done"}, &set); msg != "" {
+	if msg := c.call("thread", map[string]any{"id": opened.ID, "stage": "spec", "text": "again"}, nil); !strings.Contains(msg, "revise it with Edit") {
+		t.Fatalf("a second spec: %q", msg)
+	}
+	var board ThreadsOut
+	if msg := c.call("threads", nil, &board); msg != "" {
 		t.Fatal(msg)
 	}
-	if set.Status != "done" || set.Path != "tasks/archive/Filter vehicles.md" {
-		t.Fatalf("done moves the page: %+v", set)
+	pb := board.Projects[0]
+	if len(board.Projects) != 1 || pb.Name != "webapp" || len(pb.Open) != 2 || pb.Open[0].ID != opened.ID || len(pb.Phases) != 1 || pb.Phases[0].Open != 1 || pb.Counts.Open != 2 || pb.Counts.Spec != 1 || pb.Board != a.p.Path(project.ThreadsIndex) {
+		t.Fatalf("threads %+v", board)
 	}
-	if msg := c.call("task", map[string]any{"id": "Fix the login", "priority": "low", "due": "2026-10-01"}, &set); msg != "" || set.Priority != "low" || set.Due != "2026-10-01" {
+	if msg := c.call("threads", map[string]any{"id": "fix the"}, &board); msg != "" || len(board.Projects[0].Open) != 1 || board.Projects[0].Open[0].ID != fromNote.ID {
+		t.Fatalf("one thread %q %+v", msg, board)
+	}
+
+	var set ThreadOut
+	if msg := c.call("thread", map[string]any{"id": "Fix the login", "priority": "low", "blocked": "the vendor"}, &set); msg != "" || set.Priority != "low" || set.Blocked != "the vendor" {
 		t.Fatalf("set by title %q %+v", msg, set)
 	}
-	if msg := c.call("task", map[string]any{"id": fromNote.ID}, nil); !strings.Contains(msg, "at least one") {
-		t.Fatalf("an empty change is refused: %q", msg)
+	if msg := c.call("thread", map[string]any{"id": fromNote.ID}, &set); msg != "" || set.ID != fromNote.ID {
+		t.Fatalf("a touch %q %+v", msg, set)
 	}
-	index, _ := os.ReadFile(a.p.Path(project.TasksIndex))
-	if !strings.Contains(string(index), "Finished phases") || !strings.Contains(string(index), "Fix the login") {
-		t.Fatalf("the index follows: %s", index)
+	if msg := c.call("thread", map[string]any{"id": opened.ID, "stage": "receipt", "text": "Shipped."}, nil); !strings.Contains(msg, "needs an outcome") {
+		t.Fatalf("a receipt with no outcome: %q", msg)
 	}
-	if msg := c.call("phase", map[string]any{"action": "remove", "title": "Alarm quality"}, nil); !strings.Contains(msg, "still name") {
-		t.Fatalf("remove refuses while a task names the phase: %q", msg)
+	if msg := c.call("thread", map[string]any{"id": opened.ID, "stage": "receipt", "outcome": "completed", "text": "Shipped."}, &set); msg != "" {
+		t.Fatal(msg)
+	}
+	if !set.Closed() || set.Outcome != threads.Completed || set.Path != "threads/archive/Filter vehicles.md" {
+		t.Fatalf("a receipt closes the thread: %+v", set)
+	}
+	index, _ := os.ReadFile(a.p.Path(project.ThreadsIndex))
+	if !strings.Contains(string(index), "finished") || !strings.Contains(string(index), "Fix the login") {
+		t.Fatalf("the board follows: %s", index)
+	}
+	if msg := c.call("phase", map[string]any{"action": "remove", "title": "Alarm quality"}, nil); !strings.Contains(msg, "still names") {
+		t.Fatalf("remove refuses while a thread names the phase: %q", msg)
 	}
 	if msg := c.call("phase", map[string]any{"action": "rename", "title": "Alarm quality", "new_title": "Alarms"}, &ph); msg != "" || ph.Phase.Title != "Alarms" {
 		t.Fatalf("rename %q %+v", msg, ph)
 	}
-	moved, _ := os.ReadFile(a.p.Path("tasks/archive/Filter vehicles.md"))
+	moved, _ := os.ReadFile(a.p.Path("threads/archive/Filter vehicles.md"))
 	if !strings.Contains(string(moved), `phase: "Alarms"`) {
-		t.Fatalf("rename follows the task: %s", moved)
+		t.Fatalf("rename follows the thread: %s", moved)
+	}
+	if msg := c.call("thread", map[string]any{"id": opened.ID, "reopen": true}, &set); msg != "" || set.Closed() || set.Stage != threads.Spec {
+		t.Fatalf("reopen %q %+v", msg, set)
 	}
 	order := 5
 	if msg := c.call("phase", map[string]any{"action": "reorder", "title": "Alarms", "order": order}, &ph); msg != "" || ph.Phase.Order != 5 {
@@ -365,15 +394,15 @@ func TestTaskToolsInAProject(t *testing.T) {
 	}
 }
 
-func TestTaskToolsFromAKnowledgeBaseNameTheProject(t *testing.T) {
+func TestThreadToolsFromAKnowledgeBaseNameTheProject(t *testing.T) {
 	a := newAtlas(t, false)
 	k := a.inKnowledge(t)
-	if msg := k.call("plant", map[string]any{"title": "Do it"}, nil); !strings.Contains(msg, "name the project") {
+	if msg := k.call("thread", map[string]any{"title": "Do it"}, nil); !strings.Contains(msg, "name the project") {
 		t.Fatalf("a knowledge base session names the project: %q", msg)
 	}
-	var planted PlantOut
-	if msg := k.call("plant", map[string]any{"project": "webapp", "title": "Do it", "text": "Now."}, &planted); msg != "" || planted.Project != "webapp" {
-		t.Fatalf("plant into a project %q %+v", msg, planted)
+	var opened ThreadOut
+	if msg := k.call("thread", map[string]any{"project": "webapp", "title": "Do it", "text": "Now."}, &opened); msg != "" || opened.Project != "webapp" {
+		t.Fatalf("open a thread in a project %q %+v", msg, opened)
 	}
 	// A project that uses another knowledge base is refused.
 	other := filepath.Join(filepath.Dir(a.work), "other")
@@ -383,12 +412,12 @@ func TestTaskToolsFromAKnowledgeBaseNameTheProject(t *testing.T) {
 	}
 	a.cfg.AddProject(other)
 	a.h.Save(a.cfg)
-	if msg := k.call("plant", map[string]any{"project": "other", "title": "x"}, nil); !strings.Contains(msg, "does not use") {
+	if msg := k.call("thread", map[string]any{"project": "other", "title": "x"}, nil); !strings.Contains(msg, "does not use") {
 		t.Fatalf("a project of another knowledge base: %q", msg)
 	}
-	var board TasksOut
-	if msg := k.call("tasks", nil, &board); msg != "" || len(board.Projects) != 1 || len(board.Projects[0].Open) != 1 {
-		t.Fatalf("tasks lists every project of the knowledge base: %q %+v", msg, board)
+	var board ThreadsOut
+	if msg := k.call("threads", nil, &board); msg != "" || len(board.Projects) != 1 || len(board.Projects[0].Open) != 1 {
+		t.Fatalf("threads lists every project of the knowledge base: %q %+v", msg, board)
 	}
 }
 
@@ -466,9 +495,9 @@ func TestAProjectWithoutAKnowledgeBase(t *testing.T) {
 	if msg := c.call("capture", map[string]any{"paths": []string{"x"}}, nil); !strings.Contains(msg, "uses no knowledge base") {
 		t.Fatalf("capture: %q", msg)
 	}
-	var planted PlantOut
-	if msg := c.call("plant", map[string]any{"title": "Still works"}, &planted); msg != "" || planted.ID == "" {
-		t.Fatalf("tasks work without a knowledge base: %q", msg)
+	var opened ThreadOut
+	if msg := c.call("thread", map[string]any{"title": "Still works"}, &opened); msg != "" || opened.ID == "" {
+		t.Fatalf("threads work without a knowledge base: %q", msg)
 	}
 	var inbox InboxOut
 	if msg := c.call("inbox", nil, &inbox); msg != "" || inbox.Vault != "" || len(inbox.Files) != 0 {
@@ -488,6 +517,3 @@ func TestAProjectWithoutAKnowledgeBase(t *testing.T) {
 		t.Fatalf("status warns: %v", pl.Warnings)
 	}
 }
-
-// keep tasks imported for the package's types in assertions above.
-var _ tasks.Counts

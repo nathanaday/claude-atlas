@@ -30,7 +30,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/refresh"
 	"github.com/nathanaday/claude-atlas/internal/registry"
-	"github.com/nathanaday/claude-atlas/internal/tasks"
+	"github.com/nathanaday/claude-atlas/internal/threads"
 	"github.com/nathanaday/claude-atlas/internal/tui"
 	"github.com/nathanaday/claude-atlas/internal/txn"
 	"github.com/nathanaday/claude-atlas/internal/vault"
@@ -52,7 +52,7 @@ Getting started:
   new-knowledge PATH        create a knowledge base: an Obsidian vault with an inbox and a wiki;
                             a bare name is a folder in the current directory
   adopt PATH                make an existing Obsidian or claude-obsidian vault a knowledge base
-  init [PATH]               make the current folder (or PATH) a project: an atlas/ folder inside your work
+  init [PATH]               make the current folder (or PATH) a project: an atlas/<name>/ folder inside your work
                             --name N, --description TEXT, --knowledge KB or --no-knowledge;
                             a folder in no git repository becomes one unless --no-git
 
@@ -60,13 +60,18 @@ Projects (PROJECT is a name, a path, or nothing for the project you are in):
   link KB                   set the knowledge base a project uses; --project P names one
   unlink                    clear it; --project P names one
   describe PROJECT          stage a snapshot of the project into its knowledge base; the describe skill writes the page
-  forget PROJECT            drop a project from the atlas; its atlas/ folder stays
+  forget PROJECT            drop a project from the atlas; its atlas/<name>/ folder stays
 
-Tasks:
-  plant PROJECT TEXT...     plant a task: a page with status planted, from your words
-                            --title T, --priority P, --phase NAME, --due DATE
-  tasks [PROJECT]           list open tasks; outside a project, every project's
-  task PROJECT ID           change a task: --status S, --priority P, --phase NAME, --due DATE
+Threads (PROJECT is a name or a path; "." is the project you are in; ID is a thread's id or title):
+  threads [PROJECT]         list open threads by stage; outside a project, every project's
+                            --all adds the closed ones, --stage S, --json
+  thread PROJECT ACTION ... new TEXT... [--title T] [--priority P] [--phase NAME]: a card and a stub
+                            show ID [--json]: its state and the path of each document
+                            file ID STAGE: file the spec, plan, or receipt, which moves the thread there;
+                              the text comes from --text T, --file PATH, or stdin; a receipt takes --outcome
+                            close ID TEXT... [--killed]: file the receipt; completed unless --killed
+                            set ID [--title T] [--priority P] [--phase NAME] [--blocked TEXT]
+                            reopen ID: delete the receipt
   phase PROJECT ACTION ...  create TITLE [--goal TEXT] [--order N], rename TITLE --to NEW,
                             reorder TITLE --order N, remove TITLE
 
@@ -81,14 +86,14 @@ Knowledge bases (KB is a name or a path; default: the one you are in, or your pr
   undo KB OPERATION         revert one operation
   recover [KB]              restore a knowledge base after an interrupted operation
   mode [KB] [MODE]          show or set the filing mode: generic or lyt
-  upgrade [KB|--all]        raise a knowledge base made by an older version to the current layout
+  upgrade [NAME|--all]      raise a knowledge base or a project made by an older version to the current layout
   apply KB PLAN.json        apply a plan file, for scripts
 
 Across the atlas:
   view                      the interactive screen; the same as no command at all
   list                      every knowledge base and project
   show NAME                 everything the atlas knows about one
-  open-claude NAME          start Claude Code in a knowledge base or a project; --task ID continues a task
+  open-claude NAME          start Claude Code in a knowledge base or a project; --thread ID continues a thread
   refresh                   read everything again and rewrite the registry
   config [KEY VALUE]        show the settings, or set one: new-days N
   info                      show every path and version the atlas uses
@@ -96,7 +101,7 @@ Across the atlas:
 
 Plugin:
   mcp                       serve the atlas tools over stdio; Claude Code runs this
-  hook EVENT                run a plugin hook: session-start, guard, stop
+  hook EVENT                run a plugin hook: session-start, guard, touched, stop
   version                   print the version
 
 Global options:
@@ -172,12 +177,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.describe(rest[1:])
 	case "forget":
 		code, err = e.forget(rest[1:])
-	case "plant":
-		code, err = e.plant(rest[1:])
-	case "tasks":
-		code, err = e.tasks(rest[1:])
-	case "task":
-		code, err = e.task(rest[1:])
+	case "threads":
+		code, err = e.threads(rest[1:])
+	case "thread":
+		code, err = e.thread(rest[1:])
 	case "phase":
 		code, err = e.phase(rest[1:])
 	case "view":
@@ -426,7 +429,7 @@ func entryName(en registry.Entry) string {
 // cwd is the working directory, or "" when it cannot be read.
 func cwd() string { return place.Cwd() }
 
-// projectArg resolves a project for the task and project commands: nothing means the
+// projectArg resolves a project for the thread and project commands: nothing means the
 // project at or above the current directory; a path opens that folder; a name goes
 // through the registry. It returns the registry entry when the atlas knows it, so a
 // command can reach the project's knowledge base.
@@ -474,6 +477,37 @@ func (e *env) projectArg(arg string) (*project.Project, *registry.Entry, error) 
 		return nil, nil, err
 	}
 	return p, entry, nil
+}
+
+// upgradeProjectArg is the work folder of the project upgrade names, or "" when it names
+// a knowledge base: nothing means the nearer of the two at or above the current
+// directory; a path or a name means a project when it is one.
+func (e *env) upgradeProjectArg(arg string) string {
+	if arg == "" {
+		work, root := project.FindAbove(cwd()), vault.FindAbove(cwd())
+		if work != "" && len(work) > len(root) {
+			return work
+		}
+		return ""
+	}
+	if abs, err := filepath.Abs(home.Expand(arg)); err == nil && project.IsProject(abs) {
+		return abs
+	}
+	cfg, err := e.home.Load()
+	if err != nil {
+		return ""
+	}
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		return ""
+	}
+	if bad := badEntry(ix, arg); bad != nil && bad.Reason == registry.ReasonFlat {
+		return bad.Path
+	}
+	if found, err := ix.Find(arg, registry.Project); err == nil {
+		return found.Path
+	}
+	return ""
 }
 
 // openVaultArg resolves a knowledge base for the in-vault commands: a name, a path, or
@@ -750,7 +784,7 @@ func (e *env) initProject(args []string) (int, error) {
 	p := made.Project
 	c.Say("")
 	c.Step(console.OK, "project", fmt.Sprintf("%s at %s", p.Name(), home.Display(p.Root)))
-	c.Step(console.OK, "wrote", project.Dir+"/: "+strings.Join(made.Written, ", "))
+	c.Step(console.OK, "wrote", p.Rel()+"/: "+strings.Join(made.Written, ", "))
 	switch made.Git {
 	case vaults.GitCreated:
 		c.Step(console.OK, "git", "initialized a repository on main; nothing committed")
@@ -780,11 +814,11 @@ func (e *env) initProject(args []string) (int, error) {
 	if p.Config.Knowledge != nil {
 		next = append(next, [2]string{"claude-atlas describe " + entryArg(ix, p.Root, registry.Project), "a page about this project in " + p.Config.Knowledge.Name})
 	}
-	next = append(next, [2]string{"claude-atlas plant " + ref + ` "..."`, "or a note in " + project.Dir + "/" + project.InboxDir + "/"})
+	next = append(next, [2]string{"claude-atlas thread " + ref + ` new "..."`, "open a thread, or drop a note in " + p.Rel() + "/" + project.InboxDir + "/"})
 	if here {
-		next = append(next, [2]string{"claude", "Claude Code here sees the project and its tasks"})
+		next = append(next, [2]string{"claude", "Claude Code here sees the project and its threads"})
 	} else {
-		next = append(next, [2]string{"claude-atlas open-claude " + entryArg(ix, p.Root, ""), "Claude Code in the project sees it and its tasks"})
+		next = append(next, [2]string{"claude-atlas open-claude " + entryArg(ix, p.Root, ""), "Claude Code in the project sees it and its threads"})
 	}
 	c.Say("")
 	c.Say("  Next:")
@@ -910,7 +944,7 @@ func (e *env) forget(args []string) (int, error) {
 	}
 	name, where := entryName(entry), home.Display(entry.Path)
 	gone := entry.Reason == registry.ReasonMissing
-	question := fmt.Sprintf("Forget %s? The folder %s and its %s/ stay.", name, where, project.Dir)
+	question := fmt.Sprintf("Forget %s? The folder %s and everything in it stay.", name, where)
 	if gone {
 		question = fmt.Sprintf("Forget %s? Its folder %s is already gone.", name, where)
 	}
@@ -1009,191 +1043,276 @@ func (e *env) offerClaude(cfg *home.Config, dir string, noClaude bool, skill str
 	return 0, nil
 }
 
-func (e *env) plant(args []string) (int, error) {
-	fs := newFlags("plant", e.stderr)
-	title := fs.String("title", "", "the task's title; taken from the text when omitted")
-	priority := fs.String("priority", "", "high, normal, low, or someday")
-	phase := fs.String("phase", "", "the phase the task belongs to")
-	due := fs.String("due", "", "YYYY-MM-DD")
-	positional, err := parse(fs, args)
-	if err != nil {
-		return 2, nil
-	}
-	if len(positional) < 2 {
-		return 2, errors.New("usage: claude-atlas plant PROJECT TEXT... [--title T] [--priority P] [--phase NAME] [--due DATE]")
-	}
-	p, _, err := e.projectArg(positional[0])
-	if err != nil {
-		return 1, err
-	}
-	t, err := tasks.PlantTask(p, tasks.Plant{Title: *title, Text: strings.Join(positional[1:], " "), Priority: *priority, Phase: *phase, Due: *due}, time.Now())
-	if err != nil {
-		return 1, err
-	}
-	e.console.Step(console.OK, "planted", fmt.Sprintf("%s (%s) in %s", t.Title, t.ID, p.Name()))
-	e.console.Say("  %s", home.Display(p.Path(t.Path)))
-	return 0, nil
-}
-
-func (e *env) tasks(args []string) (int, error) {
-	fs := newFlags("tasks", e.stderr)
-	all := fs.Bool("all", false, "include done and cancelled tasks")
-	status := fs.String("status", "", "only tasks with this status")
+func (e *env) threads(args []string) (int, error) {
+	fs := newFlags("threads", e.stderr)
+	all := fs.Bool("all", false, "include the closed threads")
+	stage := fs.String("stage", "", "only threads at this stage: stub, spec, plan, or receipt")
+	asJSON := fs.Bool("json", false, "print the board as JSON")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) > 1 {
-		return 2, errors.New("usage: claude-atlas tasks [PROJECT] [--all] [--status S]")
+		return 2, errors.New("usage: claude-atlas threads [PROJECT] [--all] [--stage S] [--json]")
+	}
+	if *stage != "" && threads.Dir(*stage) == "" {
+		return 2, fmt.Errorf("stage must be one of %s", strings.Join(threads.Stages, ", "))
 	}
 	now := time.Now()
+	var projects []*project.Project
+	// every means no project was named and the current folder is in none: list them all.
+	every := false
 	p, _, err := e.projectArg(first(positional))
-	if err != nil && len(positional) == 0 && errors.Is(err, project.ErrNotProject) {
-		return e.allTasks(now, *all, *status)
-	}
-	if err != nil {
-		return 1, err
-	}
-	board, err := tasks.Load(p)
-	if err != nil {
-		return 1, err
-	}
-	e.printTasks(board, now, *all, *status, "")
-	if notes := tasks.Notes(p); len(notes) > 0 {
-		e.console.Say("  %d task note%s waiting in %s/%s/: %s", len(notes), plural(len(notes)), project.Dir, project.InboxDir, strings.Join(notes, ", "))
-	}
-	for _, pr := range board.Problems {
-		e.console.Step(console.Fail, pr.Path, pr.Reason)
-	}
-	return 0, nil
-}
-
-// allTasks lists the open tasks of every project the atlas knows.
-func (e *env) allTasks(now time.Time, all bool, status string) (int, error) {
-	cfg, err := e.home.Load()
-	if err != nil {
-		return 1, err
-	}
-	ix, err := registry.Scan(cfg)
-	if err != nil {
+	switch {
+	case err == nil:
+		projects = append(projects, p)
+	case len(positional) == 0 && errors.Is(err, project.ErrNotProject):
+		every = true
+		cfg, err := e.home.Load()
+		if err != nil {
+			return 1, err
+		}
+		ix, err := registry.Scan(cfg)
+		if err != nil {
+			return 1, err
+		}
+		for _, en := range ix.Projects() {
+			if p, err := project.Open(en.Path); err == nil {
+				projects = append(projects, p)
+			}
+		}
+	default:
 		return 1, err
 	}
 	shown := 0
-	for _, en := range ix.Projects() {
-		p, err := project.Open(en.Path)
+	boards := map[string]*threads.Board{}
+	for _, p := range projects {
+		board, err := threads.Load(p)
 		if err != nil {
-			continue
+			return 1, err
 		}
-		board, err := tasks.Load(p)
-		if err != nil {
+		if *asJSON {
+			boards[p.Name()] = board
 			continue
 		}
 		list := board.Open()
-		if all {
-			list = append(list, board.Archived()...)
+		if *all || *stage == threads.Receipt {
+			list = append(list, board.Closed()...)
 		}
-		if len(list) == 0 {
+		if every && len(list) == 0 {
 			continue
 		}
 		shown += len(list)
-		e.printTasks(board, now, all, status, en.Name)
+		if every {
+			e.console.Say("%s", p.Name())
+		}
+		e.printThreads(list, now, *stage)
+		if notes := threads.Notes(p); len(notes) > 0 {
+			e.console.Say("  %d note%s waiting in %s/%s/: %s", len(notes), plural(len(notes)), p.Rel(), project.InboxDir, strings.Join(notes, ", "))
+		}
+		for _, pr := range board.Problems {
+			e.console.Step(console.Fail, pr.Path, pr.Reason)
+		}
 	}
-	if shown == 0 {
-		e.console.Say("no open tasks in any project; plant one with `claude-atlas plant PROJECT \"...\"`")
+	if *asJSON {
+		return 0, e.printJSON(boards)
+	}
+	if every && shown == 0 {
+		e.console.Say("no open threads in any project; open one with `claude-atlas thread PROJECT new \"...\"`")
 	}
 	return 0, nil
 }
 
-// printTasks lists a board: open tasks grouped by phase in phase order, then the ones
-// with no phase, then the archive when asked.
-func (e *env) printTasks(board *tasks.Board, now time.Time, all bool, status, name string) {
-	if name != "" {
-		e.console.Say("%s", name)
-	}
-	open := board.Open()
-	if len(open) == 0 && !all {
-		e.console.Say("  no open tasks")
+func (e *env) printJSON(v any) error {
+	enc := json.NewEncoder(e.stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+// printThreads lists threads under a heading per stage, the furthest stage first.
+func (e *env) printThreads(list []threads.Thread, now time.Time, only string) {
+	if len(list) == 0 {
+		e.console.Say("  no open threads")
 		return
 	}
-	row := func(t tasks.Task) {
-		if status != "" && t.Status != status {
-			return
-		}
-		notes := ""
-		if tasks.Stale(t, now) {
-			notes = "  stale"
-		}
-		if t.Due != "" {
-			notes += "  due " + t.Due
-		}
-		e.console.Say("  %-9s %-8s %-40s %s  %s%s", t.Status, t.Priority, t.Title, t.ID, dash(t.Updated), notes)
-	}
-	for _, ph := range board.Phases {
-		in := board.In(ph.Title)
-		if len(in) == 0 {
+	last := ""
+	for _, t := range list {
+		if only != "" && t.Stage != only {
 			continue
 		}
-		e.console.Say("  %s (%d)", ph.Title, len(in))
-		for _, t := range in {
-			row(t)
+		if t.Stage != last {
+			e.console.Say("  %s", t.Stage)
+			last = t.Stage
 		}
-	}
-	if unphased := board.Unphased(); len(unphased) > 0 {
-		if len(board.Phases) > 0 {
-			e.console.Say("  no phase")
+		notes := ""
+		if t.Closed() {
+			notes += "  " + t.Outcome
 		}
-		for _, t := range unphased {
-			row(t)
+		if t.Phase != "" {
+			notes += "  " + t.Phase
 		}
-	}
-	if all {
-		if archived := board.Archived(); len(archived) > 0 {
-			e.console.Say("  archive")
-			for _, t := range archived {
-				row(t)
-			}
+		if t.Blocked != "" {
+			notes += "  blocked: " + t.Blocked
 		}
+		if threads.Stale(t, now) {
+			notes += "  stale"
+		}
+		e.console.Say("    %-8s %-44s %s  %s%s", t.Priority, t.Title, t.ID, dash(t.Updated), notes)
 	}
 }
 
-func (e *env) task(args []string) (int, error) {
-	fs := newFlags("task", e.stderr)
-	status := fs.String("status", "", strings.Join(tasks.Statuses, ", "))
-	priority := fs.String("priority", "", strings.Join(tasks.Priorities, ", "))
-	phase := fs.String("phase", "", "the phase the task belongs to; \"\" clears it")
-	due := fs.String("due", "", "YYYY-MM-DD; \"\" clears it")
+// threadText is a document's text: the flag, the file, the words on the command line, or
+// stdin when it is not a terminal.
+func (e *env) threadText(text, file string, words []string) (string, error) {
+	switch {
+	case text != "":
+		return text, nil
+	case file == "-":
+	case file != "":
+		data, err := os.ReadFile(home.Expand(file))
+		return string(data), err
+	case len(words) > 0:
+		return strings.Join(words, " "), nil
+	case e.console.Interactive():
+		return "", nil
+	}
+	data, err := io.ReadAll(e.stdin)
+	return string(data), err
+}
+
+const threadUsage = "usage: claude-atlas thread PROJECT new TEXT... | show ID | file ID STAGE | close ID TEXT... | set ID | reopen ID"
+
+func (e *env) thread(args []string) (int, error) {
+	fs := newFlags("thread", e.stderr)
+	title := fs.String("title", "", "the thread's title; on new, taken from the text when omitted")
+	priority := fs.String("priority", "", strings.Join(threads.Priorities, ", "))
+	phase := fs.String("phase", "", "the phase the thread belongs to; \"\" clears it")
+	blocked := fs.String("blocked", "", "what the thread waits on; \"\" unblocks it")
+	text := fs.String("text", "", "the document's text")
+	file := fs.String("file", "", "read the document's text from this file; - is stdin")
+	outcome := fs.String("outcome", "", "with file ID receipt: completed or killed")
+	killed := fs.Bool("killed", false, "with close: the thread was killed, not completed")
+	asJSON := fs.Bool("json", false, "with show: print the thread as JSON")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
-	set := setFlags(fs)
-	if len(positional) != 2 || len(set) == 0 {
-		return 2, errors.New("usage: claude-atlas task PROJECT ID|TITLE [--status S] [--priority P] [--phase NAME] [--due DATE]")
+	if len(positional) < 2 {
+		return 2, errors.New(threadUsage)
 	}
 	p, _, err := e.projectArg(positional[0])
 	if err != nil {
 		return 1, err
 	}
-	var ch tasks.Changes
-	if set["status"] {
-		ch.Status = status
+	action, rest := positional[1], positional[2:]
+	if action != "new" && len(rest) == 0 {
+		return 2, errors.New(threadUsage)
 	}
-	if set["priority"] {
-		ch.Priority = priority
+	set := setFlags(fs)
+	now := time.Now()
+	var t *threads.Thread
+	verb := ""
+	switch action {
+	case "new":
+		body, err := e.threadText(*text, *file, rest)
+		if err != nil {
+			return 1, err
+		}
+		t, err = threads.Start(p, threads.New{Title: *title, Text: body, Priority: *priority, Phase: *phase}, now)
+		if err != nil {
+			return 1, err
+		}
+		verb = "opened"
+	case "show":
+		board, err := threads.Load(p)
+		if err != nil {
+			return 1, err
+		}
+		if t, err = board.Resolve(rest[0]); err != nil {
+			return 1, err
+		}
+		if *asJSON {
+			return 0, e.printJSON(t)
+		}
+		verb = "thread"
+	case "file":
+		if len(rest) != 2 {
+			return 2, errors.New("usage: claude-atlas thread PROJECT file ID STAGE [--text T | --file PATH] [--outcome completed|killed]")
+		}
+		body, err := e.threadText(*text, *file, nil)
+		if err != nil {
+			return 1, err
+		}
+		if t, err = threads.File(p, rest[0], threads.Filing{Stage: rest[1], Text: body, Outcome: *outcome}, now); err != nil {
+			return 1, err
+		}
+		verb = "filed"
+	case "close":
+		body, err := e.threadText(*text, *file, rest[1:])
+		if err != nil {
+			return 1, err
+		}
+		f := threads.Filing{Stage: threads.Receipt, Text: body, Outcome: threads.Completed}
+		if *killed {
+			f.Outcome = threads.Killed
+		}
+		if t, err = threads.File(p, rest[0], f, now); err != nil {
+			return 1, err
+		}
+		verb = f.Outcome
+	case "set":
+		var ch threads.Changes
+		if set["title"] {
+			ch.Title = title
+		}
+		if set["priority"] {
+			ch.Priority = priority
+		}
+		if set["phase"] {
+			ch.Phase = phase
+		}
+		if set["blocked"] {
+			ch.Blocked = blocked
+		}
+		if ch.Empty() {
+			return 2, errors.New("usage: claude-atlas thread PROJECT set ID [--title T] [--priority P] [--phase NAME] [--blocked TEXT]")
+		}
+		if t, err = threads.Set(p, rest[0], ch, now); err != nil {
+			return 1, err
+		}
+		verb = "set"
+	case "reopen":
+		if t, err = threads.Reopen(p, rest[0], now); err != nil {
+			return 1, err
+		}
+		verb = "reopened"
+	default:
+		return 2, fmt.Errorf("unknown action %q; new, show, file, close, set, or reopen", action)
 	}
-	if set["phase"] {
-		ch.Phase = phase
-	}
-	if set["due"] {
-		ch.Due = due
-	}
-	t, err := tasks.Set(p, positional[1], ch, time.Now())
-	if err != nil {
-		return 1, err
-	}
-	e.console.Step(console.OK, t.Status, fmt.Sprintf("%s (%s) · %s · %s", t.Title, t.ID, t.Priority, dash(t.Phase)))
-	e.console.Say("  %s", home.Display(p.Path(t.Path)))
+	e.printThread(p, t, verb)
 	return 0, nil
+}
+
+// printThread shows one thread: its state on one line, then the path of the document of
+// its stage, or of every document for show.
+func (e *env) printThread(p *project.Project, t *threads.Thread, verb string) {
+	state := t.Stage
+	if t.Closed() {
+		state = t.Outcome
+	}
+	facts := []string{state, t.Priority}
+	if t.Phase != "" {
+		facts = append(facts, t.Phase)
+	}
+	if t.Blocked != "" {
+		facts = append(facts, "blocked: "+t.Blocked)
+	}
+	e.console.Step(console.OK, verb, fmt.Sprintf("%s (%s) in %s · %s", t.Title, t.ID, p.Name(), strings.Join(facts, " · ")))
+	for _, d := range t.Docs {
+		if verb == "thread" || d.Stage == t.Stage {
+			e.console.Say("  %-8s %s", d.Stage, home.Display(p.Path(d.Path)))
+		}
+	}
 }
 
 func (e *env) phase(args []string) (int, error) {
@@ -1221,7 +1340,7 @@ func (e *env) phase(args []string) (int, error) {
 		if set["order"] {
 			n = order
 		}
-		ph, err := tasks.CreatePhase(p, title, *goal, n, now)
+		ph, err := threads.CreatePhase(p, title, *goal, n, now)
 		if err != nil {
 			return 1, err
 		}
@@ -1230,7 +1349,7 @@ func (e *env) phase(args []string) (int, error) {
 		if *to == "" {
 			return 2, errors.New("rename needs --to NEW")
 		}
-		ph, err := tasks.RenamePhase(p, title, *to, now)
+		ph, err := threads.RenamePhase(p, title, *to, now)
 		if err != nil {
 			return 1, err
 		}
@@ -1239,13 +1358,13 @@ func (e *env) phase(args []string) (int, error) {
 		if !set["order"] {
 			return 2, errors.New("reorder needs --order N")
 		}
-		ph, err := tasks.ReorderPhase(p, title, *order, now)
+		ph, err := threads.ReorderPhase(p, title, *order, now)
 		if err != nil {
 			return 1, err
 		}
 		e.console.Step(console.OK, "reordered", fmt.Sprintf("%s is now order %d", ph.Title, ph.Order))
 	case "remove":
-		if err := tasks.RemovePhase(p, title, now); err != nil {
+		if err := threads.RemovePhase(p, title, now); err != nil {
 			return 1, err
 		}
 		e.console.Step(console.OK, "removed", "phase "+title)
@@ -1364,13 +1483,13 @@ const trustNote = "The first time in a folder, Claude Code asks whether you trus
 
 func (e *env) openClaude(args []string) (int, error) {
 	fs := newFlags("open-claude", e.stderr)
-	taskID := fs.String("task", "", "continue this task: start with /claude-atlas:task-run as the first message")
+	threadID := fs.String("thread", "", "continue this thread: start with the skill for its next stage as the first message")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) != 1 {
-		return 2, errors.New("usage: claude-atlas open-claude NAME [--task ID]")
+		return 2, errors.New("usage: claude-atlas open-claude NAME [--thread ID]")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
@@ -1384,20 +1503,27 @@ func (e *env) openClaude(args []string) (int, error) {
 		return 2, errors.New("open-claude starts an interactive Claude Code session and needs a terminal")
 	}
 	prompt := ""
-	if *taskID != "" {
+	if *threadID != "" {
 		if entry.Kind != registry.Project {
-			return 1, fmt.Errorf("%s is a knowledge base; tasks live in a project", entry.Name)
+			return 1, fmt.Errorf("%s is a knowledge base; threads live in a project", entry.Name)
 		}
 		p, err := project.Open(entry.Path)
 		if err != nil {
 			return 1, err
 		}
-		t, err := findTask(p, *taskID)
+		board, err := threads.Load(p)
 		if err != nil {
 			return 1, err
 		}
-		prompt = claudecode.TaskPrompt(t.ID)
-		e.console.Say("  task: %s (%s)", t.Title, t.Status)
+		t, err := board.Resolve(*threadID)
+		if err != nil {
+			return 1, err
+		}
+		if t.Closed() {
+			return 1, fmt.Errorf("%s is closed (%s); `claude-atlas thread %s reopen %s` opens it again", t.Title, t.Outcome, entry.Name, t.ID)
+		}
+		prompt = claudecode.ThreadPrompt(t.Stage, t.ID)
+		e.console.Say("  thread: %s (%s)", t.Title, t.Stage)
 	}
 	cmd, err := claudecode.LaunchCommand(cfg.ClaudeCode, entry.Path, prompt)
 	if err != nil {
@@ -1415,30 +1541,6 @@ func (e *env) openClaude(args []string) (int, error) {
 		return 1, err
 	}
 	return 0, nil
-}
-
-// findTask finds a task in a project by id, or by the start of its title.
-func findTask(p *project.Project, key string) (*tasks.Task, error) {
-	board, err := tasks.Load(p)
-	if err != nil {
-		return nil, err
-	}
-	if t := board.Find(key); t != nil {
-		return t, nil
-	}
-	var matches []*tasks.Task
-	for i := range board.Tasks {
-		if strings.HasPrefix(strings.ToLower(board.Tasks[i].Title), strings.ToLower(key)) {
-			matches = append(matches, &board.Tasks[i])
-		}
-	}
-	switch len(matches) {
-	case 1:
-		return matches[0], nil
-	case 0:
-		return nil, fmt.Errorf("no task %q in %s; see `claude-atlas tasks %s`", key, p.Name(), p.Name())
-	}
-	return nil, fmt.Errorf("%q matches several tasks in %s; use the id", key, p.Name())
 }
 
 func (e *env) ingest(args []string) (int, error) {
@@ -1570,6 +1672,8 @@ func unreadable(en registry.Entry) string {
 		return "v1"
 	case registry.ReasonV2Project:
 		return "v2"
+	case registry.ReasonFlat:
+		return "flat"
 	case registry.ReasonMissing:
 		return "missing"
 	default:
@@ -1682,8 +1786,8 @@ func (e *env) show(args []string) (int, error) {
 			row("Inbox", fmt.Sprintf("%d waiting", *state.Inbox))
 		}
 		row("Unfinished", state.Unfinished.Text())
-		for i, t := range state.OpenThreads {
-			label := "Open threads"
+		for i, t := range state.HotTopics {
+			label := "Hot topics"
 			if i > 0 {
 				label = ""
 			}
@@ -1693,13 +1797,13 @@ func (e *env) show(args []string) (int, error) {
 		if state.Git != nil {
 			row("Git", refresh.LinkSummary(*state.Git))
 		}
-		// The task pages are cheap to read and change without a refresh, so they are
-		// read now rather than from the registry.
+		// The threads are cheap to read and change without a refresh, so they are read
+		// now rather than from the registry.
 		if p, err := project.Open(entry.Path); err == nil {
-			if board, err := tasks.Load(p); err == nil {
+			if board, err := threads.Load(p); err == nil {
 				counts := board.Counts(time.Now())
-				counts.Notes = len(tasks.Notes(p))
-				row("Tasks", taskCounts(counts))
+				counts.Notes = len(threads.Notes(p))
+				row("Threads", threadCounts(counts))
 				var phases []string
 				for _, ph := range board.Phases {
 					name := ph.Title
@@ -1721,9 +1825,15 @@ func (e *env) show(args []string) (int, error) {
 	return 0, nil
 }
 
-// taskCounts is one line of a project's tasks.
-func taskCounts(c tasks.Counts) string {
-	line := fmt.Sprintf("%d open (active %d, blocked %d, planned %d, planted %d)", c.Open, c.Active, c.Blocked, c.Planned, c.Planted)
+// threadCounts is one line of a project's threads.
+func threadCounts(c threads.Counts) string {
+	line := fmt.Sprintf("%d open (plan %d, spec %d, stub %d)", c.Open, c.Plan, c.Spec, c.Stub)
+	if c.Blocked > 0 {
+		line += fmt.Sprintf(" · %d blocked", c.Blocked)
+	}
+	if c.Completed+c.Killed > 0 {
+		line += fmt.Sprintf(" · %d closed", c.Completed+c.Killed)
+	}
 	if c.Notes > 0 {
 		line += fmt.Sprintf(" · %d note%s waiting", c.Notes, plural(c.Notes))
 	}
@@ -1972,15 +2082,15 @@ func (e *env) stub(args []string) (int, error) {
 
 func (e *env) upgrade(args []string) (int, error) {
 	fs := newFlags("upgrade", e.stderr)
-	all := fs.Bool("all", false, "every knowledge base the atlas knows")
+	all := fs.Bool("all", false, "every knowledge base and project the atlas knows")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) > 1 || (*all && len(positional) > 0) {
-		return 2, errors.New("usage: claude-atlas upgrade [KB] or claude-atlas upgrade --all")
+		return 2, errors.New("usage: claude-atlas upgrade [NAME] or claude-atlas upgrade --all")
 	}
-	var roots []string
+	var roots, works []string
 	if *all {
 		cfg, err := e.home.Load()
 		if err != nil {
@@ -1991,17 +2101,64 @@ func (e *env) upgrade(args []string) (int, error) {
 			return 1, err
 		}
 		for _, en := range ix.Entries {
-			if en.Error == "" && en.Kind != registry.Knowledge {
-				continue
+			switch {
+			case en.Reason == registry.ReasonFlat, en.Error == "" && en.Kind == registry.Project:
+				works = append(works, en.Path)
+			case en.Error == "" && en.Kind != registry.Knowledge:
+			default:
+				roots = append(roots, en.Path)
 			}
-			roots = append(roots, en.Path)
 		}
+	} else if work := e.upgradeProjectArg(first(positional)); work != "" {
+		works = []string{work}
 	} else {
 		v, err := e.openVaultArg(first(positional))
 		if err != nil {
 			return 1, err
 		}
 		roots = []string{v.Root}
+	}
+	for _, work := range works {
+		moved, err := project.Upgrade(work)
+		if err != nil {
+			return 1, err
+		}
+		p, err := project.Open(work)
+		if err != nil {
+			return 1, err
+		}
+		var did []string
+		if moved {
+			did = append(did, "moved "+project.Dir+"/ into "+p.Rel()+"/")
+		}
+		if threads.Legacy(p) {
+			n, left, err := threads.Migrate(p, time.Now())
+			if err != nil {
+				return 1, err
+			}
+			did = append(did, fmt.Sprintf("turned %d task%s into thread%s", n, plural(n), plural(n)))
+			for _, pr := range left {
+				e.console.Step(console.Fail, pr.Path, pr.Reason+"; it stays where it is")
+			}
+		}
+		snippet, _ := os.ReadFile(p.Path(project.Snippet))
+		if err := p.EnsureFolders(); err != nil {
+			return 1, err
+		}
+		if err := p.WriteSnippet(); err != nil {
+			return 1, err
+		}
+		if now, _ := os.ReadFile(p.Path(project.Snippet)); string(now) != string(snippet) {
+			did = append(did, "wrote "+project.Snippet)
+		}
+		if _, err := threads.Sync(p, time.Now()); err != nil {
+			return 1, err
+		}
+		if len(did) == 0 {
+			e.console.Step(console.Skip, home.Display(work), "current")
+			continue
+		}
+		e.console.Step(console.OK, home.Display(work), strings.Join(did, "; "))
 	}
 	restyled := false
 	for _, root := range roots {
@@ -2230,7 +2387,7 @@ func (e *env) mcp(args []string) (int, error) {
 
 func (e *env) hook(args []string) (int, error) {
 	if len(args) != 1 {
-		return 2, errors.New("usage: claude-atlas hook session-start|guard|stop")
+		return 2, errors.New("usage: claude-atlas hook session-start|guard|touched|stop")
 	}
 	switch args[0] {
 	case "session-start":
@@ -2241,6 +2398,10 @@ func (e *env) hook(args []string) (int, error) {
 		return 0, hooks.SessionStart(e.stdin, e.stdout, os.Getenv, enabled, time.Now())
 	case "guard":
 		return 0, hooks.Guard(e.stdin, e.stdout)
+	case "touched":
+		// A thread that cannot be marked is no reason to interrupt the session.
+		hooks.Touched(e.stdin, time.Now())
+		return 0, nil
 	case "stop":
 		return 0, hooks.Stop(e.stdin, e.stdout, os.Getenv)
 	}

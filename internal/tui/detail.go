@@ -15,8 +15,8 @@ import (
 // detailWidth is the label column of the expanded block.
 const detailWidth = 15
 
-// maxDetailTasks bounds the open tasks an expanded project lists.
-const maxDetailTasks = 8
+// maxDetailThreads bounds the open threads an expanded project lists.
+const maxDetailThreads = 8
 
 func heatMark(state *registry.State) string {
 	if state == nil {
@@ -56,8 +56,8 @@ func plural(n int) string {
 	return "s"
 }
 
-// taskSummaryText is one line of task counts for the expanded block.
-func taskSummaryText(t *registry.TaskSummary) string {
+// threadSummaryText is one line of thread counts for the expanded block.
+func threadSummaryText(t *registry.ThreadSummary) string {
 	c := t.Counts
 	if c.Open == 0 {
 		if c.Notes > 0 {
@@ -65,7 +65,10 @@ func taskSummaryText(t *registry.TaskSummary) string {
 		}
 		return "none open"
 	}
-	out := fmt.Sprintf("%d open: %d active · %d blocked · %d planned · %d planted", c.Open, c.Active, c.Blocked, c.Planned, c.Planted)
+	out := fmt.Sprintf("%d open: %d plan · %d spec · %d stub", c.Open, c.Plan, c.Spec, c.Stub)
+	if c.Blocked > 0 {
+		out += fmt.Sprintf(" · %d blocked", c.Blocked)
+	}
 	if c.Stale > 0 {
 		out += errSt.Render(fmt.Sprintf(" · %d stale", c.Stale))
 	}
@@ -89,24 +92,25 @@ func touchedText(s *registry.State) string {
 	}
 }
 
-// taskCountText is a project's open tasks for its box; "" before a refresh counted them.
-func taskCountText(s *registry.State) string {
-	if s == nil || s.Tasks == nil {
+// threadCountText is a project's open threads for its box; "" before a refresh counted
+// them.
+func threadCountText(s *registry.State) string {
+	if s == nil || s.Threads == nil {
 		return ""
 	}
-	n := s.Tasks.Counts.Open
+	n := s.Threads.Counts.Open
 	if n == 0 {
-		return "no tasks"
+		return "no threads"
 	}
-	return fmt.Sprintf("%d task%s open", n, plural(n))
+	return fmt.Sprintf("%d thread%s open", n, plural(n))
 }
 
 // currentPhase is the first phase that still holds open work, or "".
 func currentPhase(s *registry.State) string {
-	if s == nil || s.Tasks == nil || len(s.Tasks.Phases) == 0 {
+	if s == nil || s.Threads == nil || len(s.Threads.Phases) == 0 {
 		return ""
 	}
-	return s.Tasks.Phases[0]
+	return s.Threads.Phases[0]
 }
 
 // inboxText is a knowledge base's waiting sources; "" before a refresh counted them.
@@ -155,7 +159,7 @@ func boxLines(e registry.Entry, width int) []string {
 		lines = append(lines, dim.Render(clip(e.Description, width)))
 	}
 	facts := []string{touchedText(s)}
-	if t := taskCountText(s); t != "" {
+	if t := threadCountText(s); t != "" {
 		facts = append(facts, t)
 	}
 	if p := currentPhase(s); p != "" {
@@ -188,6 +192,8 @@ func problemFix(e registry.Entry) string {
 		return strings.TrimPrefix(e.Error, "not found; ")
 	case registry.ReasonNotVault:
 		return "run claude-atlas adopt " + path + ", or claude-atlas remove " + path
+	case registry.ReasonFlat:
+		return "run claude-atlas upgrade " + path
 	case registry.ReasonNotProject:
 		return "run claude-atlas init " + path + ", or claude-atlas forget " + path
 	case registry.ReasonUnreadable:
@@ -221,8 +227,8 @@ func detailLines(e registry.Entry) []string {
 		row("Last operation", s.LastOperation)
 		row("Last touched", s.LastTouched)
 		row("Unfinished", s.Unfinished.Text())
-		for i, t := range s.OpenThreads {
-			k := "Open threads"
+		for i, t := range s.HotTopics {
+			k := "Hot topics"
 			if i > 0 {
 				k = ""
 			}
@@ -249,23 +255,26 @@ func detailLines(e registry.Entry) []string {
 		} else if e.Knowledge != nil && e.Knowledge.Error == "" {
 			row("Described", dim.Render(registry.NotDescribed))
 		}
-		if s.Tasks != nil {
-			row("Tasks", taskSummaryText(s.Tasks))
-			if len(s.Tasks.Phases) > 0 {
-				row("Phases", strings.Join(s.Tasks.Phases, " → "))
+		if s.Threads != nil {
+			row("Threads", threadSummaryText(s.Threads))
+			if len(s.Threads.Phases) > 0 {
+				row("Phases", strings.Join(s.Threads.Phases, " → "))
 			}
-			for i, t := range s.Tasks.Open {
-				if i == maxDetailTasks {
-					out = append(out, label.Width(detailWidth).Render("")+dim.Render(fmt.Sprintf("… and %d more", len(s.Tasks.Open)-i)))
+			for i, t := range s.Threads.Open {
+				if i == maxDetailThreads {
+					out = append(out, label.Width(detailWidth).Render("")+dim.Render(fmt.Sprintf("… and %d more", len(s.Threads.Open)-i)))
 					break
 				}
 				k := ""
 				if i == 0 {
 					k = "Open"
 				}
-				line := fmt.Sprintf("[%s] %s", t.Status, t.Title)
+				line := fmt.Sprintf("[%s] %s", t.Stage, t.Title)
 				if t.Phase != "" {
 					line += dim.Render(" · " + t.Phase)
+				}
+				if t.Blocked != "" {
+					line += errSt.Render(" · blocked")
 				}
 				if t.Stale {
 					line += errSt.Render(" · stale")

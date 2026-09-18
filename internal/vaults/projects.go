@@ -26,7 +26,7 @@ const (
 // ProjectInit is what InitProject made.
 type ProjectInit struct {
 	Project *project.Project
-	Written []string // what it wrote under atlas/
+	Written []string // what it wrote under atlas/<name>/
 	Git     Git
 }
 
@@ -126,7 +126,7 @@ func EditProject(p *project.Project, edit ProjectEdit) error {
 	return p.Save()
 }
 
-// ForgetProject drops a work folder from the config. The folder and its atlas/ stay.
+// ForgetProject drops a work folder from the config. The folder and its atlas/<name>/ stay.
 func ForgetProject(h home.Home, cfg *home.Config, work string) error {
 	abs, err := filepath.Abs(home.Expand(work))
 	if err != nil {

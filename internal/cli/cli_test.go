@@ -121,7 +121,7 @@ func TestInitLinkUnlinkForget(t *testing.T) {
 	if err != nil || p.Name() != "webapp" || p.Config.Description != "The web app." || p.Config.Knowledge == nil || p.Config.Knowledge.Name != "welcome" {
 		t.Fatalf("project: %+v %v", p, err)
 	}
-	for _, rel := range []string{project.Marker, project.TasksDir, project.ArchiveDir, project.PhasesDir, project.InboxDir} {
+	for _, rel := range []string{project.Marker, project.ThreadsDir, project.ArchiveDir, project.StubsDir, project.SpecsDir, project.PlansDir, project.ReceiptsDir, project.PhasesDir, project.InboxDir, project.Snippet} {
 		if _, err := os.Stat(p.Path(rel)); err != nil {
 			t.Errorf("missing atlas/%s", rel)
 		}
@@ -215,98 +215,139 @@ func TestInitRefusals(t *testing.T) {
 	}
 }
 
-func TestTaskAndPhaseCommands(t *testing.T) {
+func TestThreadAndPhaseCommands(t *testing.T) {
 	h, _ := setup(t)
-	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "no open tasks in any project") {
-		t.Fatalf("tasks exit %d\n%s%s", code, h.out.String(), h.err.String())
+	if code := h.run("threads"); code != 0 || !strings.Contains(h.out.String(), "no open threads in any project") {
+		t.Fatalf("threads exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 	dir := work(t, "webapp", false)
 	if code := h.run("init", dir, "--knowledge", "welcome"); code != 0 {
 		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
-	if code := h.run("plant", "webapp", "Fix", "the", "dialog", "--priority", "high"); code != 0 || !strings.Contains(h.out.String(), "planted") || !strings.Contains(h.out.String(), "tasks/Fix the dialog.md") {
-		t.Fatalf("plant exit %d\n%s%s", code, h.out.String(), h.err.String())
+	atlas := filepath.Join(dir, project.Dir, "webapp")
+	if code := h.run("thread", "webapp", "new", "Fix", "the", "dialog", "--priority", "high"); code != 0 || !strings.Contains(h.out.String(), "opened") || !strings.Contains(h.out.String(), "stubs/Fix the dialog.md") {
+		t.Fatalf("new exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	page := filepath.Join(dir, project.Dir, "tasks", "Fix the dialog.md")
-	if _, err := os.Stat(page); err != nil {
-		t.Fatal("page missing")
+	if data, _ := os.ReadFile(filepath.Join(atlas, "threads", "threads.md")); !strings.Contains(string(data), "Fix the dialog") {
+		t.Fatalf("threads.md should list the thread:\n%s", data)
 	}
-	if data, _ := os.ReadFile(filepath.Join(dir, project.Dir, "tasks", "tasks.md")); !strings.Contains(string(data), "Fix the dialog") {
-		t.Fatalf("tasks.md should list the task:\n%s", data)
+	if code := h.run("threads", "webapp"); code != 0 || !strings.Contains(h.out.String(), "  stub\n    high     Fix the dialog") {
+		t.Fatalf("threads webapp exit %d:\n%s", code, h.out.String())
 	}
-	if code := h.run("tasks", "webapp"); code != 0 || !strings.Contains(h.out.String(), "planted   high     Fix the dialog") {
-		t.Fatalf("tasks webapp exit %d:\n%s", code, h.out.String())
+	if code := h.run("threads"); code != 0 || !strings.Contains(h.out.String(), "webapp\n") || !strings.Contains(h.out.String(), "Fix the dialog") {
+		t.Fatalf("all threads:\n%s", h.out.String())
 	}
-	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "webapp\n") || !strings.Contains(h.out.String(), "Fix the dialog") {
-		t.Fatalf("all tasks:\n%s", h.out.String())
+	if code := h.run("thread", "webapp"); code != 2 {
+		t.Fatalf("thread with no action exit %d", code)
 	}
-	if code := h.run("plant", "webapp"); code != 2 {
-		t.Fatalf("plant without text exit %d", code)
+	if code := h.run("thread", "webapp", "new"); code != 1 || !strings.Contains(h.err.String(), "needs a title or some text") {
+		t.Fatalf("new without text exit %d %s", code, h.err.String())
 	}
-	if code := h.run("plant", "webapp", "x", "--priority", "urgent"); code != 1 {
-		t.Fatalf("bad priority exit %d %s", code, h.err.String())
+	if code := h.run("thread", "webapp", "new", "x", "--priority", "urgent"); code != 1 {
+		t.Fatalf("a bad priority exit %d", code)
 	}
-	if code := h.run("plant", "webapp", "x", "--phase", "Nope"); code != 1 || !strings.Contains(h.err.String(), "no phase named") {
-		t.Fatalf("unknown phase exit %d %s", code, h.err.String())
+	if code := h.run("thread", "webapp", "new", "x", "--phase", "Nope"); code != 1 || !strings.Contains(h.err.String(), "no phase named") {
+		t.Fatalf("an unknown phase exit %d %s", code, h.err.String())
 	}
-	// Phases: create, plant into, list grouped, rename follows, reorder, remove refused
-	// while a task names it.
-	if code := h.run("phase", "webapp", "create", "Alarm quality", "--goal", "Fewer false alarms."); code != 0 || !strings.Contains(h.out.String(), "phase Alarm quality (order 1)") {
-		t.Fatalf("phase create exit %d\n%s%s", code, h.out.String(), h.err.String())
+	// Phases: create, open a thread in one, rename follows, reorder, remove refused while
+	// a thread names it.
+	if code := h.run("phase", "webapp", "create", "Alarm quality", "--goal", "Fewer false alarms."); code != 0 {
+		t.Fatalf("phase create exit %d %s", code, h.err.String())
 	}
-	if code := h.run("plant", "webapp", "Filter vehicles", "--phase", "alarm quality"); code != 0 {
-		t.Fatalf("plant into a phase exit %d %s", code, h.err.String())
-	}
-	if code := h.run("tasks", "webapp"); code != 0 || !strings.Contains(h.out.String(), "Alarm quality (1)") || !strings.Contains(h.out.String(), "no phase") {
-		t.Fatalf("tasks grouped by phase:\n%s", h.out.String())
+	if code := h.run("thread", "webapp", "new", "Filter vehicles", "--phase", "alarm quality"); code != 0 {
+		t.Fatalf("new in a phase exit %d %s", code, h.err.String())
 	}
 	if code := h.run("phase", "webapp", "rename", "Alarm quality", "--to", "Alarms"); code != 0 {
 		t.Fatalf("phase rename exit %d %s", code, h.err.String())
 	}
-	if data, _ := os.ReadFile(filepath.Join(dir, project.Dir, "tasks", "Filter vehicles.md")); !strings.Contains(string(data), `phase: "Alarms"`) {
-		t.Fatalf("rename should follow into the task:\n%s", data)
+	if data, _ := os.ReadFile(filepath.Join(atlas, "threads", "Filter vehicles.md")); !strings.Contains(string(data), `phase: "Alarms"`) {
+		t.Fatalf("rename should follow into the thread:\n%s", data)
 	}
 	if code := h.run("phase", "webapp", "reorder", "Alarms", "--order", "5"); code != 0 || !strings.Contains(h.out.String(), "order 5") {
 		t.Fatalf("phase reorder exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("phase", "webapp", "remove", "Alarms"); code != 1 || !strings.Contains(h.err.String(), "still name") {
+	if code := h.run("phase", "webapp", "remove", "Alarms"); code != 1 || !strings.Contains(h.err.String(), "still names") {
 		t.Fatalf("remove a phase in use exit %d %s", code, h.err.String())
 	}
 	if code := h.run("phase", "webapp", "rename", "Alarms"); code != 2 {
 		t.Fatalf("rename without --to exit %d", code)
 	}
-	// task: status to done moves the page to the archive; a title works as the id.
-	if code := h.run("task", "webapp", "Fix the dialog", "--status", "done"); code != 0 || !strings.Contains(h.out.String(), "done") {
-		t.Fatalf("task done exit %d\n%s%s", code, h.err.String(), h.out.String())
+	// file: a document moves the thread; the text comes from a flag or a file.
+	if code := h.run("thread", "webapp", "file", "fix the", "spec", "--text", "Enter confirms."); code != 0 || !strings.Contains(h.out.String(), "spec · high") {
+		t.Fatalf("file spec exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if _, err := os.Stat(filepath.Join(dir, project.Dir, "tasks", "archive", "Fix the dialog.md")); err != nil {
-		t.Fatal("a done task moves to the archive")
+	planFile := filepath.Join(dir, "plan.md")
+	os.WriteFile(planFile, []byte("1. Bind the key.\n"), 0o644)
+	if code := h.run("thread", "webapp", "file", "Fix the dialog", "plan", "--file", planFile); code != 0 {
+		t.Fatalf("file plan exit %d %s", code, h.err.String())
 	}
-	if _, err := os.Stat(page); err == nil {
-		t.Fatal("the open page should be gone")
+	if data, _ := os.ReadFile(filepath.Join(atlas, "plans", "Fix the dialog.md")); !strings.Contains(string(data), "1. Bind the key.") {
+		t.Fatalf("the plan holds the file's text:\n%s", data)
 	}
-	if code := h.run("tasks", "webapp", "--all"); code != 0 || !strings.Contains(h.out.String(), "archive") || !strings.Contains(h.out.String(), "done") {
-		t.Fatalf("tasks --all:\n%s", h.out.String())
+	if code := h.run("thread", "webapp", "file", "Fix the dialog", "plan", "--text", "again"); code != 1 || !strings.Contains(h.err.String(), "revise it with Edit") {
+		t.Fatalf("a second plan exit %d %s", code, h.err.String())
 	}
-	if code := h.run("task", "webapp", "Filter vehicles", "--phase", "", "--due", "2026-10-01"); code != 0 {
-		t.Fatalf("task clear phase exit %d %s", code, h.err.String())
+	if code := h.run("thread", "webapp", "show", "Fix the dialog", "--json"); code != 0 || !strings.Contains(h.out.String(), `"stage": "plan"`) {
+		t.Fatalf("show --json exit %d\n%s", code, h.out.String())
+	}
+	if code := h.run("thread", "webapp", "set", "Filter vehicles", "--phase", "", "--blocked", "the vendor"); code != 0 || !strings.Contains(h.out.String(), "blocked: the vendor") {
+		t.Fatalf("set exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 	if code := h.run("phase", "webapp", "remove", "Alarms"); code != 0 {
-		t.Fatalf("remove an empty phase exit %d %s", code, h.err.String())
+		t.Fatalf("remove a free phase exit %d %s", code, h.err.String())
 	}
-	if code := h.run("task", "webapp", "Filter vehicles"); code != 2 {
-		t.Fatalf("task with nothing to change exit %d", code)
+	if code := h.run("thread", "webapp", "set", "Filter vehicles"); code != 2 {
+		t.Fatalf("set with nothing to change exit %d", code)
 	}
-	if code := h.run("task", "webapp", "nope", "--status", "active"); code != 1 {
-		t.Fatalf("unknown task exit %d", code)
+	if code := h.run("thread", "webapp", "set", "nope", "--priority", "low"); code != 1 {
+		t.Fatalf("an unknown thread exit %d", code)
+	}
+	// close files the receipt and moves the card; reopen deletes it.
+	if code := h.run("thread", "webapp", "close", "Fix the dialog", "Enter", "confirms", "now."); code != 0 || !strings.Contains(h.out.String(), "completed") {
+		t.Fatalf("close exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(atlas, "threads", "archive", "Fix the dialog.md")); err != nil {
+		t.Fatal("a closed thread's card moves to the archive")
+	}
+	if code := h.run("thread", "webapp", "close", "Filter vehicles", "--killed"); code != 1 || !strings.Contains(h.err.String(), "needs text") {
+		t.Fatalf("a receipt with no text exit %d %s", code, h.err.String())
+	}
+	if code := h.run("threads", "webapp", "--all"); code != 0 || !strings.Contains(h.out.String(), "receipt") || !strings.Contains(h.out.String(), "completed") {
+		t.Fatalf("threads --all:\n%s", h.out.String())
+	}
+	if code := h.run("threads", "webapp", "--json"); code != 0 || !strings.Contains(h.out.String(), `"outcome": "completed"`) {
+		t.Fatalf("threads --json:\n%s", h.out.String())
+	}
+	if code := h.run("thread", "webapp", "reopen", "Fix the dialog"); code != 0 || !strings.Contains(h.out.String(), "reopened") {
+		t.Fatalf("reopen exit %d %s", code, h.err.String())
 	}
 	// From inside the work, "." and nothing both mean this project.
 	t.Chdir(filepath.Join(dir))
-	if code := h.run("plant", ".", "From inside"); code != 0 {
-		t.Fatalf("plant with . exit %d %s", code, h.err.String())
+	if code := h.run("thread", ".", "new", "From inside"); code != 0 {
+		t.Fatalf("new with . exit %d %s", code, h.err.String())
 	}
-	if code := h.run("tasks"); code != 0 || !strings.Contains(h.out.String(), "From inside") || strings.Contains(h.out.String(), "webapp\n") {
-		t.Fatalf("tasks inside the work lists this project alone:\n%s", h.out.String())
+	if code := h.run("threads"); code != 0 || !strings.Contains(h.out.String(), "From inside") || strings.Contains(h.out.String(), "webapp\n") {
+		t.Fatalf("threads inside the work lists this project alone:\n%s", h.out.String())
+	}
+}
+
+func TestUpgradeTurnsTasksIntoThreads(t *testing.T) {
+	h, _ := setup(t)
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--no-knowledge"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
+	}
+	atlas := filepath.Join(dir, project.Dir, "webapp")
+	os.MkdirAll(filepath.Join(atlas, "tasks"), 0o755)
+	os.WriteFile(filepath.Join(atlas, "tasks", "Fix it.md"), []byte("---\ntype: task\ntitle: \"Fix it\"\nstatus: planned\npriority: normal\ncreated: 2026-09-01\nupdated: 2026-09-02\ntask_id: task-20260901-ab12\n---\n\n## Idea\n\nDo it.\n\n## Plan\n\n1. Go.\n"), 0o644)
+	if code := h.run("upgrade", "webapp"); code != 0 || !strings.Contains(h.out.String(), "turned 1 task into thread") {
+		t.Fatalf("upgrade exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("threads", "webapp"); code != 0 || !strings.Contains(h.out.String(), "  plan\n") || !strings.Contains(h.out.String(), "thr-20260901-ab12") {
+		t.Fatalf("the task is a thread with a plan:\n%s", h.out.String())
+	}
+	if code := h.run("upgrade", "webapp"); code != 0 || !strings.Contains(h.out.String(), "current") {
+		t.Fatalf("a second upgrade exit %d\n%s", code, h.out.String())
 	}
 }
 
@@ -597,6 +638,53 @@ func TestUpgradeRaisesAV2KnowledgeBase(t *testing.T) {
 	}
 }
 
+// A project in the flat layout is named by doctor, and upgrade moves it into
+// atlas/<name>/, by path, by the folder's name, or with --all.
+func TestUpgradeMovesAFlatProject(t *testing.T) {
+	h, _ := setup(t)
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--no-knowledge", "--name", "Web App"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
+	}
+	folder := filepath.Join(dir, project.Dir, "Web App")
+	flatten := func() {
+		aside := dir + "-aside"
+		os.Rename(folder, aside)
+		os.Remove(filepath.Join(dir, project.Dir))
+		os.Rename(aside, filepath.Join(dir, project.Dir))
+	}
+	flatten()
+	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "flat") {
+		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
+	}
+	for _, arg := range []string{dir, "webapp", "--all"} {
+		if code := h.run("upgrade", arg); code != 0 || !strings.Contains(h.out.String(), "into atlas/Web App/") {
+			t.Fatalf("upgrade %s exit %d\n%s%s", arg, code, h.out.String(), h.err.String())
+		}
+		if _, err := os.Stat(filepath.Join(folder, project.Marker)); err != nil {
+			t.Fatalf("upgrade %s: the identity file moved", arg)
+		}
+		flatten()
+	}
+}
+
+func TestEditRenamesTheProjectFolder(t *testing.T) {
+	h, _ := setup(t)
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--no-knowledge"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
+	}
+	if code := h.run("edit", "webapp", "--name", "Web App"); code != 0 {
+		t.Fatalf("edit exit %d %s", code, h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, project.Dir, "Web App", project.Marker)); err != nil {
+		t.Fatal("the folder follows the name")
+	}
+	if code := h.run("threads", "Web App"); code != 0 {
+		t.Fatalf("threads after rename exit %d %s", code, h.err.String())
+	}
+}
+
 func TestAV1VaultIsNamedByDoctorAndUpgrade(t *testing.T) {
 	h, vaults := setup(t)
 	welcome := filepath.Join(vaults, "welcome")
@@ -727,7 +815,7 @@ func TestInitNextHintNamesTheProject(t *testing.T) {
 		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
 	out := h.out.String()
-	if strings.Contains(out, "plant .") || !strings.Contains(out, `claude-atlas plant webapp "..."`) || !strings.Contains(out, "claude-atlas open-claude webapp") {
+	if strings.Contains(out, "thread . new") || !strings.Contains(out, `claude-atlas thread webapp new "..."`) || !strings.Contains(out, "claude-atlas open-claude webapp") {
 		t.Fatalf("init from elsewhere should name the project:\n%s", out)
 	}
 
@@ -737,7 +825,7 @@ func TestInitNextHintNamesTheProject(t *testing.T) {
 		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
 	out = h.out.String()
-	if !strings.Contains(out, `claude-atlas plant . "..."`) || strings.Contains(out, "open-claude") {
+	if !strings.Contains(out, `claude-atlas thread . new "..."`) || strings.Contains(out, "open-claude") {
 		t.Fatalf("init in the folder should use . and claude:\n%s", out)
 	}
 
