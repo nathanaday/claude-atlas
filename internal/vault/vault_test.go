@@ -64,12 +64,75 @@ func TestInitCreatesACompleteVaultWithOneCommit(t *testing.T) {
 	}
 }
 
-func TestInitRefusesInsideAnotherRepo(t *testing.T) {
+func TestInitInsideAnotherRepoCommitsThere(t *testing.T) {
 	needGit(t)
 	outer := gitx.Repo{Dir: t.TempDir()}
 	outer.Init()
-	if _, err := Init(filepath.Join(outer.Dir, "v"), Options{Mode: Generic}, now); err == nil || !strings.Contains(err.Error(), "inside another git repository") {
+	os.WriteFile(filepath.Join(outer.Dir, "main.go"), []byte("package main\n"), 0o644)
+	outer.AddAll()
+	first, err := outer.Commit("code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(outer.Dir, "staged.go"), []byte("package main\n"), 0o644)
+	outer.Add("staged.go")
+	os.WriteFile(filepath.Join(outer.Dir, "main.go"), []byte("package main // edited\n"), 0o644)
+
+	root := filepath.Join(outer.Dir, "docs", "kb")
+	res, err := Init(root, Options{Mode: Generic}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git")); err == nil {
+		t.Fatal("a vault inside a repository gets no repository of its own")
+	}
+	real, _ := filepath.EvalSymlinks(outer.Dir)
+	if res.Host != real || Host(root) != real {
+		t.Fatalf("host %q, want %q", res.Host, real)
+	}
+	repo := RepoAt(root)
+	if repo.Prefix != "docs/kb/" {
+		t.Fatalf("prefix %q", repo.Prefix)
+	}
+	paths, _ := repo.ChangedPaths(res.Commit)
+	whole, _ := gitx.Repo{Dir: outer.Dir}.ChangedPaths(res.Commit)
+	if len(paths) == 0 || len(paths) != len(whole) {
+		t.Fatalf("the setup commit touches only the vault: %v", whole)
+	}
+	host := gitx.Repo{Dir: outer.Dir}
+	if parent, _ := host.ShowFile(res.Commit+"~1", "main.go"); string(parent) != "package main\n" {
+		t.Fatalf("the setup commit follows the code's: %q", parent)
+	}
+	if outer.Tracked("staged.go") {
+		t.Fatal("the user's staged file stays out of the vault's commit")
+	}
+	st, _ := host.Status()
+	codes := map[string]string{}
+	for _, e := range st {
+		codes[e.Path] = e.Code
+	}
+	if codes["staged.go"] != "A " || codes["main.go"] != " M" || len(codes) != 2 {
+		t.Fatalf("the user's work is as it was: %v", codes)
+	}
+	if dirty, _ := repo.Dirty(); dirty {
+		t.Fatal("the vault is clean after init")
+	}
+	if commits, _ := repo.Log(0); len(commits) != 1 || commits[0].SHA == first {
+		t.Fatalf("the vault's history is its own commit: %+v", commits)
+	}
+}
+
+func TestInitRefusesAFolderTheRepositoryIgnores(t *testing.T) {
+	needGit(t)
+	outer := gitx.Repo{Dir: t.TempDir()}
+	outer.Init()
+	os.WriteFile(filepath.Join(outer.Dir, ".gitignore"), []byte("notes/\n"), 0o644)
+	root := filepath.Join(outer.Dir, "notes", "kb")
+	if _, err := Init(root, Options{}, now); err == nil || !strings.Contains(err.Error(), "is ignored by the git repository") {
 		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(root); err == nil {
+		t.Fatal("a refused init leaves no folder")
 	}
 }
 
@@ -371,8 +434,12 @@ func TestAdoptRepairsRaisesAndRefusesIdentityFiles(t *testing.T) {
 	inner := filepath.Join(t.TempDir(), "outer", "inner")
 	os.MkdirAll(filepath.Join(inner, WikiDir), 0o755)
 	gitx.Repo{Dir: filepath.Dir(inner)}.Init()
-	if _, err := Adopt(inner, Options{}, now); err == nil || !strings.Contains(err.Error(), "keeps its own history") {
-		t.Fatalf("a folder inside another repository: %v", err)
+	res, err = Adopt(inner, Options{}, now)
+	if err != nil || res.GitInitialized || res.Host == "" || res.Commit == "" {
+		t.Fatalf("a folder inside another repository commits there: %+v %v", res, err)
+	}
+	if _, err := os.Stat(filepath.Join(inner, ".git")); err == nil {
+		t.Fatal("adopt inside a repository makes no repository")
 	}
 }
 

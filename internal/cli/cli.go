@@ -565,15 +565,16 @@ func (e *env) newKnowledge(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if _, err := vaults.Create(path, opts, e.console, true); err != nil {
+	res, err := vaults.Create(path, opts, e.console, true)
+	if err != nil {
 		return 1, err
 	}
-	return e.finishVault(cfg, path)
+	return e.finishVault(cfg, path, res.Host)
 }
 
-// finishVault registers a knowledge base that was just created or adopted, refreshes,
-// and reports.
-func (e *env) finishVault(cfg *home.Config, path string) (int, error) {
+// finishVault registers a knowledge base that was just created, refreshes, and reports.
+// host is the repository it commits into when it has none of its own.
+func (e *env) finishVault(cfg *home.Config, path, host string) (int, error) {
 	if _, err := vaults.Register(e.home, cfg, path); err != nil {
 		return 1, err
 	}
@@ -584,14 +585,24 @@ func (e *env) finishVault(cfg *home.Config, path string) (int, error) {
 	c := e.console
 	c.Say("")
 	c.Step(console.OK, "created", home.Display(path))
+	if host != "" {
+		c.Step(console.OK, "git", "commits into the repository "+home.Display(host))
+	}
 	c.Step(console.OK, "registered", "in "+home.Display(e.home.ConfigPath()))
 	c.Step(console.OK, "refreshed", refreshed(entries))
 	c.Say("")
 	c.Say("  Next:")
+	kb := entryArg(ix, path, registry.Knowledge)
+	use := [2]string{"claude-atlas init --knowledge " + kb, "in your work: a project that uses it"}
+	if work := project.FindAbove(path); work != "" {
+		if p, err := project.Open(work); err == nil && p.Config.Knowledge == nil {
+			use = [2]string{"claude-atlas link " + kb + " --project " + entryArg(ix, work, registry.Project), "make " + p.Name() + " use it"}
+		}
+	}
 	sayCommands(c, [][2]string{
-		{"claude-atlas open-vault " + entryArg(ix, path, registry.Knowledge), "open it in Obsidian"},
+		{"claude-atlas open-vault " + kb, "open it in Obsidian"},
 		{"claude-atlas open-claude " + entryArg(ix, path, ""), "then /claude-atlas:wiki"},
-		{"claude-atlas init --knowledge " + entryArg(ix, path, registry.Knowledge), "in your work: a project that uses it"},
+		use,
 	})
 	c.Say("")
 	return 0, nil
@@ -640,8 +651,11 @@ func (e *env) adopt(args []string) (int, error) {
 	default:
 		c.Step(console.OK, "adopted", "as a knowledge base; "+setupChanges(res.Added))
 	}
-	if res.GitInitialized {
+	switch {
+	case res.GitInitialized:
 		c.Step(console.OK, "git", "initialized; every operation is now one commit")
+	case res.Host != "":
+		c.Step(console.OK, "git", "commits into the repository "+home.Display(res.Host))
 	}
 	if res.Commit != "" {
 		c.Step(console.OK, "committed", res.Commit[:12])

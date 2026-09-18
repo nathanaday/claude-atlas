@@ -45,7 +45,8 @@ func (p *Place) InProject() bool { return p != nil && p.Project != nil }
 var ErrNoPlace = errors.New("not in a claude-atlas project or knowledge base")
 
 // Resolve finds the place: the explicit path, then the environment, then the nearest
-// project at or above start, then the nearest knowledge base. An explicit path may be a
+// project or knowledge base at or above start. A knowledge base inside a project's work is
+// nearer than the project from anywhere inside it. An explicit path may be a
 // knowledge base's root or a project's work folder. With register set, the session heals
 // the atlas config so it lists the project or the knowledge base at this path.
 func Resolve(h home.Home, explicit, envValue, start string, register bool) (*Place, error) {
@@ -68,11 +69,12 @@ func Resolve(h home.Home, explicit, envValue, start string, register bool) (*Pla
 	if start == "" {
 		return nil, ErrNoPlace
 	}
-	if work := project.FindAbove(start); work != "" {
-		return resolveProject(h, work, register)
-	}
-	if root := vault.FindAbove(start); root != "" {
+	work, root := project.FindAbove(start), vault.FindAbove(start)
+	switch {
+	case root != "" && (work == "" || len(root) > len(work)):
 		return resolveKnowledge(h, root, register)
+	case work != "":
+		return resolveProject(h, work, register)
 	}
 	return nil, fmt.Errorf("%w: nothing at or above %s", ErrNoPlace, start)
 }

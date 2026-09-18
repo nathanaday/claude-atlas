@@ -119,9 +119,81 @@ func (v *Vault) Path(rel string) string { return filepath.Join(v.Root, filepath.
 // Repo is the vault's git repository.
 func (v *Vault) Repo() gitx.Repo { return RepoAt(v.Root) }
 
-// RepoAt is the git repository of the vault at root. Every vault command in this package
-// goes through it.
-func RepoAt(root string) gitx.Repo { return gitx.Repo{Dir: root} }
+// RepoAt is the git repository of the vault at root: the vault's own, or the working tree
+// that holds the vault, scoped to the vault's folder. Every vault command goes through it,
+// so none can miss the prefix. Nothing stores which, so a clone answers the same way.
+func RepoAt(root string) gitx.Repo { return gitx.At(root) }
+
+// Host is the top of the working tree that holds the vault at root, or "" when the vault
+// is its own repository or in none.
+func Host(root string) string {
+	if repo := RepoAt(root); repo.Prefix != "" {
+		return repo.Dir
+	}
+	return ""
+}
+
+// HostFor is the top of the working tree a new vault at path would commit into, or ""
+// when it would get a repository of its own. path need not exist. It refuses a path the
+// working tree ignores, because no commit could record it.
+func HostFor(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	dir := abs
+	for {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
+	repo := gitx.At(dir)
+	if repo.Prefix == "" && !repo.IsRepo() {
+		return "", nil
+	}
+	rest, err := filepath.Rel(dir, abs)
+	if err != nil {
+		return "", err
+	}
+	if rest == "." {
+		if repo.Prefix == "" {
+			return "", nil
+		}
+		rest = ""
+	} else {
+		rest = filepath.ToSlash(rest) + "/"
+	}
+	if repo.Ignored(rest) {
+		return "", fmt.Errorf("%s is ignored by the git repository %s; a knowledge base needs its history", abs, repo.Dir)
+	}
+	return repo.Dir, nil
+}
+
+// joinRepo readies the repository a new or adopted vault at abs commits into: the working
+// tree that holds it, or a new one at abs when there is none. It refuses a folder the
+// holding tree ignores, because no commit could record it. It reports whether it ran
+// git init.
+func joinRepo(abs string) (gitx.Repo, bool, error) {
+	repo := RepoAt(abs)
+	if repo.Prefix != "" {
+		if repo.Ignored("") {
+			return repo, false, fmt.Errorf("%s is ignored by the git repository %s; a knowledge base needs its history", abs, repo.Dir)
+		}
+		return repo, false, nil
+	}
+	if repo.IsRepo() {
+		return repo, false, nil
+	}
+	if err := repo.Init(); err != nil {
+		return repo, false, err
+	}
+	return repo, true, nil
+}
 
 var ErrNotVault = errors.New("not a claude-atlas vault")
 
@@ -312,6 +384,8 @@ type InitResult struct {
 	OperationID string
 	Commit      string
 	Files       []string
+	// Host is the working tree the vault commits into, or "" when it has its own.
+	Host string
 }
 
 func writeFile(root, rel string, data []byte) error {
@@ -354,7 +428,8 @@ func newConfig(root string, opts Options, now time.Time) (Config, error) {
 }
 
 // Init creates a vault at root: the template, the identity file, an empty source ledger,
-// and a git repository with one commit. root must not exist or must be an empty directory.
+// and one commit. The commit goes into the working tree that holds root, or into a new
+// repository at root when there is none. root must not exist or must be an empty directory.
 func Init(root string, opts Options, now time.Time) (*InitResult, error) {
 	if err := requireGit(); err != nil {
 		return nil, err
@@ -370,18 +445,22 @@ func Init(root string, opts Options, now time.Time) (*InitResult, error) {
 	if err := checkEmpty(abs); err != nil {
 		return nil, err
 	}
+	_, statErr := os.Stat(abs)
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		return nil, err
 	}
-	repo := gitx.Repo{Dir: abs}
-	if repo.InsideOtherRepo() {
-		return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
+	repo, _, err := joinRepo(abs)
+	if err == nil {
+		err = repo.CheckIdle()
+	}
+	if err != nil {
+		if statErr != nil {
+			os.Remove(abs)
+		}
+		return nil, err
 	}
 	files, err := writeMissing(abs, cfg, now, true)
 	if err != nil {
-		return nil, err
-	}
-	if err := repo.Init(); err != nil {
 		return nil, err
 	}
 	if err := repo.AddAll(); err != nil {
@@ -392,7 +471,7 @@ func Init(root string, opts Options, now time.Time) (*InitResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &InitResult{Root: abs, OperationID: id, Commit: sha, Files: files}, nil
+	return &InitResult{Root: abs, OperationID: id, Commit: sha, Files: files, Host: Host(abs)}, nil
 }
 
 // checkEmpty refuses a root that exists and holds anything.
@@ -708,6 +787,8 @@ type AdoptResult struct {
 	Commit         string
 	Added          []string
 	GitInitialized bool
+	// Host is the working tree the vault commits into, or "" when it has its own.
+	Host           string
 	WasLegacy      bool
 	AlreadyAdopted bool
 	// FromV1 is set when a v1 identity file was rewritten.
@@ -817,18 +898,16 @@ func Adopt(root string, opts Options, now time.Time) (*AdoptResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	repo := RepoAt(abs)
-	if err := repo.CheckIdle(); err != nil {
+	if err := RepoAt(abs).CheckIdle(); err != nil {
 		return nil, err
 	}
-	if repo.InsideOtherRepo() {
-		return nil, fmt.Errorf("%s is inside another git repository; a vault keeps its own history", abs)
+	repo, created, err := joinRepo(abs)
+	if err != nil {
+		return nil, err
 	}
-	if !repo.IsRepo() {
-		if err := repo.Init(); err != nil {
-			return nil, err
-		}
-		res.GitInitialized = true
+	res.GitInitialized = created
+	if repo.Prefix != "" {
+		res.Host = repo.Dir
 	}
 	if res.FromV1 || res.FromV2 || res.Repaired {
 		if err := writeFile(abs, Marker, cfg.Encode()); err != nil {

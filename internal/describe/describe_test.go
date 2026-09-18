@@ -9,6 +9,7 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 var now = time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
@@ -164,5 +165,44 @@ func TestTakeSnapshotOverAPlainFolder(t *testing.T) {
 		if strings.Contains(text, absent) {
 			t.Errorf("%q should be left out:\n%s", absent, text)
 		}
+	}
+}
+
+// TestAKnowledgeBaseInsideTheWorkIsNotTheWork covers a knowledge base that commits into the
+// project's repository: its commits do not put the page behind, and the snapshot leaves
+// its files out.
+func TestAKnowledgeBaseInsideTheWorkIsNotTheWork(t *testing.T) {
+	code, first := repoWork(t)
+	kb := filepath.Join(code, "notes")
+	if _, err := vault.Init(kb, vault.Options{}, now); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(kb, "wiki", "entities"), 0o755)
+	os.WriteFile(filepath.Join(kb, "wiki", "entities", "code.md"), []byte(page("p-1", first)), 0o644)
+	r := vault.RepoAt(kb)
+	r.AddAll()
+	if _, err := r.Commit("page"); err != nil {
+		t.Fatal(err)
+	}
+	e := registry.Entry{ID: "p-1", Kind: registry.Project, Name: "code", Path: code, Knowledge: &registry.Ref{ID: "k", Name: "notes", Path: kb}}
+	if d := Page(e); d == nil || d.Behind != 0 {
+		t.Fatalf("the knowledge base's commits are not the work's: %+v", d)
+	}
+	os.WriteFile(filepath.Join(code, "main.go"), []byte("package main // two\n"), 0o644)
+	work := gitx.Repo{Dir: code}
+	work.Add("main.go")
+	if _, err := work.Commit("two"); err != nil {
+		t.Fatal(err)
+	}
+	if d := Page(e); d == nil || d.Behind != 1 {
+		t.Fatalf("a commit to the work counts: %+v", d)
+	}
+	s, err := TakeSnapshot(e, first, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(s.Content)
+	if strings.Contains(text, "notes/") || strings.Contains(text, "setup:") || !strings.Contains(text, "- main.go") || !strings.Contains(text, "two") {
+		t.Fatalf("the snapshot leaves the knowledge base out:\n%s", text)
 	}
 }

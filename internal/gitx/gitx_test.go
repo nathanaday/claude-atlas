@@ -433,3 +433,27 @@ func TestHasCommitAndBehind(t *testing.T) {
 		t.Fatal("an unknown commit is an error")
 	}
 }
+
+func TestAtScopesToTheFolderInsideARepository(t *testing.T) {
+	if !Available() {
+		t.Skip("git is not installed")
+	}
+	plain := t.TempDir()
+	if r := At(plain); r.Dir != plain || r.Prefix != "" || r.IsRepo() {
+		t.Fatalf("a folder in no repository: %+v", r)
+	}
+	top := Repo{Dir: t.TempDir()}
+	top.Init()
+	if r := At(top.Dir); r.Dir != top.Dir || r.Prefix != "" || !r.IsRepo() {
+		t.Fatalf("the top of a repository: %+v", r)
+	}
+	inner := filepath.Join(top.Dir, "docs", "kb")
+	os.MkdirAll(inner, 0o755)
+	real, _ := filepath.EvalSymlinks(top.Dir)
+	if r := At(inner); r.Dir != real || r.Prefix != "docs/kb/" {
+		t.Fatalf("a folder inside a repository: %+v", r)
+	}
+	if r := At(filepath.Join(top.Dir, "missing")); r.Prefix != "" {
+		t.Fatalf("a folder that is not there: %+v", r)
+	}
+}

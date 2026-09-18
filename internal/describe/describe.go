@@ -46,12 +46,14 @@ func Page(e registry.Entry) *registry.Description {
 		return nil
 	}
 	var git *gitx.Repo
+	var skip []string
 	if repo := (gitx.Repo{Dir: e.Path}); repo.IsRepo() {
 		git = &repo
+		skip = KnowledgeDirs(repo)
 	}
 	best := -1
 	for i := range found {
-		found[i].Behind = behind(git, found[i].Commit)
+		found[i].Behind = behind(git, found[i].Commit, skip)
 		if best < 0 || nearer(found[i], found[best]) {
 			best = i
 		}
@@ -71,11 +73,25 @@ func nearer(a, b registry.Description) bool {
 	return a.Page < b.Page
 }
 
-func behind(git *gitx.Repo, commit string) int {
+// KnowledgeDirs lists the folders in the work that hold a knowledge base, by its tracked
+// identity file. A knowledge base inside the work commits into the work's repository, and
+// its files and commits are not the work.
+func KnowledgeDirs(git gitx.Repo) []string {
+	markers, _ := git.Named(vault.Marker)
+	var dirs []string
+	for _, m := range markers {
+		if dir := path.Dir(m); dir != "." {
+			dirs = append(dirs, dir+"/")
+		}
+	}
+	return dirs
+}
+
+func behind(git *gitx.Repo, commit string, skip []string) int {
 	if git == nil || commit == "" || !git.HasCommit(commit) {
 		return -1
 	}
-	n, err := git.Behind(commit)
+	n, err := git.Behind(commit, skip...)
 	if err != nil {
 		return -1
 	}

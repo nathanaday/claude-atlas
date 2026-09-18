@@ -414,3 +414,65 @@ func TestAnInboxDeleteNeedsACapture(t *testing.T) {
 		t.Fatalf("wiki/tasks is not reserved: %v", err)
 	}
 }
+
+// TestOperationsInsideAProjectRepository runs apply, a manual edit, and undo on a vault
+// that commits into the repository holding it, while the user has code staged and
+// changed outside the vault.
+func TestOperationsInsideAProjectRepository(t *testing.T) {
+	needGit(t)
+	work := gitx.Repo{Dir: t.TempDir()}
+	work.Init()
+	os.WriteFile(filepath.Join(work.Dir, "main.go"), []byte("package main\n"), 0o644)
+	work.AddAll()
+	work.Commit("code")
+	root := filepath.Join(work.Dir, "kb")
+	if _, err := vault.Init(root, vault.Options{Mode: vault.Generic}, now); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(work.Dir, "staged.go"), []byte("package main\n"), 0o644)
+	work.Add("staged.go")
+	os.WriteFile(filepath.Join(work.Dir, "main.go"), []byte("package main // edited\n"), 0o644)
+	userWork := func() {
+		t.Helper()
+		st, _ := work.Status()
+		codes := map[string]string{}
+		for _, e := range st {
+			codes[e.Path] = e.Code
+		}
+		if codes["staged.go"] != "A " || codes["main.go"] != " M" || len(codes) != 2 {
+			t.Fatalf("the user's work is as it was: %v", codes)
+		}
+	}
+
+	os.WriteFile(v.Path(vault.HotPage), []byte("---\ntitle: Hot\ntype: meta\nstatus: x\ncreated: 2026-09-12\nupdated: 2026-09-12\ntags: []\n---\nhand edit\n"), 0o644)
+	plan, err := Prepare(v, Request{Kind: Save, Summary: "add D", Writes: []Write{{Path: "wiki/concepts/D.md", Mode: Create, Content: mkpage("D", "# D\n\nd\n")}}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := Apply(v, plan, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.ManualCommit == "" || strings.Join(applied.ChangedPaths, ",") != "wiki/concepts/D.md,wiki/log.md" {
+		t.Fatalf("result %+v", applied)
+	}
+	userWork()
+	if _, err := UndoOperation(v, applied.OperationID, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(v.Path("wiki/concepts/D.md")); err == nil {
+		t.Fatal("undo removes the page")
+	}
+	userWork()
+	ops, _ := History(v, 0, false)
+	if len(ops) != 4 || ops[0].Kind != "undo" || ops[1].Kind != "save" || ops[2].Kind != "manual" || ops[3].Kind != "setup" {
+		t.Fatalf("history %+v", ops)
+	}
+	if st, _ := Inspect(v); !st.HasHistory || st.Dirty != 0 || st.LastSubject != "undo: add D" {
+		t.Fatalf("status %+v", st)
+	}
+}

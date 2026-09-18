@@ -13,6 +13,7 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
+	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 // SnapshotType is the type property of a snapshot file, which tells the ingest skills it
@@ -53,7 +54,7 @@ func TakeSnapshot(e registry.Entry, since string, now time.Time) (*Snapshot, err
 	}
 	s := &Snapshot{Project: e.ID, Name: e.Name, Taken: now}
 	git := gitx.Repo{Dir: e.Path}
-	var files []string
+	var files, skip []string
 	var err error
 	if git.IsRepo() && git.HasHead() {
 		if s.Commit, err = git.Head(); err != nil {
@@ -63,6 +64,7 @@ func TakeSnapshot(e registry.Entry, since string, now time.Time) (*Snapshot, err
 		if files, err = git.LsFiles(); err != nil {
 			return nil, err
 		}
+		skip = KnowledgeDirs(git)
 		if since != "" && since != s.Commit && git.HasCommit(since) {
 			s.Since = since
 		}
@@ -73,8 +75,10 @@ func TakeSnapshot(e registry.Entry, since string, now time.Time) (*Snapshot, err
 		}
 		s.FileName = fmt.Sprintf("%s-%s.md", e.Name, now.Format("2006-01-02"))
 	}
-	// The project's own atlas/ folder is state, not work.
-	files = without(files, project.Dir+"/")
+	// The project's own atlas/ folder is state, not work, and so is a knowledge base in it.
+	for _, dir := range append(skip, project.Dir+"/") {
+		files = without(files, dir)
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "---\ntitle: %q\ntype: %s\nproject: %s\nname: %q\ncommit: %q\nbranch: %q\ntaken: %s\nsince: %q\n---\n\n",
@@ -117,7 +121,7 @@ func TakeSnapshot(e registry.Entry, since string, now time.Time) (*Snapshot, err
 		}
 	}
 	if s.Since != "" {
-		if log, err := git.LogStat(s.Since, MaxLoggedCommits); err == nil && strings.TrimSpace(log) != "" {
+		if log, err := git.LogStat(s.Since, MaxLoggedCommits, skip...); err == nil && strings.TrimSpace(log) != "" {
 			fmt.Fprintf(&b, "\n## Changes since %s\n\n```text\n%s```\n", s.Since[:min(7, len(s.Since))], log)
 		}
 	}
@@ -149,7 +153,7 @@ func walkFiles(root string) ([]string, error) {
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if strings.HasPrefix(name, ".") || skip[name] {
+			if strings.HasPrefix(name, ".") || skip[name] || vault.IsVault(p) {
 				return fs.SkipDir
 			}
 			return nil

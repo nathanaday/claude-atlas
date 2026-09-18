@@ -47,7 +47,16 @@ A knowledge base goes where you say. A path is used as given; a bare name is
 a folder in the current directory, as `init` treats its path. The atlas
 lists the folder in its config; nothing else depends on where it is.
 `new-knowledge` refuses a folder that exists, and a folder inside another
-knowledge base or inside a project.
+knowledge base.
+
+A knowledge base may go inside a project, for a project that keeps its
+knowledge to itself. Its history goes into the git repository that holds
+it: inside a project that is a repository, every operation is a commit in
+the project's repository, on its current branch, and touches only the
+knowledge base's folder. A knowledge base in no repository gets one of its
+own. `new-knowledge` refuses a folder the holding repository ignores,
+because no commit could record it. The hint after it names `link` for the
+project that holds it.
 
 The scope is one or two sentences: what the knowledge base holds and what it
 does not. A project session reads it to know what belongs there. Split a
@@ -180,7 +189,8 @@ ones, active but untouched for 14 days.
 
 ## Work in a session
 
-A session started anywhere inside a project's work is the project's session.
+A session started anywhere inside a project's work is the project's session,
+except inside a knowledge base in the work, which is the knowledge base's.
 Its start says which project this is, which knowledge base it uses, whether
 a page describes it there, and what tasks are open:
 

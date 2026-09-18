@@ -90,6 +90,16 @@ commit. The session-start hook in both kinds names the projects the knowledge
 base has no page for. Nothing writes the page without a session, because it
 is prose.
 
+**Where its history lives.** A knowledge base commits into the git
+repository that holds it. Most have their own. One inside a project, for a
+project whose knowledge serves nothing else, commits into the project's
+repository: every command is scoped to its folder, so an operation, a manual
+commit, and an undo touch nothing outside it, and the user's staged and
+changed code stays as it was. `init` and `adopt` run `git init` only when no
+repository holds the folder, so no repository ever sits inside another. The
+knowledge base's history follows the project's branch. `describe` counts
+only commits outside the knowledge base when it says how far the work moved.
+
 A knowledge base that no project uses is fine. A project without a knowledge
 base is fine too; the task skills work and the query skill says there is
 nothing to search.
@@ -293,11 +303,11 @@ concept page or a change to one. The offer is a `plan` the user sees and an
 A session finds its place by walking up from the working directory:
 
 1. `CLAUDE_ATLAS_VAULT` or an explicit `vault`, as today.
-2. The nearest ancestor that holds `atlas/project.json`: a project session,
-   anywhere inside the work.
-3. The nearest ancestor that holds `.claude-atlas.json`: a knowledge base
-   session.
-4. Otherwise no atlas; the hook prints nothing.
+2. The nearer of the nearest ancestor that holds `atlas/project.json`, a
+   project session anywhere inside the work, and the nearest ancestor that
+   holds `.claude-atlas.json`, a knowledge base session. A knowledge base
+   inside a project is its own session.
+3. Otherwise no atlas; the hook prints nothing.
 
 `discover` no longer searches repositories through the registry; the folder
 carries its own identity.
@@ -517,6 +527,7 @@ atlas rules with:
 | Obsidian on the project side | none; the knowledge base is the vault the user opens |
 | The identity file's name and place | `atlas/project.json`, visible |
 | Knowledge bases per project | one; many is left for later |
+| A knowledge base inside a project | allowed; it commits into the project's repository, or into its own when the project is in none |
 | Clusters, access, grants | removed |
 | Linked repositories, `repos/`, change policies | removed; the work folder is the repository when it is one |
 | Where knowledge enters | the knowledge base's own inbox, and from a project session directly into it |

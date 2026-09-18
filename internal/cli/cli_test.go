@@ -706,8 +706,14 @@ func TestNewKnowledgeTakesABareNameAsAFolderHere(t *testing.T) {
 		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
 	t.Chdir(dir)
-	if code := h.run("new-knowledge", "notes"); code != 1 || !strings.Contains(h.err.String(), "inside the project") {
-		t.Fatalf("no knowledge base inside a project: exit %d %s", code, h.err.String())
+	if code := h.run("new-knowledge", "notes"); code != 0 {
+		t.Fatalf("a knowledge base inside a project: exit %d %s", code, h.err.String())
+	}
+	if out := h.out.String(); !strings.Contains(out, "commits into the repository") || !strings.Contains(out, "claude-atlas link notes --project webapp") {
+		t.Fatalf("it commits into the project's repository, and the hint links it:\n%s", out)
+	}
+	if code := h.run("link", "notes"); code != 0 {
+		t.Fatalf("link exit %d %s", code, h.err.String())
 	}
 	if code := h.run("relocate", "x"); code != 2 {
 		t.Fatalf("relocate is gone: exit %d", code)

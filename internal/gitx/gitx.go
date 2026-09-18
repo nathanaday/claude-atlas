@@ -83,6 +83,28 @@ func (r Repo) pathspec() string {
 	return "."
 }
 
+// At is the repository that holds dir: dir itself when it is the top of a working tree or
+// in none, else the working tree above it, scoped to dir.
+func At(dir string) Repo {
+	out, err := Repo{Dir: dir}.run("rev-parse", "--show-toplevel")
+	if err != nil {
+		return Repo{Dir: dir}
+	}
+	top, err := filepath.EvalSymlinks(strings.TrimSpace(out))
+	if err != nil {
+		return Repo{Dir: dir}
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return Repo{Dir: dir}
+	}
+	rel, err := filepath.Rel(top, real)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return Repo{Dir: dir}
+	}
+	return Repo{Dir: top, Prefix: filepath.ToSlash(rel) + "/"}
+}
+
 // Init creates a repository at Dir with main as its first branch.
 func (r Repo) Init() error {
 	if _, err := r.run("init", "-q"); err != nil {
@@ -568,9 +590,10 @@ func (r Repo) HasCommit(rev string) bool {
 }
 
 // Behind counts the commits HEAD has that rev does not. It is 0 when rev is HEAD or a
-// descendant of it, and an error when rev is not a commit here.
-func (r Repo) Behind(rev string) (int, error) {
-	out, err := r.run("rev-list", "--count", rev+"..HEAD")
+// descendant of it, and an error when rev is not a commit here. A commit that touched only
+// the excluded folders does not count.
+func (r Repo) Behind(rev string, exclude ...string) (int, error) {
+	out, err := r.run(append([]string{"rev-list", "--count", rev + "..HEAD"}, r.excluding(exclude)...)...)
 	if err != nil {
 		return 0, err
 	}
@@ -588,6 +611,34 @@ func (r Repo) Branch() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// excluding is the pathspec for Prefix without the given folders, or none when there are
+// no folders to leave out.
+func (r Repo) excluding(folders []string) []string {
+	if len(folders) == 0 {
+		return nil
+	}
+	args := []string{"--", r.pathspec()}
+	for _, f := range folders {
+		args = append(args, ":(exclude)"+r.in(strings.TrimSuffix(f, "/")))
+	}
+	return args
+}
+
+// Named lists every tracked path under Prefix whose base name is name, relative to it.
+func (r Repo) Named(name string) ([]string, error) {
+	out, err := r.run("ls-files", "-z", "--", ":(glob)"+r.in("**/"+name))
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if rel, ok := r.out(p); ok && p != "" {
+			paths = append(paths, rel)
+		}
+	}
+	return paths, nil
 }
 
 // LsFiles lists every tracked path under Prefix, relative to it, in git's order.
@@ -609,13 +660,16 @@ func (r Repo) LsFiles() ([]string, error) {
 }
 
 // LogStat is git log --stat for the commits after from up to HEAD, newest first, at most
-// max of them when max is above 0.
-func (r Repo) LogStat(from string, max int) (string, error) {
+// max of them when max is above 0, leaving out the excluded folders.
+func (r Repo) LogStat(from string, max int, exclude ...string) (string, error) {
 	args := []string{"log", "--stat", "--format=%h %as %s", from + "..HEAD"}
 	if max > 0 {
 		args = append(args, fmt.Sprintf("-n%d", max))
 	}
-	if r.Prefix != "" {
+	switch {
+	case len(exclude) > 0:
+		args = append(args, r.excluding(exclude)...)
+	case r.Prefix != "":
 		args = append(args, "--", r.Prefix)
 	}
 	return r.run(args...)

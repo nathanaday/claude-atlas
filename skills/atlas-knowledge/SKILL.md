@@ -19,7 +19,9 @@ names already taken.
 2. **Location.** The folder the knowledge base goes in, as an absolute or `~`
    path. There is no default place. Suggest the parent folder of the
    knowledge bases `atlas` lists, when they share one. Never a folder inside
-   a project or inside another knowledge base.
+   another knowledge base. A folder inside a project is fine when that
+   project alone uses it: its operations then commit into the project's
+   repository. Offer `link` for that project afterwards.
 3. **Scope.** Two sentences: what it holds, and what it does not. A project
    session and its ingest read the scope to know what belongs here, so a
    scope that overlaps another knowledge base's sends sources to the wrong

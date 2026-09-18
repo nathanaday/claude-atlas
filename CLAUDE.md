@@ -146,8 +146,9 @@ the config lists every knowledge base under `knowledge` (`vaults.Register`,
 path; a bare name is a folder in the current directory
 (`vaults.ResolvePath`). The `vault` tool takes only an absolute or `~` path,
 because a session's folder is usually a project. A knowledge base never goes
-inside another or inside a project (`vaults.CheckNewPath`); a project never
-goes inside a knowledge base or another project (`project.CheckNew`). A
+inside another (`vaults.CheckNewPath`), but may go inside a project; a
+project never goes inside a knowledge base or another project
+(`project.CheckNew`). A
 session heals its own entry by id when its folder moved or the config does
 not list it (`vaults.RegisterKnowledge`, `vaults.RegisterProject`).
 
@@ -210,9 +211,19 @@ not list it (`vaults.RegisterKnowledge`, `vaults.RegisterProject`).
   `wiki/index.md`. Lint's `kind_errors` names a v2 project folder left in a
   knowledge base (`wiki/tasks`, `wiki/questions`, `wiki/sessions`, `kb`,
   `repos`).
+- A knowledge base commits into the git repository that holds it
+  (`vault.RepoAt`, `gitx.At`): its own, or the working tree above it with
+  every command scoped to its folder, so a knowledge base inside a project
+  shares the project's repository and history. `vault.Init` and
+  `vault.Adopt` run `git init` only when no repository holds the folder
+  (`joinRepo`), and a folder the holding repository ignores is refused
+  (`vault.HostFor`). Nothing records which; a clone answers the same way.
+  `describe` leaves a knowledge base inside the work out of the snapshot and
+  out of `Behind` (`describe.KnowledgeDirs`).
 - The server and the hooks resolve the session through `place.Resolve`: an
-  explicit path, `CLAUDE_ATLAS_VAULT`, the nearest `atlas/project.json` at or
-  above the working directory, then the nearest `.claude-atlas.json`. A
+  explicit path, `CLAUDE_ATLAS_VAULT`, then the nearer of the nearest
+  `atlas/project.json` and the nearest `.claude-atlas.json` at or above the
+  working directory, so a knowledge base inside a project is its own place. A
   project session's knowledge base comes from the registry by the id in
   `project.json`; a project whose knowledge base is not on this machine still
   works for tasks, and the place carries `KnowledgeError`.

@@ -170,3 +170,19 @@ func TestResolveHealsTheConfig(t *testing.T) {
 		t.Fatalf("a second session heals nothing: %+v %v", pl, err)
 	}
 }
+
+func TestResolveAKnowledgeBaseInsideAProject(t *testing.T) {
+	h, _, _, work := atlas(t)
+	kb := filepath.Join(work, "notes")
+	if _, err := vault.Init(kb, vault.Options{Name: "notes"}, now); err != nil {
+		t.Fatal(err)
+	}
+	pl, err := Resolve(h, "", "", filepath.Join(kb, "wiki", "concepts"), false)
+	if err != nil || pl.InProject() || pl.Vault == nil || pl.Vault.Root != kb {
+		t.Fatalf("inside the knowledge base, the knowledge base is nearer: %+v %v", pl, err)
+	}
+	pl, err = Resolve(h, "", "", filepath.Join(work, "src", "deep"), false)
+	if err != nil || !pl.InProject() || pl.Project.Root != work {
+		t.Fatalf("elsewhere in the work, the project: %+v %v", pl, err)
+	}
+}
