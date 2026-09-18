@@ -295,7 +295,9 @@ clusters; 1.3.0 is the atlas tools and skills; 1.4.0 is repositories in the
 knowledge base; 1.4.1 is the same release, republished so the plugin cache
 took the whole of it. 2.0.0 is v3: a project is an `atlas/` folder in the
 work, one knowledge base per project, phases, and no mounts, clusters,
-grants, or linked repositories.
+grants, or linked repositories. 2.1.0 lists every knowledge base in the
+config and drops the vaults directory and `relocate`; `init` makes the work
+a git repository.
 
 ## Open questions
 
