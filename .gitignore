@@ -19,3 +19,6 @@ Thumbs.db
 # Local scratch: git worktrees and the superpowers plan workspaces
 .worktrees/
 .superpowers/
+
+# Obsidian state for this checkout; a knowledge base keeps its own .obsidian/
+/.obsidian/
