@@ -1529,13 +1529,23 @@ func (e *env) list(args []string) (int, error) {
 		e.console.Say("nothing yet; create a knowledge base with `claude-atlas new-knowledge NAME`, then `claude-atlas init` in your work")
 		return 0, nil
 	}
-	for _, en := range entries {
-		e.console.Say("  %-9s %-7s %-24s %s", listKind(en), listHeat(en), entryName(en), home.Display(en.Path))
-	}
+	var good, bad []registry.Entry
 	for _, en := range entries {
 		if en.Error != "" {
-			e.console.Step(console.Fail, entryName(en), en.Error)
+			bad = append(bad, en)
+		} else {
+			good = append(good, en)
 		}
+	}
+	width := nameWidth(good)
+	for _, en := range good {
+		e.console.Say("  %-9s %-5s %-*s  %s", en.Kind, listHeat(en), width, en.Name, home.Display(en.Path))
+	}
+	if len(bad) > 0 && len(bad) < len(entries) {
+		e.console.Say("")
+	}
+	for _, en := range bad {
+		e.console.Step(console.Fail, entryName(en), home.Display(en.Path)+": "+en.Error)
 	}
 	return 0, nil
 }
@@ -1562,11 +1572,17 @@ func unreadable(en registry.Entry) string {
 	}
 }
 
+// nameWidth is the width of a name column that holds every entry's name.
+func nameWidth(entries []registry.Entry) int {
+	width := 0
+	for _, en := range entries {
+		width = max(width, len(entryName(en)))
+	}
+	return width
+}
+
 // listHeat is the heat column: what the last refresh found, or why there is nothing.
 func listHeat(en registry.Entry) string {
-	if en.Error != "" {
-		return unreadable(en)
-	}
 	if en.State == nil {
 		return "?"
 	}
@@ -2426,12 +2442,13 @@ func (e *env) doctor(args []string) (int, error) {
 		return 1, err
 	}
 	line("entries", fmt.Sprintf("%d found", len(ix.Entries)))
+	width := nameWidth(ix.Entries)
 	for _, en := range ix.Entries {
 		status := entryStatus(en)
 		if status != "ok" {
 			ok = false
 		}
-		c.Say("    %-7s %-10s %-24s %s", status, listKind(en), entryName(en), home.Display(en.Path))
+		c.Say("    %-7s %-10s %-*s  %s", status, listKind(en), width, entryName(en), home.Display(en.Path))
 	}
 	for _, en := range ix.Projects() {
 		if en.Knowledge != nil && en.Knowledge.Error != "" {

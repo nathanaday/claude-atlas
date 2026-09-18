@@ -1,6 +1,7 @@
 package refresh
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,5 +70,25 @@ func TestAllReturnsTheIndex(t *testing.T) {
 	entries, ix, err := All(h, cfg, time.Now())
 	if err != nil || len(entries) != 1 || ix == nil || len(ix.Entries) != 1 {
 		t.Fatalf("all: %d entries, ix %v, err %v", len(entries), ix, err)
+	}
+}
+
+func TestEntriesRebuildsAStaleRegistry(t *testing.T) {
+	h, cfg := oneVault(t)
+	for _, stale := range []string{`{"schema":"claude-atlas.registry.v1","entries":[]}`, `not json`} {
+		os.MkdirAll(h.StateDir(), 0o755)
+		if err := os.WriteFile(registry.File(h.StateDir()), []byte(stale), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := registry.Read(h.StateDir()); !errors.Is(err, registry.ErrStale) {
+			t.Fatalf("Read names %q stale: %v", stale, err)
+		}
+		entries, err := Entries(h, cfg, time.Now())
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("Entries rebuilds %q: %v %v", stale, entries, err)
+		}
+		if _, _, err := registry.Read(h.StateDir()); err != nil {
+			t.Fatalf("and writes a current one: %v", err)
+		}
 	}
 }

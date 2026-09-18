@@ -202,6 +202,28 @@ func TestDeriveAProject(t *testing.T) {
 	}
 }
 
+func TestCreationTouchesAProject(t *testing.T) {
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.Local)
+	work := filepath.Join(t.TempDir(), "notes")
+	os.MkdirAll(work, 0o755)
+	if _, _, err := project.Init(work, project.Options{}, now); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &home.Config{}
+	cfg.AddProject(work)
+	ix, err := registry.Scan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := *ix.ByPath(work)
+	if state := Derive(e, now, "t", 7); state.Heat != "new" || state.LastTouched != "2026-09-16" || state.DaysIdle == nil || *state.DaysIdle != 0 {
+		t.Fatalf("a new folder with no git and no tasks is new: %+v", state)
+	}
+	if state := Derive(e, now.AddDate(0, 3, 0), "t", 7); state.Heat != "cold" || state.LastTouched != "2026-09-16" {
+		t.Fatalf("and cold once nothing touched it for months: %+v", state)
+	}
+}
+
 func TestRegistryDerivesEveryEntry(t *testing.T) {
 	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.Local)
 	cfg, _, _ := projectFixture(t, now)

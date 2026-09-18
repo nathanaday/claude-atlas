@@ -110,12 +110,16 @@ func deriveProject(e registry.Entry, today time.Time, generatedAt string, newDay
 	return state
 }
 
-// setHeat records when the entry was last touched and how warm that makes it.
+// setHeat records when the entry was last touched and how warm that makes it. Creation
+// counts as a touch, so an entry with no other sign of work still has a heat.
 func setHeat(state *registry.State, created string, touched time.Time, touchedFound bool, today time.Time, newDays int) {
 	var daysOld *int
 	if c, ok := parseDate(created); ok {
 		days := int(dateOf(today).Sub(dateOf(c)).Hours() / 24)
 		daysOld = &days
+	}
+	if !touchedFound && daysOld != nil {
+		touched, touchedFound = dateOf(today).AddDate(0, 0, -*daysOld), true
 	}
 	if touchedFound {
 		state.LastTouched = touched.Format("2006-01-02")
@@ -231,10 +235,11 @@ func All(h home.Home, cfg *home.Config, today time.Time) ([]registry.Entry, *reg
 	return Registry(h, cfg, h.StateDir(), today)
 }
 
-// Entries reads the registry the last refresh wrote, writing one first when none exists.
+// Entries reads the registry the last refresh wrote, writing one first when none exists
+// or the one there is stale.
 func Entries(h home.Home, cfg *home.Config, today time.Time) ([]registry.Entry, error) {
 	entries, _, err := registry.Read(h.StateDir())
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, registry.ErrStale) {
 		entries, _, err = All(h, cfg, today)
 	}
 	return entries, err

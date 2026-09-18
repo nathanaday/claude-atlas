@@ -223,6 +223,10 @@ type Index struct {
 var ErrAmbiguous = errors.New("ambiguous")
 var ErrNotFound = errors.New("no such vault or project")
 
+// ErrStale says the registry state file is one this version cannot read: another
+// schema, or not JSON. The file is derived, so a refresh replaces it.
+var ErrStale = errors.New("stale registry")
+
 // Scan walks cfg.VaultsDir for knowledge base identity files, adds the knowledge bases
 // cfg.Knowledge names outside that directory, reads every project cfg.Projects names,
 // and resolves each project's knowledge base against the whole set.
@@ -667,7 +671,7 @@ func Write(stateDir string, entries []Entry, generatedAt string) error {
 }
 
 // Read loads the registry state file. It reports os.ErrNotExist when refresh has never
-// run.
+// run, and ErrStale when the file is not one this version reads.
 func Read(stateDir string) ([]Entry, string, error) {
 	data, err := os.ReadFile(File(stateDir))
 	if errors.Is(err, os.ErrNotExist) {
@@ -678,10 +682,10 @@ func Read(stateDir string) ([]Entry, string, error) {
 	}
 	var doc registryFile
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, "", fmt.Errorf("%s: %w", File(stateDir), err)
+		return nil, "", fmt.Errorf("%w: %s: %v", ErrStale, File(stateDir), err)
 	}
 	if doc.Schema != StateSchema {
-		return nil, "", fmt.Errorf("%s: unsupported schema %q; run claude-atlas refresh", File(stateDir), doc.Schema)
+		return nil, "", fmt.Errorf("%w: %s: unsupported schema %q; run claude-atlas refresh", ErrStale, File(stateDir), doc.Schema)
 	}
 	return doc.Entries, doc.GeneratedAt, nil
 }

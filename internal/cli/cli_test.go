@@ -349,7 +349,7 @@ func TestDescribeStagesASnapshot(t *testing.T) {
 
 func TestKnowledgeListShowEditRemove(t *testing.T) {
 	h, vaults := setup(t)
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "knowledge new     welcome") {
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "knowledge new   welcome  ") {
 		t.Fatalf("list exit %d:\n%s", code, h.out.String())
 	}
 	if code := h.run("show", "welcome"); code != 0 {
@@ -404,8 +404,9 @@ func TestRefreshAndDoctorReportProblems(t *testing.T) {
 	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "✗") || !strings.Contains(h.out.String(), "legacy") || !strings.Contains(h.out.String(), "v2 project vault") {
 		t.Fatalf("refresh exit %d:\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "?         v1      legacy") || !strings.Contains(h.out.String(), "?         v2      oldproject") {
-		t.Fatalf("list exit %d:\n%s", code, h.out.String())
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "✗ legacy") || !strings.Contains(h.out.String(), "v1 vault; run claude-atlas adopt") ||
+		strings.Count(h.out.String(), "oldproject") != 2 || strings.Contains("\n"+h.out.String(), "\n  ?") || !strings.Contains(h.out.String(), "a v2 project vault") {
+		t.Fatalf("list names each problem once, with its reason; exit %d:\n%s", code, h.out.String())
 	}
 	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "v1      ?          legacy") {
 		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
@@ -445,7 +446,7 @@ func TestDoctorAndForgetSeeAMissingProject(t *testing.T) {
 	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "✗") || !strings.Contains(h.out.String(), "webapp") {
 		t.Fatalf("refresh exit %d:\n%s%s", code, h.out.String(), h.err.String())
 	}
-	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "?         missing webapp") {
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "✗ webapp") || !strings.Contains(h.out.String(), "not found") || strings.Contains("\n"+h.out.String(), "\n  ?") {
 		t.Fatalf("list exit %d:\n%s", code, h.out.String())
 	}
 	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "missing ?          webapp") {
@@ -793,5 +794,16 @@ func TestInitMakesAGitRepository(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(none, ".git")); err == nil {
 		t.Fatal("--no-git makes no repository")
+	}
+}
+
+func TestListRebuildsAStaleRegistry(t *testing.T) {
+	h, _ := setup(t)
+	path := registry.File(filepath.Join(h.home, "state"))
+	if err := os.WriteFile(path, []byte(`{"schema":"claude-atlas.registry.v1","entries":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("list"); code != 0 || !strings.Contains(h.out.String(), "welcome") {
+		t.Fatalf("list exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
 }
