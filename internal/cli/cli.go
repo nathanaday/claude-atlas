@@ -49,7 +49,8 @@ Usage:
 
 Getting started:
   setup                     install the plugin and create your first knowledge base
-  new-knowledge NAME|PATH   create a knowledge base: an Obsidian vault with an inbox and a wiki
+  new-knowledge PATH        create a knowledge base: an Obsidian vault with an inbox and a wiki;
+                            a bare name is a folder in the current directory
   adopt PATH                make an existing Obsidian or claude-obsidian vault a knowledge base
   init [PATH]               make the current folder (or PATH) a project: an atlas/ folder inside your work
                             --name N, --description TEXT, --knowledge KB or --no-knowledge;
@@ -73,7 +74,7 @@ Knowledge bases (KB is a name or a path; default: the one you are in, or your pr
   open-vault [KB]           open a knowledge base in Obsidian
   ingest KB [PATH...]       stage new files into its inbox, then ingest them
   edit KB                   change its name or scope: --name N, --scope TEXT
-  remove KB                 forget a knowledge base outside the vaults directory; the folder stays
+  remove KB                 drop a knowledge base from the atlas; the folder stays
   lint [KB]                 run the wiki health check
   stub KB [TITLE...]        create seed pages for the pages your links name but nobody has written
   history [KB]              list operations, newest first
@@ -89,7 +90,6 @@ Across the atlas:
   show NAME                 everything the atlas knows about one
   open-claude NAME          start Claude Code in a knowledge base or a project; --task ID continues a task
   refresh                   read everything again and rewrite the registry
-  relocate PATH             move the whole vaults directory to another folder and follow it
   config [KEY VALUE]        show the settings, or set one: new-days N
   info                      show every path and version the atlas uses
   doctor                    check the installation and everything the atlas knows
@@ -198,8 +198,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, c *console.Co
 		code, err = e.remove(rest[1:])
 	case "refresh":
 		code, err = e.refresh(rest[1:])
-	case "relocate":
-		code, err = e.relocate(rest[1:])
 	case "lint":
 		code, err = e.lint(rest[1:])
 	case "stub":
@@ -518,14 +516,13 @@ func (e *env) openVaultArg(arg string) (*vault.Vault, error) {
 
 func (e *env) setup(args []string) (int, error) {
 	fs := newFlags("setup", e.stderr)
-	vaultsDir := fs.String("vaults-dir", "", "where knowledge bases are created (default ~/Vaults)")
-	first := fs.String("first-vault", "", "name or path of the first knowledge base (default notes)")
+	first := fs.String("first-vault", "", "path of the first knowledge base; a bare name is a folder in the current directory (default notes)")
 	source := fs.String("plugin-source", "", "install the plugin from this marketplace source, e.g. a local checkout")
 	noPlugin := fs.Bool("no-plugin", false, "do not run `claude plugin`")
 	if err := fs.Parse(args); err != nil {
 		return 2, nil
 	}
-	opts := wizard.Options{Version: Version, VaultsDir: *vaultsDir, FirstVault: *first, PluginSource: *source, WithPlugin: !*noPlugin}
+	opts := wizard.Options{Version: Version, FirstVault: *first, PluginSource: *source, WithPlugin: !*noPlugin}
 	return wizard.Run(e.home, e.console, opts)
 }
 
@@ -539,7 +536,7 @@ func (e *env) newKnowledge(args []string) (int, error) {
 		return 2, nil
 	}
 	if len(positional) > 1 {
-		return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH [--name N] [--scope TEXT] [--mode generic|lyt]")
+		return 2, errors.New("usage: claude-atlas new-knowledge PATH [--name N] [--scope TEXT] [--mode generic|lyt]")
 	}
 	opts := vault.Options{Name: *name, Scope: *scope}
 	if *mode != "" {
@@ -549,14 +546,14 @@ func (e *env) newKnowledge(args []string) (int, error) {
 	}
 	arg := first(positional)
 	if arg == "" && !e.console.Interactive() {
-		return 2, errors.New("usage: claude-atlas new-knowledge NAME|PATH")
+		return 2, errors.New("usage: claude-atlas new-knowledge PATH")
 	}
 	cfg, err := e.home.Load()
 	if err != nil {
 		return 1, err
 	}
 	if arg == "" {
-		arg = e.console.Ask("Name for the knowledge base", "")
+		arg = e.console.Ask("Knowledge base: a path, or a name for a folder here", "")
 		if strings.TrimSpace(arg) == "" {
 			return 1, vaults.ErrCancelled
 		}
@@ -564,7 +561,7 @@ func (e *env) newKnowledge(args []string) (int, error) {
 			opts.Scope = e.console.Ask("Scope: one sentence saying what it holds", "")
 		}
 	}
-	path, err := vaults.ResolvePath(arg, cfg.VaultsDir)
+	path, err := vaults.ResolvePath(arg)
 	if err != nil {
 		return 1, err
 	}
@@ -577,31 +574,25 @@ func (e *env) newKnowledge(args []string) (int, error) {
 // finishVault registers a knowledge base that was just created or adopted, refreshes,
 // and reports.
 func (e *env) finishVault(cfg *home.Config, path string) (int, error) {
-	registered, err := vaults.Register(e.home, cfg, path)
-	if err != nil {
+	if _, err := vaults.Register(e.home, cfg, path); err != nil {
 		return 1, err
 	}
-	entries, _, err := e.refreshAll(cfg)
+	entries, ix, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
-	}
-	name := filepath.Base(path)
-	for _, en := range entries {
-		if en.Path == path && en.Error == "" {
-			name = en.Name
-		}
 	}
 	c := e.console
 	c.Say("")
 	c.Step(console.OK, "created", home.Display(path))
-	if registered {
-		c.Step(console.OK, "registered", "in the config; it sits outside "+home.Display(cfg.VaultsDir))
-	}
+	c.Step(console.OK, "registered", "in "+home.Display(e.home.ConfigPath()))
 	c.Step(console.OK, "refreshed", refreshed(entries))
 	c.Say("")
-	c.Say("  Open it in Obsidian with `claude-atlas open-vault %s`, or start working:", name)
-	c.Say("  claude-atlas open-claude %s    # then /claude-atlas:wiki", name)
-	c.Say("  cd <your work> && claude-atlas init --knowledge %s", name)
+	c.Say("  Next:")
+	sayCommands(c, [][2]string{
+		{"claude-atlas open-vault " + entryArg(ix, path, registry.Knowledge), "open it in Obsidian"},
+		{"claude-atlas open-claude " + entryArg(ix, path, ""), "then /claude-atlas:wiki"},
+		{"claude-atlas init --knowledge " + entryArg(ix, path, registry.Knowledge), "in your work: a project that uses it"},
+	})
 	c.Say("")
 	return 0, nil
 }
@@ -664,7 +655,7 @@ func (e *env) adopt(args []string) (int, error) {
 		return 1, err
 	}
 	if registered {
-		c.Step(console.OK, "registered", "in the config; it sits outside "+home.Display(cfg.VaultsDir))
+		c.Step(console.OK, "registered", "in "+home.Display(e.home.ConfigPath()))
 	}
 	c.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
@@ -900,8 +891,8 @@ func (e *env) forget(args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if entry.Error == "" && entry.Kind != registry.Project {
-		return 1, fmt.Errorf("%s is a knowledge base; `claude-atlas remove` forgets one", entry.Name)
+	if (entry.Error == "" && entry.Kind != registry.Project) || (entry.Error != "" && cfg.HasKnowledge(entry.Path)) {
+		return 1, fmt.Errorf("%s is a knowledge base; `claude-atlas remove` forgets one", entryName(entry))
 	}
 	name, where := entryName(entry), home.Display(entry.Path)
 	gone := entry.Reason == registry.ReasonMissing
@@ -1802,9 +1793,8 @@ func (e *env) remove(args []string) (int, error) {
 	if entry.Error == "" && entry.Kind == registry.Project {
 		return 1, fmt.Errorf("%s is a project; `claude-atlas forget` drops one", entry.Name)
 	}
-	// Ask nothing when the answer cannot be acted on.
-	if err := vaults.CheckForget(cfg, entry.Path); err != nil {
-		return 1, err
+	if entry.Error != "" && cfg.HasProject(entry.Path) {
+		return 1, fmt.Errorf("%s is listed as a project; `claude-atlas forget` drops one", home.Display(entry.Path))
 	}
 	name, where := entryName(entry), home.Display(entry.Path)
 	gone := entry.Reason == registry.ReasonMissing
@@ -1828,79 +1818,6 @@ func (e *env) remove(args []string) (int, error) {
 	}
 	e.console.Step(console.OK, "removed", fmt.Sprintf("%s; %s", name, ternary(gone, "its folder was already gone", "the vault is still at "+where)))
 	e.console.Step(console.OK, "refreshed", refreshed(entries))
-	return 0, nil
-}
-
-// warnExamples is how many paths a preview shows per kind before it counts the rest.
-const warnExamples = 3
-
-// relTo shortens a path under the vaults directory to what follows it, so a preview
-// reads as a list of places inside the tree rather than a column of identical prefixes.
-func relTo(root, path string) string {
-	if rel, err := filepath.Rel(root, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-		return rel
-	}
-	return home.Display(path)
-}
-
-// relocate moves the whole vaults directory. It shows what moves, what the config will
-// say afterwards, and what holds the old path that the atlas will not change; then it
-// asks, moves, and refreshes so the registry follows.
-func (e *env) relocate(args []string) (int, error) {
-	if len(args) != 1 {
-		return 2, errors.New("usage: claude-atlas relocate PATH")
-	}
-	cfg, err := e.home.Load()
-	if err != nil {
-		return 1, err
-	}
-	p, err := vaults.PlanRelocate(e.home, cfg, args[0])
-	if err != nil {
-		return 1, err
-	}
-	c := e.console
-	how := "a rename on the same volume"
-	if !p.SameVolume {
-		how = "a copy to another volume, verified before the old folder goes"
-	}
-	c.Say("claude-atlas will move %d vault%s from %s to %s:", p.Vaults, plural(p.Vaults), home.Display(p.From), home.Display(p.To))
-	c.Say("    %d files, %s, %s", p.Files, console.Size(p.Bytes), how)
-	c.Say("")
-	c.Say("  The config will say:")
-	for _, r := range p.Rewrites {
-		c.Say("    %-24s %s", r.What, home.Display(r.To))
-	}
-	if groups := p.GroupWarnings(); len(groups) > 0 {
-		c.Say("")
-		c.Say("  These hold the old path and claude-atlas does not change them:")
-		for _, g := range groups {
-			c.Say("    %d %s", len(g.Paths), g.Reason)
-			for i, path := range g.Paths {
-				if i == warnExamples {
-					c.Say("        and %d more", len(g.Paths)-warnExamples)
-					break
-				}
-				c.Say("        %s", relTo(p.From, path))
-			}
-		}
-	}
-	c.Say("")
-	ok, err := c.Confirm("Move the vaults?", false)
-	if err != nil {
-		return 1, err
-	}
-	if !ok {
-		return 1, vaults.ErrCancelled
-	}
-	if err := vaults.ApplyRelocate(e.home, cfg, p); err != nil {
-		return 1, err
-	}
-	c.Step(console.OK, "moved", fmt.Sprintf("%d vault%s to %s", p.Vaults, plural(p.Vaults), home.Display(p.To)))
-	entries, _, err := e.refreshAll(cfg)
-	if err != nil {
-		return 1, err
-	}
-	c.Step(console.OK, "refreshed", refreshed(entries))
 	return 0, nil
 }
 
@@ -2326,7 +2243,7 @@ func (e *env) config(args []string) (int, error) {
 	if len(args) == 0 {
 		row := func(label, value string) { c.Say("  %-18s %s", label, value) }
 		row("new-days", fmt.Sprintf("%d  (an entry is new for this many days after its creation; 0 turns it off)", cfg.NewDays()))
-		row("vaults dir", home.Display(cfg.VaultsDir)+"  (where knowledge bases live; `claude-atlas relocate PATH` moves them)")
+		row("knowledge bases", fmt.Sprintf("%d registered", len(cfg.Knowledge)))
 		row("projects", fmt.Sprintf("%d registered", len(cfg.Projects)))
 		row("claude command", cfg.ClaudeCode.Command)
 		row("plugin source", cfg.Plugin.Source)
@@ -2379,7 +2296,6 @@ func (e *env) info(args []string) (int, error) {
 	}
 	row("registry", home.Display(registry.File(e.home.StateDir())))
 	row("state", home.Display(e.home.StateDir()))
-	row("vaults dir", home.Display(cfg.VaultsDir))
 	if inst, _ := claudecode.InstalledPlugin(cfg.Plugin.ID); inst != nil {
 		row("plugin", fmt.Sprintf("%s v%s", cfg.Plugin.ID, inst.Version))
 		row("  path", home.Display(inst.InstallPath))
@@ -2436,7 +2352,6 @@ func (e *env) doctor(args []string) (int, error) {
 		ok = false
 		line("plugin", cfg.Plugin.ID+" is not installed; run `claude-atlas setup`")
 	}
-	line("vaults dir", home.Display(cfg.VaultsDir))
 	ix, err := registry.Scan(cfg)
 	if err != nil {
 		return 1, err

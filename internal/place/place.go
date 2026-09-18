@@ -1,6 +1,6 @@
 // Package place finds where a session is: in a project, anywhere inside its work, or
 // in a knowledge base. The hooks, the MCP server, and the CLI resolve a session the same
-// way through it, and a project session heals its own entry in the atlas config.
+// way through it, and a session heals its own entry in the atlas config.
 package place
 
 import (
@@ -33,7 +33,8 @@ type Place struct {
 	// whole index behind it; nil when there is no atlas config or the scan failed.
 	Entry *registry.Entry
 	Index *registry.Index
-	// Heal is what registering the project did to the config, when asked to.
+	// Heal is what registering the project or the knowledge base did to the config,
+	// when asked to.
 	Heal vaults.Heal
 }
 
@@ -45,8 +46,8 @@ var ErrNoPlace = errors.New("not in a claude-atlas project or knowledge base")
 
 // Resolve finds the place: the explicit path, then the environment, then the nearest
 // project at or above start, then the nearest knowledge base. An explicit path may be a
-// knowledge base's root or a project's work folder. With register set, a project session
-// heals the atlas config so it lists the project at this path.
+// knowledge base's root or a project's work folder. With register set, the session heals
+// the atlas config so it lists the project or the knowledge base at this path.
 func Resolve(h home.Home, explicit, envValue, start string, register bool) (*Place, error) {
 	for _, given := range []string{explicit, envValue} {
 		if given == "" {
@@ -60,7 +61,7 @@ func Resolve(h home.Home, explicit, envValue, start string, register bool) (*Pla
 		case project.IsProject(abs):
 			return resolveProject(h, abs, register)
 		case vault.IsVault(abs):
-			return resolveKnowledge(h, abs)
+			return resolveKnowledge(h, abs, register)
 		}
 		return nil, fmt.Errorf("%w: %s is neither", ErrNoPlace, abs)
 	}
@@ -71,7 +72,7 @@ func Resolve(h home.Home, explicit, envValue, start string, register bool) (*Pla
 		return resolveProject(h, work, register)
 	}
 	if root := vault.FindAbove(start); root != "" {
-		return resolveKnowledge(h, root)
+		return resolveKnowledge(h, root, register)
 	}
 	return nil, fmt.Errorf("%w: nothing at or above %s", ErrNoPlace, start)
 }
@@ -120,7 +121,7 @@ func resolveProject(h home.Home, work string, register bool) (*Place, error) {
 	return out, nil
 }
 
-func resolveKnowledge(h home.Home, root string) (*Place, error) {
+func resolveKnowledge(h home.Home, root string, register bool) (*Place, error) {
 	v, err := vault.Open(root)
 	if err != nil {
 		return nil, err
@@ -132,6 +133,11 @@ func resolveKnowledge(h home.Home, root string) (*Place, error) {
 			return out, nil
 		}
 		return nil, err
+	}
+	if register {
+		if out.Heal, err = vaults.RegisterKnowledge(h, cfg, v); err != nil {
+			return nil, err
+		}
 	}
 	ix, err := registry.Scan(cfg)
 	if err != nil {

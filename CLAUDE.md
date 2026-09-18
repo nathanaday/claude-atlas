@@ -60,8 +60,9 @@ safety net, and adds the cross-vault view.
    projects use it; the atlas computes that from the projects.
 2. Projects never link each other. They share a knowledge base.
 3. Ids travel; paths stay. Neither identity file holds a path; the atlas
-   config holds every path, and nothing else. A project heals its own entry
-   when a session starts in it (`vaults.RegisterProject`).
+   config holds every path, and nothing else. A project or a knowledge base
+   heals its own entry when a session starts in it
+   (`vaults.RegisterProject`, `vaults.RegisterKnowledge`).
    `~/.claude-atlas/state/registry.json` is derived, and `refresh` rebuilds it
    in full.
 
@@ -126,9 +127,9 @@ internal/lint/          the health check (ported from claude-obsidian's engine)
 internal/mcpserver/     the tools, thin over the packages above
 internal/hooks/         session-start (the project line with its knowledge base, page, and open tasks, or the knowledge base line with its projects and inbox), guard, stop
 internal/claudecode/    Claude Code's plugin registry, `claude plugin`, launching claude in a knowledge base or a project
-internal/registry/      the scan for knowledge bases, the projects the config lists, the resolved entries, the registry state file
+internal/registry/      the scan of the knowledge bases and projects the config lists, the resolved entries, the registry state file
 internal/refresh/       derive one entry's state, rewrite the registry, list an entry's signals
-internal/vaults/        create, adopt, register, and edit knowledge bases; init, link, unlink, forget, and register projects; relocate the vaults directory
+internal/vaults/        create, adopt, register, heal, and edit knowledge bases; init, link, unlink, forget, and register projects
 internal/links/         the facts git reports about a folder, and CleanName
 internal/tui/           Bubble Tea screens: the view (Knowledge and Projects tabs, expand in place, open and launch keys)
 internal/obsidian/      Obsidian's vault registry, obsidian:// URIs, restart
@@ -137,27 +138,18 @@ internal/console/       prompts and step lines
 ```
 
 `~/.claude-atlas/` holds `config.json` and `state/registry.json`. The
-knowledge bases are the user's and live under the vaults directory (default
-`~/Vaults`). A new one goes to `<vaults dir>/<name>` unless the user gives a
-path (`vaults.PathFor`, `vaults.ResolvePath`). A knowledge base outside the
-vaults directory is listed in the config under `knowledge`, because the scan
-cannot find it there (`vaults.Register`); one inside it needs no entry and
-cannot be forgotten (`vaults.Unregister`). A knowledge base never goes inside
-another (`vaults.CheckNewPath`). Every project's work folder is listed under
-`projects` (`vaults.InitProject`, `vaults.ForgetProject`); a project never
-goes inside a knowledge base or another project (`project.CheckNew`).
-
-`vaults.PlanRelocate` and `vaults.ApplyRelocate` move the whole vaults
-directory; `relocate` is the only command that changes `vaults_dir`, and it is
-CLI-only, with no tool and no TUI key, because a session must not move the
-user's vaults. Nothing inside a vault changes, because an identity file holds
-no path: the move rewrites `vaults_dir` plus every `knowledge` and `projects`
-entry that sat under the old root, then the caller refreshes. On one volume
-the move is a rename that a failed save undoes; across volumes it copies,
-verifies every file and symlink, saves, and only then removes the old tree.
-The plan also reports the state the atlas will not repair: Obsidian's vault
-list (`obsidian.Registry.Under`) and Claude Code's path-keyed folders
-(`claudecode.ProjectsUnder`).
+knowledge bases and the projects are the user's and live wherever the user
+puts them. The atlas has no default location and never searches the disk:
+the config lists every knowledge base under `knowledge` (`vaults.Register`,
+`vaults.Unregister`) and every project's work folder under `projects`
+(`vaults.InitProject`, `vaults.ForgetProject`). `new-knowledge` takes a
+path; a bare name is a folder in the current directory
+(`vaults.ResolvePath`). The `vault` tool takes only an absolute or `~` path,
+because a session's folder is usually a project. A knowledge base never goes
+inside another or inside a project (`vaults.CheckNewPath`); a project never
+goes inside a knowledge base or another project (`project.CheckNew`). A
+session heals its own entry by id when its folder moved or the config does
+not list it (`vaults.RegisterKnowledge`, `vaults.RegisterProject`).
 
 ## Constraints
 
@@ -226,14 +218,12 @@ list (`obsidian.Registry.Under`) and Claude Code's path-keyed folders
   works for tasks, and the place carries `KnowledgeError`.
 - A source captured from a project session records `via`, the project's id
   and name, as provenance (`capture.Capture` with a `*ledger.Via`).
-- The scan is the truth. `registry.Scan` walks the vaults directory at most
-  five levels deep for knowledge base identity files, skips dot-directories
-  and `node_modules`, never descends into a vault it has found, adds the
-  paths in `config.knowledge`, and reads `atlas/project.json` under every
-  path in `config.projects`. An entry the atlas knows but cannot read becomes
-  an entry with a `Path`, an `Error`, and a `Reason` code (`ReasonV1`,
-  `ReasonV2Project`, `ReasonUnreadable`, `ReasonSchema`, `ReasonMissing`,
-  `ReasonNotProject`); `list` and `doctor` decide on the code, and the view
+- The scan is the truth. `registry.Scan` reads the identity file under every
+  path in `config.knowledge` and `atlas/project.json` under every path in
+  `config.projects`, and nothing else. An entry the atlas knows but cannot
+  read becomes an entry with a `Path`, an `Error`, and a `Reason` code
+  (`ReasonV1`, `ReasonV2Project`, `ReasonUnreadable`, `ReasonSchema`,
+  `ReasonMissing`, `ReasonNotProject`, `ReasonNotVault`); `list` and `doctor` decide on the code, and the view
   files it under `problems`. Every command that acts on an entry scans
   afresh; `registry.json` is for display only.
 - The page that describes a project is an entity page in its knowledge base

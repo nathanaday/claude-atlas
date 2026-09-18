@@ -185,7 +185,9 @@ func problemFix(e registry.Entry) string {
 	case registry.ReasonV2Project:
 		return "run claude-atlas init in the work, then delete this folder"
 	case registry.ReasonMissing:
-		return "work in it again to heal the path, or run claude-atlas forget " + path
+		return strings.TrimPrefix(e.Error, "not found; ")
+	case registry.ReasonNotVault:
+		return "run claude-atlas adopt " + path + ", or claude-atlas remove " + path
 	case registry.ReasonNotProject:
 		return "run claude-atlas init " + path + ", or claude-atlas forget " + path
 	case registry.ReasonUnreadable:

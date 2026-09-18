@@ -16,7 +16,6 @@ const (
 	ConfigSchemaV1 = "claude-atlas.config.v1"
 	EnvHome        = "CLAUDE_ATLAS_HOME"
 	defaultHome    = "~/.claude-atlas"
-	DefaultVaults  = "~/Vaults"
 
 	// DefaultPluginID is the claude-atlas plugin as Claude Code names it.
 	DefaultPluginID = "claude-atlas@nathanaday-claude-atlas"
@@ -49,24 +48,21 @@ type LaunchConfig struct {
 	SessionContext bool     `json:"session_context"`
 }
 
-// Config is the contents of config.json. Paths are absolute.
+// Config is the contents of config.json. Paths are absolute. The atlas knows a knowledge
+// base or a project only when the config lists its folder; it never searches for one.
 type Config struct {
 	Schema     string       `json:"schema"`
-	VaultsDir  string       `json:"vaults_dir"`
 	Plugin     PluginConfig `json:"plugin"`
 	ClaudeCode LaunchConfig `json:"claude_code"`
 	// Heat is nil in a config written before the section existed; NewDays reads it.
 	Heat *HeatConfig `json:"heat,omitempty"`
-	// Knowledge holds knowledge base roots outside VaultsDir; the scan cannot find them
-	// there.
+	// Knowledge holds every knowledge base's root.
 	Knowledge []string `json:"knowledge,omitempty"`
-	// Projects holds every project's work folder, the parent of its atlas/ folder. The
-	// atlas never scans for projects: they live where the user's work lives.
+	// Projects holds every project's work folder, the parent of its atlas/ folder.
 	Projects []string `json:"projects,omitempty"`
 }
 
-// AddKnowledge records root as a knowledge base outside VaultsDir; it reports whether
-// root was added.
+// AddKnowledge records a knowledge base's root; it reports whether root was added.
 func (c *Config) AddKnowledge(root string) bool {
 	root = Expand(root)
 	if contains(c.Knowledge, root) {
@@ -100,6 +96,9 @@ func (c *Config) RemoveProject(work string) bool {
 	return ok
 }
 
+// HasKnowledge reports whether the config lists root.
+func (c *Config) HasKnowledge(root string) bool { return contains(c.Knowledge, Expand(root)) }
+
 // HasProject reports whether the config lists work.
 func (c *Config) HasProject(work string) bool { return contains(c.Projects, Expand(work)) }
 
@@ -119,15 +118,6 @@ func remove(list []string, s string) ([]string, bool) {
 		}
 	}
 	return list, false
-}
-
-// Inside reports whether root is VaultsDir or a descendant of it.
-func (c *Config) Inside(root string) bool {
-	rel, err := filepath.Rel(c.VaultsDir, root)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	return true
 }
 
 // NewDays is the configured age under which a vault is new, or the default.
@@ -186,14 +176,10 @@ func defaultLaunch() LaunchConfig {
 	return LaunchConfig{Command: "claude", SessionContext: true}
 }
 
-// Default is the config a fresh setup starts from. An empty vaultsDir takes the default.
-func (h Home) Default(vaultsDir string) *Config {
-	if vaultsDir == "" {
-		vaultsDir = DefaultVaults
-	}
+// Default is the config a fresh setup starts from.
+func (h Home) Default() *Config {
 	return &Config{
 		Schema:     ConfigSchema,
-		VaultsDir:  Expand(vaultsDir),
 		Plugin:     defaultPlugin(),
 		ClaudeCode: defaultLaunch(),
 		Heat:       &HeatConfig{NewDays: DefaultNewDays},
@@ -231,7 +217,6 @@ func (h Home) Load() (*Config, error) {
 	default:
 		return nil, fmt.Errorf("%s: unsupported schema %q", h.ConfigPath(), cfg.Schema)
 	}
-	cfg.VaultsDir = Expand(cfg.VaultsDir)
 	for i, v := range cfg.Knowledge {
 		cfg.Knowledge[i] = Expand(v)
 	}

@@ -84,7 +84,7 @@ Create a knowledge base once. Then make each repository or folder you work
 in a project that uses it:
 
 ```bash
-claude-atlas new-knowledge product-x --scope "The thermal fire-detection product line."
+claude-atlas new-knowledge ~/Vaults/product-x --scope "The thermal fire-detection product line."
 cd ~/code/webapp
 claude-atlas init --knowledge product-x
 claude-atlas plant webapp "Filter vehicle false alarms" --priority high
@@ -174,16 +174,17 @@ the paths in one place:
 
 ```
 ~/.claude-atlas/
-├── config.json               the vaults directory, knowledge bases outside it,
-│                             every project's work folder, the plugin, heat
+├── config.json               every knowledge base's folder, every project's
+│                             work folder, the plugin, heat
 └── state/registry.json       derived: every knowledge base with its projects,
                               every project with its task counts and its page
 ```
 
-The atlas scans the vaults directory for knowledge bases and lists every
-project, because projects live wherever your work lives. Move a repository
-and the next session inside it heals its entry by id. `claude-atlas refresh`
-rewrites the registry in full, so nothing in it goes stale.
+The atlas never searches your disk. It knows a knowledge base or a project
+because the config lists its folder, and `new-knowledge`, `adopt`, and
+`init` add that entry, so both can live anywhere. Move a folder and the next
+session inside it heals its entry by id. `claude-atlas refresh` rewrites the
+registry in full, so nothing in it goes stale.
 
 ## Conventions
 

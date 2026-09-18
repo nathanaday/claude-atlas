@@ -92,11 +92,12 @@ func newAtlas(t *testing.T, withGit bool) *atlas {
 	}
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
-	cfg := h.Default(filepath.Join(root, "Vaults"))
-	kbPath := filepath.Join(cfg.VaultsDir, "kb")
+	cfg := h.Default()
+	kbPath := filepath.Join(root, "Vaults", "kb")
 	if _, err := vault.Init(kbPath, vault.Options{Name: "kb", Scope: "Test knowledge."}, now); err != nil {
 		t.Fatal(err)
 	}
+	cfg.AddKnowledge(kbPath)
 	kb, err := vault.Open(kbPath)
 	if err != nil {
 		t.Fatal(err)

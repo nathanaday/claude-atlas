@@ -76,8 +76,6 @@ type Atlas struct {
 	RenamePhase func(registry.Entry, string, string) (*tasks.Phase, error)
 	OrderPhase  func(registry.Entry, string, int) (*tasks.Phase, error)
 	RemovePhase func(registry.Entry, string) error
-	// VaultsDir is where a new knowledge base goes by default.
-	VaultsDir string
 }
 
 // Bind builds the struct over an atlas home and its loaded config. The console is for
@@ -215,6 +213,5 @@ func Bind(h home.Home, cfg *home.Config, c *console.Console) Atlas {
 			}
 			return tasks.RemovePhase(p, title, time.Now())
 		},
-		VaultsDir: cfg.VaultsDir,
 	}
 }

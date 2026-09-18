@@ -22,7 +22,7 @@ func TestAtlasReadsWithoutWritingAndRefreshWrites(t *testing.T) {
 	if msg := c.call("atlas", map[string]any{}, &out); msg != "" {
 		t.Fatal(msg)
 	}
-	if len(out.Knowledge) != 1 || len(out.Projects) != 1 || out.Settings.VaultsDir != a.cfg.VaultsDir || out.Settings.NewDays != home.DefaultNewDays {
+	if len(out.Knowledge) != 1 || len(out.Projects) != 1 || out.Settings.NewDays != home.DefaultNewDays {
 		t.Fatalf("atlas: %+v", out)
 	}
 	if out.Projects[0].Knowledge == nil || out.Projects[0].Knowledge.Path != a.kb.Root || len(out.Knowledge[0].Projects) != 1 {
@@ -48,13 +48,19 @@ func TestVaultCreateAdoptEditForget(t *testing.T) {
 	a := newAtlas(t, false)
 	c := connectIn(t, a.h, t.TempDir())
 	var out VaultToolOut
-	if msg := c.call("vault", map[string]any{"action": "create", "name": "papers", "scope": "Papers."}, &out); msg != "" {
+	papers := filepath.Join(t.TempDir(), "papers")
+	for _, path := range []string{"", "papers", "./papers"} {
+		if msg := c.call("vault", map[string]any{"action": "create", "name": "papers", "path": path}, nil); !strings.Contains(msg, "absolute or ~ path") {
+			t.Fatalf("create with path %q needs an absolute path: %q", path, msg)
+		}
+	}
+	if msg := c.call("vault", map[string]any{"action": "create", "name": "papers", "path": papers, "scope": "Papers."}, &out); msg != "" {
 		t.Fatal(msg)
 	}
-	if out.Vault == nil || out.Vault.Kind != registry.Knowledge || out.Vault.Path != filepath.Join(a.cfg.VaultsDir, "papers") || out.Vault.Scope != "Papers." {
+	if out.Vault == nil || out.Vault.Kind != registry.Knowledge || out.Vault.Path != papers || out.Vault.Scope != "Papers." {
 		t.Fatalf("create: %+v", out.Vault)
 	}
-	if msg := c.call("vault", map[string]any{"action": "create", "name": "papers"}, nil); !strings.Contains(msg, "already exists") {
+	if msg := c.call("vault", map[string]any{"action": "create", "name": "papers", "path": papers}, nil); !strings.Contains(msg, "already exists") {
 		t.Fatalf("taken path: %q", msg)
 	}
 	if msg := c.call("vault", map[string]any{"action": "create"}, nil); !strings.Contains(msg, "needs name") {
@@ -63,7 +69,7 @@ func TestVaultCreateAdoptEditForget(t *testing.T) {
 	if msg := c.call("vault", map[string]any{"action": "grow", "name": "x"}, nil); !strings.Contains(msg, "action must be") {
 		t.Fatalf("unknown action: %q", msg)
 	}
-	// Adopt an Obsidian folder outside the vaults directory; it lands in the config.
+	// Adopt an Obsidian folder; it lands in the config.
 	outside := filepath.Join(t.TempDir(), "notes")
 	os.MkdirAll(filepath.Join(outside, ".obsidian"), 0o755)
 	out = VaultToolOut{}
@@ -74,8 +80,8 @@ func TestVaultCreateAdoptEditForget(t *testing.T) {
 		t.Fatalf("adopt: %+v", out.Vault)
 	}
 	cfg, _ := a.h.Load()
-	if len(cfg.Knowledge) != 1 || cfg.Knowledge[0] != outside {
-		t.Fatalf("an adopted vault outside the vaults directory is listed: %+v", cfg.Knowledge)
+	if !cfg.HasKnowledge(outside) || !cfg.HasKnowledge(papers) {
+		t.Fatalf("created and adopted knowledge bases are listed: %+v", cfg.Knowledge)
 	}
 	// Edit renames the folder and the scope.
 	scope := "Everything."
@@ -89,8 +95,7 @@ func TestVaultCreateAdoptEditForget(t *testing.T) {
 	if msg := c.call("vault", map[string]any{"action": "edit", "target": "Notebook"}, nil); !strings.Contains(msg, "needs name or scope") {
 		t.Fatalf("empty edit: %q", msg)
 	}
-	// Forget drops it from the config; the folder stays. One under the vaults
-	// directory cannot be forgotten.
+	// Forget drops it from the config; the folder stays.
 	out = VaultToolOut{}
 	if msg := c.call("vault", map[string]any{"action": "forget", "target": "Notebook"}, &out); msg != "" || out.Forgotten == "" {
 		t.Fatalf("forget: %q %+v", msg, out)
@@ -98,8 +103,11 @@ func TestVaultCreateAdoptEditForget(t *testing.T) {
 	if _, err := os.Stat(out.Forgotten); err != nil {
 		t.Fatal("the folder stays")
 	}
-	if msg := c.call("vault", map[string]any{"action": "forget", "target": "papers"}, nil); !strings.Contains(msg, "inside the vaults directory") {
-		t.Fatalf("forget under the vaults directory: %q", msg)
+	if msg := c.call("vault", map[string]any{"action": "forget", "target": "papers"}, nil); msg != "" {
+		t.Fatalf("forget papers: %q", msg)
+	}
+	if cfg, _ := a.h.Load(); len(cfg.Knowledge) != 1 {
+		t.Fatalf("only the fixture's knowledge base is left: %+v", cfg.Knowledge)
 	}
 }
 
@@ -189,7 +197,7 @@ func TestSettings(t *testing.T) {
 	a := newAtlas(t, false)
 	c := a.inProject(t)
 	var s Settings
-	if msg := c.call("settings", nil, &s); msg != "" || s.NewDays != home.DefaultNewDays || s.VaultsDir != a.cfg.VaultsDir {
+	if msg := c.call("settings", nil, &s); msg != "" || s.NewDays != home.DefaultNewDays {
 		t.Fatalf("read: %q %+v", msg, s)
 	}
 	if msg := c.call("settings", map[string]any{"new_days": 3}, &s); msg != "" || s.NewDays != 3 {

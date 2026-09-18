@@ -29,8 +29,8 @@ func (h *harness) run(args ...string) int {
 	return run(append([]string{"--home", h.home}, args...), strings.NewReader(""), &h.out, &h.err, c)
 }
 
-// setup makes an atlas with one knowledge base, welcome, and runs from a folder that is
-// inside nothing.
+// setup makes an atlas with one knowledge base, welcome, at <root>/Vaults/welcome, and
+// runs from a folder that is inside nothing. It returns <root>/Vaults.
 func setup(t *testing.T) (*harness, string) {
 	if !gitx.Available() {
 		t.Skip("git is not installed")
@@ -39,7 +39,7 @@ func setup(t *testing.T) (*harness, string) {
 	t.Chdir(root)
 	h := &harness{t: t, home: filepath.Join(root, "home")}
 	vaults := filepath.Join(root, "Vaults")
-	code := h.run("setup", "--no-plugin", "--vaults-dir", vaults, "--first-vault", "welcome")
+	code := h.run("setup", "--no-plugin", "--first-vault", filepath.Join(vaults, "welcome"))
 	if code != 0 {
 		t.Fatalf("setup exit %d\n%s%s", code, h.out.String(), h.err.String())
 	}
@@ -106,7 +106,7 @@ func TestSetupCreatesHomeAndFirstKnowledgeBase(t *testing.T) {
 	if !strings.Contains(string(cfg), `"schema": "claude-atlas.config.v3"`) {
 		t.Fatalf("config.json:\n%s", cfg)
 	}
-	if code := h.run("setup", "--no-plugin"); code != 0 || !strings.Contains(h.out.String(), "keep       1 found") {
+	if code := h.run("setup", "--no-plugin"); code != 0 || !strings.Contains(h.out.String(), "keep       1 listed") {
 		t.Fatalf("rerun exit %d:\n%s", code, h.out.String())
 	}
 }
@@ -369,18 +369,18 @@ func TestKnowledgeListShowEditRemove(t *testing.T) {
 	if code := h.run("edit", "welcome", "--description", "x"); code != 2 {
 		t.Fatalf("description on a knowledge base is a usage error, got %d", code)
 	}
-	if code := h.run("remove", "welcome"); code != 1 || !strings.Contains(h.err.String(), "vaults directory") {
-		t.Fatalf("remove inside the vaults directory: exit %d %s", code, h.err.String())
-	}
 	outside := filepath.Join(t.TempDir(), "scratch")
 	if code := h.run("new-knowledge", outside, "--scope", "Scratch."); code != 0 {
 		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
 	}
-	if cfg := h.config(t); len(cfg.Knowledge) != 1 {
-		t.Fatalf("a knowledge base outside the vaults directory is listed: %+v", cfg.Knowledge)
+	if cfg := h.config(t); len(cfg.Knowledge) != 2 || !cfg.HasKnowledge(outside) {
+		t.Fatalf("every knowledge base is listed: %+v", cfg.Knowledge)
 	}
 	if code := h.run("remove", "scratch"); code != 0 || !strings.Contains(h.out.String(), "removed") {
 		t.Fatalf("remove exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if code := h.run("remove", "welcome"); code != 0 {
+		t.Fatalf("remove forgets any knowledge base: exit %d %s", code, h.err.String())
 	}
 	if cfg := h.config(t); len(cfg.Knowledge) != 0 {
 		t.Fatalf("remove should forget the vault: %+v", cfg.Knowledge)
@@ -401,6 +401,12 @@ func TestRefreshAndDoctorReportProblems(t *testing.T) {
 	old := filepath.Join(vaults, "oldproject")
 	os.MkdirAll(old, 0o755)
 	os.WriteFile(filepath.Join(old, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v2","id":"11111111-1111-4111-8111-111111111111","kind":"project","name":"old"}`), 0o644)
+	cfg := h.config(t)
+	cfg.AddKnowledge(legacy)
+	cfg.AddKnowledge(old)
+	if err := (home.Home{Root: h.home}).Save(cfg); err != nil {
+		t.Fatal(err)
+	}
 	if code := h.run("refresh"); code != 0 || !strings.Contains(h.out.String(), "✗") || !strings.Contains(h.out.String(), "legacy") || !strings.Contains(h.out.String(), "v2 project vault") {
 		t.Fatalf("refresh exit %d:\n%s%s", code, h.out.String(), h.err.String())
 	}
@@ -411,8 +417,14 @@ func TestRefreshAndDoctorReportProblems(t *testing.T) {
 	if code := h.run("doctor"); code != 1 || !strings.Contains(h.out.String(), "v1      ?          legacy") {
 		t.Fatalf("doctor exit %d:\n%s", code, h.out.String())
 	}
-	os.RemoveAll(legacy)
-	os.RemoveAll(old)
+	for _, path := range []string{legacy, old} {
+		if code := h.run("forget", path); code != 1 || !strings.Contains(h.err.String(), "claude-atlas remove") {
+			t.Fatalf("forget points a listed knowledge base path at remove: exit %d %s", code, h.err.String())
+		}
+		if code := h.run("remove", path); code != 0 {
+			t.Fatalf("remove an unreadable entry: exit %d %s", code, h.err.String())
+		}
+	}
 	// A project whose knowledge base is not on this machine.
 	dir := work(t, "webapp", false)
 	if code := h.run("init", dir, "--knowledge", "welcome"); code != 0 {
@@ -671,61 +683,34 @@ func TestStubCommand(t *testing.T) {
 	}
 }
 
-func TestRelocateMovesTheTreeAndProjectsStay(t *testing.T) {
-	h, oldDir := setup(t)
-	if code := h.run("new-knowledge", "ai-ml"); code != 0 {
-		t.Fatalf("new-knowledge exit %d %s", code, h.err.String())
+func TestNewKnowledgeTakesABareNameAsAFolderHere(t *testing.T) {
+	h, _ := setup(t)
+	here := t.TempDir()
+	t.Chdir(here)
+	if code := h.run("new-knowledge", "papers"); code != 0 {
+		t.Fatalf("new-knowledge exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	cwd, _ := os.Getwd()
+	papers := filepath.Join(cwd, "papers")
+	if _, err := os.Stat(filepath.Join(papers, vault.Marker)); err != nil {
+		t.Fatalf("a bare name makes the folder in the current directory: %v", err)
+	}
+	if !h.config(t).HasKnowledge(papers) {
+		t.Fatalf("and the config lists it: %+v", h.config(t).Knowledge)
+	}
+	if !strings.Contains(h.out.String(), "claude-atlas init --knowledge papers") {
+		t.Fatalf("the hint names it:\n%s", h.out.String())
 	}
 	dir := work(t, "webapp", false)
-	if code := h.run("init", dir, "--knowledge", "ai-ml"); code != 0 {
+	if code := h.run("init", dir, "--no-knowledge"); code != 0 {
 		t.Fatalf("init exit %d %s", code, h.err.String())
 	}
-	newDir := filepath.Join(t.TempDir(), "Vaults")
-	if code := h.run("relocate", newDir); code != 0 {
-		t.Fatalf("relocate exit %d\n%s%s", code, h.out.String(), h.err.String())
+	t.Chdir(dir)
+	if code := h.run("new-knowledge", "notes"); code != 1 || !strings.Contains(h.err.String(), "inside the project") {
+		t.Fatalf("no knowledge base inside a project: exit %d %s", code, h.err.String())
 	}
-	if !strings.Contains(h.out.String(), "2 vaults") {
-		t.Fatalf("the preview names what moves:\n%s", h.out.String())
-	}
-	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
-		t.Fatalf("the old tree should be gone: %v", err)
-	}
-	cfg := h.config(t)
-	if cfg.VaultsDir != newDir || len(cfg.Projects) != 1 || cfg.Projects[0] != dir {
-		t.Fatalf("the config should point at %q and keep the project: %+v", newDir, cfg)
-	}
-	reg, _ := os.ReadFile(registry.File(filepath.Join(h.home, "state")))
-	if strings.Contains(string(reg), oldDir) {
-		t.Fatalf("the registry still names the old root:\n%s", reg)
-	}
-	// The project still reaches its knowledge base: the id travels, the path is derived.
-	if code := h.run("show", "webapp"); code != 0 || !strings.Contains(h.out.String(), filepath.Join(newDir, "ai-ml")) {
-		t.Fatalf("the project's knowledge base follows: exit %d\n%s", code, h.out.String())
-	}
-	if code := h.run("history", "ai-ml"); code != 0 || !strings.Contains(h.out.String(), "setup") {
-		t.Fatalf("the moved vault keeps its history: exit %d\n%s", code, h.out.String())
-	}
-}
-
-func TestRelocateRefusesABadTargetAndChangesNothing(t *testing.T) {
-	h, oldDir := setup(t)
-	full := filepath.Join(t.TempDir(), "full")
-	os.MkdirAll(full, 0o755)
-	os.WriteFile(filepath.Join(full, "a.txt"), []byte("x"), 0o644)
-	for _, tc := range []struct{ name, target, want string }{
-		{"inside", filepath.Join(oldDir, "inner"), "inside the vaults directory"},
-		{"above", filepath.Dir(oldDir), "holds the vaults directory"},
-		{"not empty", full, "not empty"},
-	} {
-		if code := h.run("relocate", tc.target); code != 1 || !strings.Contains(h.err.String(), tc.want) {
-			t.Fatalf("%s: exit %d, want the error to say %q, got %q", tc.name, code, tc.want, h.err.String())
-		}
-	}
-	if h.config(t).VaultsDir != oldDir {
-		t.Fatalf("a refused move leaves the config alone, got %q", h.config(t).VaultsDir)
-	}
-	if code := h.run("relocate"); code != 2 {
-		t.Fatalf("relocate with no path is a usage error, got exit %d", code)
+	if code := h.run("relocate", "x"); code != 2 {
+		t.Fatalf("relocate is gone: exit %d", code)
 	}
 }
 

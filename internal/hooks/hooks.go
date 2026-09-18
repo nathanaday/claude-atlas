@@ -166,6 +166,12 @@ func projectLines(b *strings.Builder, pl *place.Place, now time.Time) {
 func knowledgeLines(b *strings.Builder, pl *place.Place, now time.Time) {
 	v := pl.Vault
 	fmt.Fprintf(b, "claude-atlas: knowledge base %s (%s mode) at %s\n", v.Name(), v.Config.Mode, home.Display(v.Root))
+	switch pl.Heal {
+	case vaults.HealMoved:
+		b.WriteString("The atlas config listed this knowledge base at another path; it now points here.\n")
+	case vaults.HealAdded:
+		b.WriteString("The atlas config did not list this knowledge base; it does now.\n")
+	}
 	if v.Config.Scope != "" {
 		b.WriteString("Scope: " + v.Config.Scope + "\n")
 	}

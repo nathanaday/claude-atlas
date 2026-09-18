@@ -356,30 +356,31 @@ everything is. `config.json`, schema `claude-atlas.config.v3`:
 ```json
 {
   "schema": "claude-atlas.config.v3",
-  "vaults_dir": "~/Vaults",
-  "knowledge": ["~/elsewhere/papers"],
+  "knowledge": ["~/Vaults/product-x", "~/elsewhere/papers"],
   "projects": ["~/code/webapp", "~/code/fw", "~/Documents/thesis"],
   "plugin": {}, "claude_code": {}, "heat": {}
 }
 ```
 
-- `vaults_dir` holds knowledge bases. A new one goes to `<vaults_dir>/<name>`;
-  the scan walks five levels deep as today, so a v2 layout with `knowledge/`
-  under it still resolves. `knowledge` lists knowledge bases outside it.
-- `projects` lists the work folders, the parent of each `atlas/`. Every
-  project is listed, because the atlas never scans for projects: they live
-  where the user's work lives, which is anywhere. `init` and the hook write
-  the list; `forget` removes from it.
+- `knowledge` lists every knowledge base's folder. `new-knowledge` and
+  `adopt` write the list, `remove` drops from it, and a session started in a
+  knowledge base heals it by id, as for a project. A bare name given to
+  `new-knowledge` is a folder in the current directory.
+- `projects` lists the work folders, the parent of each `atlas/`. `init` and
+  the hook write the list; `forget` removes from it.
+- The atlas never searches the disk. Both kinds live wherever the user puts
+  them, and the config names each one.
+- `vaults_dir` is gone, and `relocate` with it. A knowledge base's folder
+  moves like a project's: by hand, and the next session in it heals the
+  entry. A v3 config that still carries `vaults_dir` loads without it; a
+  knowledge base that only the old walk found is registered again with
+  `adopt`.
 - `repos` and `default_repo_changes` are gone.
 - `state/registry.json` is derived: every knowledge base with its projects,
   page counts, heat, and inbox count; every project with its path, its
   knowledge base resolved, its open task counts by status, its phases, and
   whether the path exists. `refresh` rebuilds it. Every command that acts on
   a vault or a project resolves afresh.
-
-`relocate` moves the vaults directory as today and rewrites `knowledge`
-entries under the old root. It leaves `projects` alone, because projects
-were never under it.
 
 ## Tools
 
@@ -413,7 +414,7 @@ today.
 | `describe PROJECT` | stage a snapshot into the knowledge base inbox; the skill writes the page |
 | `new-knowledge NAME [--scope] [--mode] [PATH]`, `adopt PATH`, `edit KB --scope --mode`, `remove KB` | knowledge bases, as today minus access |
 | `plant PROJECT TEXT [--phase] [--priority] [--due]`, `tasks [PROJECT]`, `task PROJECT ID --status --priority --phase --due`, `phase PROJECT …` | tasks from the terminal |
-| `list`, `show NAME`, `refresh`, `doctor`, `relocate`, `config` | the atlas |
+| `list`, `show NAME`, `refresh`, `doctor`, `config` | the atlas |
 | `open-vault KB`, `open-claude NAME [--task ID]`, `view` | launching |
 | `ingest KB [PATH…]` | stage files into a knowledge base inbox |
 

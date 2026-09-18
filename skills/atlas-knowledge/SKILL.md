@@ -16,7 +16,10 @@ names already taken.
 ## Ask, in this order
 
 1. **Name.** It becomes the folder's name.
-2. **Location.** Default `<vaults dir>/<name>`, or a path.
+2. **Location.** The folder the knowledge base goes in, as an absolute or `~`
+   path. There is no default place. Suggest the parent folder of the
+   knowledge bases `atlas` lists, when they share one. Never a folder inside
+   a project or inside another knowledge base.
 3. **Scope.** Two sentences: what it holds, and what it does not. A project
    session and its ingest read the scope to know what belongs here, so a
    scope that overlaps another knowledge base's sends sources to the wrong
@@ -33,8 +36,7 @@ One line, then yes:
 
 > Create knowledge base `product-x` at `~/Vaults/product-x`, scope "The thermal fire-detection product line: cameras, firmware, alarm pipeline, false-alarm sources and mitigations. Not personal projects."?
 
-On yes: `vault` with `action: create`, `name`, `path` when not the default,
-`scope`, and `mode`. Report the result. Then say what comes next: `init` in
+On yes: `vault` with `action: create`, `name`, `path`, `scope`, and `mode`. Report the result. Then say what comes next: `init` in
 a work folder makes a project, `link` connects it here, and sources go in
 this knowledge base's `inbox/`.
 
@@ -53,9 +55,7 @@ the old vault is deleted by hand once nothing in it is wanted.
 - Rename: `vault` with `action: edit`, `target`, and `name`, the new name.
   The folder moves with the name; say so.
 - Mode: the `wiki-mode` skill, in the knowledge base's session.
-- Forget: `vault` with `action: forget` and `target`. The folder stays. A knowledge base
-  inside the vaults directory cannot be forgotten, because the scan finds it
-  there; the tool says so, and the answer is to move or delete the folder by
-  hand.
+- Forget: `vault` with `action: forget` and `target`. The folder stays, and
+  a session started in it lists it again.
 
 The tool call comes after a yes. Never make the folder or its files yourself.

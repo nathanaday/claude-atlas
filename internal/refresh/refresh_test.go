@@ -118,11 +118,12 @@ func projectFixture(t *testing.T, now time.Time) (*home.Config, registry.Entry, 
 		t.Skip("git is not installed")
 	}
 	root := t.TempDir()
-	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults"), Heat: &home.HeatConfig{NewDays: 7}}
-	kb := filepath.Join(cfg.VaultsDir, "ai-ml")
+	cfg := &home.Config{Schema: home.ConfigSchema, Heat: &home.HeatConfig{NewDays: 7}}
+	kb := filepath.Join(root, "Vaults", "ai-ml")
 	if _, err := vault.Init(kb, vault.Options{Name: "ai-ml"}, now); err != nil {
 		t.Fatal(err)
 	}
+	cfg.AddKnowledge(kb)
 	kbv, _ := vault.Open(kb)
 	code := filepath.Join(root, "code")
 	os.MkdirAll(code, 0o755)
@@ -227,8 +228,10 @@ func TestCreationTouchesAProject(t *testing.T) {
 func TestRegistryDerivesEveryEntry(t *testing.T) {
 	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.Local)
 	cfg, _, _ := projectFixture(t, now)
-	os.MkdirAll(filepath.Join(cfg.VaultsDir, "old", "wiki"), 0o755)
-	os.WriteFile(filepath.Join(cfg.VaultsDir, "old", vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1"}`), 0o644)
+	old := filepath.Join(t.TempDir(), "old")
+	os.MkdirAll(filepath.Join(old, "wiki"), 0o755)
+	os.WriteFile(filepath.Join(old, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1"}`), 0o644)
+	cfg.AddKnowledge(old)
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	entries, ix, err := Registry(home.Home{Root: filepath.Join(root, "home")}, cfg, stateDir, now)

@@ -16,29 +16,33 @@ import (
 
 var now = time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 
-// fixture makes a vaults directory with two knowledge bases, one knowledge base outside
-// it, a v1 vault, a v2 project vault, and an unreadable identity file; and three
-// projects: two on ai-ml, one that names a knowledge base the machine does not have.
+// fixture lists three knowledge bases, a v1 vault, a v2 project vault, and an
+// unreadable identity file in the config, and leaves one knowledge base out of it; and
+// three projects: two on ai-ml, one that names a knowledge base the machine does not
+// have.
 func fixture(t *testing.T) (*home.Config, map[string]*vault.Vault, map[string]*project.Project) {
 	t.Helper()
 	if !gitx.Available() {
 		t.Skip("git is not installed")
 	}
 	root := t.TempDir()
-	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
+	cfg := &home.Config{}
 	vs := map[string]*vault.Vault{}
-	mk := func(rel string, opts vault.Options) {
+	mk := func(rel string, opts vault.Options) string {
 		path := filepath.Join(root, filepath.FromSlash(rel))
 		if _, err := vault.Init(path, opts, now); err != nil {
 			t.Fatal(err)
 		}
 		v, _ := vault.Open(path)
 		vs[opts.Name] = v
+		return path
 	}
-	mk("Vaults/ai-ml", vault.Options{Name: "ai-ml", Scope: "Machine learning."})
-	mk("Vaults/deep/nested/robotics", vault.Options{Name: "robotics"})
-	mk("Elsewhere/side", vault.Options{Name: "side"})
-	cfg.Knowledge = []string{filepath.Join(root, "Elsewhere", "side")}
+	cfg.Knowledge = []string{
+		mk("Vaults/ai-ml", vault.Options{Name: "ai-ml", Scope: "Machine learning."}),
+		mk("Vaults/deep/nested/robotics", vault.Options{Name: "robotics"}),
+		mk("Elsewhere/side", vault.Options{Name: "side"}),
+	}
+	mk("Vaults/unlisted", vault.Options{Name: "unlisted"})
 	old := filepath.Join(root, "Vaults", "old")
 	os.MkdirAll(filepath.Join(old, "wiki"), 0o755)
 	os.WriteFile(filepath.Join(old, vault.Marker), []byte(`{"schema":"claude-atlas.vault.v1","mode":"generic"}`), 0o644)
@@ -48,8 +52,7 @@ func fixture(t *testing.T) (*home.Config, map[string]*vault.Vault, map[string]*p
 	bad := filepath.Join(root, "Vaults", "bad")
 	os.MkdirAll(bad, 0o755)
 	os.WriteFile(filepath.Join(bad, vault.Marker), []byte(`{not json`), 0o644)
-	os.MkdirAll(filepath.Join(root, "Vaults", ".hidden", "v"), 0o755)
-	os.WriteFile(filepath.Join(root, "Vaults", ".hidden", "v", vault.Marker), []byte(`{}`), 0o644)
+	cfg.Knowledge = append(cfg.Knowledge, old, v2project, bad)
 
 	ps := map[string]*project.Project{}
 	mkp := func(rel string, opts project.Options) {
@@ -104,6 +107,9 @@ func TestScanFindsEveryEntryAndSortsThem(t *testing.T) {
 	}
 	if _, err := ix.Find("old", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("find old: %v", err)
+	}
+	if e := ix.ByPath(vs["unlisted"].Root); e != nil {
+		t.Fatalf("the scan searches no folder, so a knowledge base the config does not list is not found: %+v", e)
 	}
 	for _, e := range append(ix.Projects(), ix.Knowledge()...) {
 		if e.Error != "" {
@@ -305,29 +311,15 @@ func TestScanMakesMissingEntries(t *testing.T) {
 	}
 }
 
-func TestScanDepthLimit(t *testing.T) {
-	if !gitx.Available() {
-		t.Skip("git is not installed")
-	}
-	root := t.TempDir()
-	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
-	five := filepath.Join(cfg.VaultsDir, "d1", "d2", "d3", "d4", "d5")
-	if _, err := vault.Init(five, vault.Options{Name: "five"}, now); err != nil {
-		t.Fatal(err)
-	}
-	six := filepath.Join(cfg.VaultsDir, "e1", "e2", "e3", "e4", "e5", "d6")
-	if _, err := vault.Init(six, vault.Options{Name: "six"}, now); err != nil {
-		t.Fatal(err)
-	}
-	ix, err := Scan(cfg)
+func TestScanNamesAListedFolderThatIsNoKnowledgeBase(t *testing.T) {
+	plain := t.TempDir()
+	ix, err := Scan(&home.Config{Knowledge: []string{plain}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e := ix.ByPath(five); e == nil {
-		t.Fatalf("a vault root five levels down was not found")
-	}
-	if e := ix.ByPath(six); e != nil {
-		t.Fatalf("a vault root six levels down was found: %+v", e)
+	e := ix.ByPath(plain)
+	if e == nil || e.Reason != ReasonNotVault || !strings.Contains(e.Error, "claude-atlas adopt") || !strings.Contains(e.Error, "claude-atlas remove") {
+		t.Fatalf("a listed folder with no identity file is an entry that says what to do: %+v", e)
 	}
 }
 
@@ -362,15 +354,15 @@ func TestByPathFollowsASymlinkedAncestor(t *testing.T) {
 	}
 }
 
-// An entry the scan finds and the config also lists, under a spelling that reaches it
-// through a symlink, is one entry.
+// An entry the config lists twice, once under a spelling that reaches it through a
+// symlink, is one entry.
 func TestScanDedupesAnEntryRegisteredThroughASymlink(t *testing.T) {
 	if !gitx.Available() {
 		t.Skip("git is not installed")
 	}
 	root := t.TempDir()
-	cfg := &home.Config{VaultsDir: filepath.Join(root, "Vaults")}
-	real := filepath.Join(cfg.VaultsDir, "ai-ml")
+	cfg := &home.Config{}
+	real := filepath.Join(root, "Vaults", "ai-ml")
 	if _, err := vault.Init(real, vault.Options{Name: "ai-ml"}, now); err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +370,7 @@ func TestScanDedupesAnEntryRegisteredThroughASymlink(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skipf("symlinks are not available: %v", err)
 	}
-	cfg.Knowledge = []string{link}
+	cfg.Knowledge = []string{real, link}
 	work := filepath.Join(root, "work")
 	os.MkdirAll(work, 0o755)
 	if _, _, err := project.Init(work, project.Options{}, now); err != nil {

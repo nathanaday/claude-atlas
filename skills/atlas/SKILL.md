@@ -38,14 +38,14 @@ not know.
   reads. Say what the value means before changing it: how long a knowledge
   base or project counts as new in the view.
 - `atlas` with `refresh: true` reads everything again and rewrites the
-  registry. Run it after the user moved a folder by hand; a project heals
-  its own path when a session starts in it, so refresh is for the view, not
-  for the projects.
+  registry. Run it after the user moved a folder by hand; a project or a
+  knowledge base heals its own path when a session starts in it, so refresh
+  is for the view, not for the config.
 
 ## What stays in the terminal
 
 `claude-atlas doctor` (the installation check), `upgrade`, `recover`,
-`setup`, `relocate`, `open-vault`, and `open-claude` are commands, not
+`setup`, `open-vault`, and `open-claude` are commands, not
 tools. Name the command; do not run it through Bash unless the user asks.
 
 Every write here is reversible or leaves the folder alone, so no plan

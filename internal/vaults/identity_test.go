@@ -17,9 +17,8 @@ import (
 
 var identityNow = time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 
-// fixtureEntries makes two knowledge bases under a temp vaults directory and one
-// project in a work folder outside it, and returns the config, the home, and the
-// scanned entries of ai-ml and the project.
+// fixtureEntries makes two knowledge bases and one project, all listed in the config,
+// and returns the config, the home, and the scanned entries of ai-ml and the project.
 func fixtureEntries(t *testing.T) (*home.Config, home.Home, registry.Entry, registry.Entry) {
 	t.Helper()
 	if !gitx.Available() {
@@ -27,12 +26,13 @@ func fixtureEntries(t *testing.T) (*home.Config, home.Home, registry.Entry, regi
 	}
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
-	cfg := &home.Config{Schema: home.ConfigSchema, VaultsDir: filepath.Join(root, "Vaults")}
-	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "ai-ml"), vault.Options{Name: "ai-ml"}, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := vault.Init(filepath.Join(cfg.VaultsDir, "robotics"), vault.Options{Name: "robotics"}, identityNow); err != nil {
-		t.Fatal(err)
+	cfg := &home.Config{Schema: home.ConfigSchema}
+	for _, name := range []string{"ai-ml", "robotics"} {
+		path := filepath.Join(root, "Vaults", name)
+		if _, err := vault.Init(path, vault.Options{Name: name}, identityNow); err != nil {
+			t.Fatal(err)
+		}
+		cfg.AddKnowledge(path)
 	}
 	work := filepath.Join(root, "Code", "webapp")
 	if err := os.MkdirAll(work, 0o755); err != nil {
@@ -46,7 +46,7 @@ func fixtureEntries(t *testing.T) (*home.Config, home.Home, registry.Entry, regi
 	if err != nil {
 		t.Fatal(err)
 	}
-	kb := ix.ByPath(filepath.Join(cfg.VaultsDir, "ai-ml"))
+	kb := ix.ByPath(filepath.Join(root, "Vaults", "ai-ml"))
 	proj := ix.ByPath(work)
 	if kb == nil || proj == nil {
 		t.Fatalf("fixture missing entries: %+v", ix.Entries)
@@ -80,72 +80,93 @@ func lastCommitSubject(t *testing.T, dir string) string {
 
 func strPtr(s string) *string { return &s }
 
-func TestPathForAndResolvePath(t *testing.T) {
-	dir := filepath.FromSlash("/vaults")
-	if got := PathFor(dir, "ai-ml"); got != filepath.Join(dir, "ai-ml") {
-		t.Fatalf("PathFor: %s", got)
+func TestResolvePath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	here, _ := os.Getwd()
+	if got, err := ResolvePath("ai-ml"); err != nil || got != filepath.Join(here, "ai-ml") {
+		t.Fatalf("a bare name is a folder in the current directory: %s, %v", got, err)
 	}
-	if got, err := ResolvePath("ai-ml", dir); err != nil || got != filepath.Join(dir, "ai-ml") {
-		t.Fatalf("ResolvePath bare name: %s, %v", got, err)
+	if got, err := ResolvePath("../x"); err != nil || got != filepath.Join(filepath.Dir(here), "x") {
+		t.Fatalf("a relative path: %s, %v", got, err)
 	}
-	rel, err := ResolvePath("./x", dir)
-	if err != nil {
-		t.Fatal(err)
+	userHome, _ := os.UserHomeDir()
+	if got, err := ResolvePath("~/x"); err != nil || got != filepath.Join(userHome, "x") {
+		t.Fatalf("a ~ path: %s, %v", got, err)
 	}
-	if filepath.Base(rel) != "x" || strings.HasPrefix(rel, dir) {
-		t.Fatalf("ResolvePath relative: %s", rel)
-	}
-	tilde, err := ResolvePath("~/x", dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if filepath.Base(tilde) != "x" || strings.HasPrefix(tilde, "~") {
-		t.Fatalf("ResolvePath tilde: %s", tilde)
+	if _, err := ResolvePath(" "); err == nil {
+		t.Fatal("a blank argument names nothing")
 	}
 }
 
 func TestRegisterAndUnregister(t *testing.T) {
 	cfg, h, kb, _ := fixtureEntries(t)
 
-	// A vault under VaultsDir needs no entry.
 	changed, err := Register(h, cfg, kb.Path)
 	if err != nil || changed {
-		t.Fatalf("register inside: changed=%v err=%v", changed, err)
-	}
-	if len(cfg.Knowledge) != 0 {
-		t.Fatalf("cfg.Knowledge should stay empty: %v", cfg.Knowledge)
+		t.Fatalf("a listed knowledge base changes nothing: changed=%v err=%v", changed, err)
 	}
 	if _, err := Register(h, cfg, t.TempDir()); err == nil {
 		t.Fatal("a folder that is not a vault cannot be registered")
 	}
 
-	outside := t.TempDir()
-	if _, err := vault.Init(outside, vault.Options{Name: "outside"}, identityNow); err != nil {
+	other := t.TempDir()
+	if _, err := vault.Init(other, vault.Options{Name: "other"}, identityNow); err != nil {
 		t.Fatal(err)
 	}
-	changed, err = Register(h, cfg, outside)
+	changed, err = Register(h, cfg, other)
 	if err != nil || !changed {
-		t.Fatalf("register outside: changed=%v err=%v", changed, err)
+		t.Fatalf("register: changed=%v err=%v", changed, err)
 	}
 	reloaded, err := h.Load()
-	if err != nil || len(reloaded.Knowledge) != 1 || reloaded.Knowledge[0] != outside {
-		t.Fatalf("outside vault not saved: %+v %v", reloaded, err)
+	if err != nil || !reloaded.HasKnowledge(other) {
+		t.Fatalf("the entry is saved: %+v %v", reloaded, err)
 	}
-	changed, err = Register(h, cfg, outside)
-	if err != nil || changed {
-		t.Fatalf("register again: changed=%v err=%v", changed, err)
+	if err := Unregister(h, cfg, kb.Path); err != nil {
+		t.Fatalf("any listed knowledge base can be forgotten: %v", err)
 	}
-	if err := Unregister(h, cfg, outside); err != nil {
+	if err := Unregister(h, cfg, other); err != nil {
 		t.Fatal(err)
 	}
-	if reloaded, _ := h.Load(); len(reloaded.Knowledge) != 0 {
-		t.Fatalf("outside vault still registered: %v", reloaded.Knowledge)
+	if reloaded, _ := h.Load(); reloaded.HasKnowledge(other) || reloaded.HasKnowledge(kb.Path) {
+		t.Fatalf("still registered: %v", reloaded.Knowledge)
 	}
-	if err := Unregister(h, cfg, outside); err == nil {
+	if _, err := os.Stat(other); err != nil {
+		t.Fatal("forgetting keeps the folder")
+	}
+	if err := Unregister(h, cfg, other); err == nil {
 		t.Fatal("unregistering twice is an error")
 	}
-	if err := Unregister(h, cfg, kb.Path); err == nil || !strings.Contains(err.Error(), "vaults directory") {
-		t.Fatalf("unregister inside: %v", err)
+}
+
+func TestRegisterKnowledgeHeals(t *testing.T) {
+	cfg, h, kb, _ := fixtureEntries(t)
+	v, err := vault.Open(kb.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heal, err := RegisterKnowledge(h, cfg, v); err != nil || heal != HealNone {
+		t.Fatalf("a listed knowledge base needs nothing: %q %v", heal, err)
+	}
+	// One the config does not list is added.
+	clone := filepath.Join(t.TempDir(), "clone")
+	if _, err := vault.Init(clone, vault.Options{Name: "clone"}, identityNow); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := vault.Open(clone)
+	if heal, err := RegisterKnowledge(h, cfg, c); err != nil || heal != HealAdded || !cfg.HasKnowledge(clone) {
+		t.Fatalf("added: %q %v %v", heal, err, cfg.Knowledge)
+	}
+	if saved, _ := h.Load(); !saved.HasKnowledge(clone) {
+		t.Fatal("the heal is saved")
+	}
+	// A folder moved away is followed by its id.
+	moved := filepath.Join(t.TempDir(), "moved")
+	if err := os.Rename(kb.Path, moved); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := vault.Open(moved)
+	if heal, err := RegisterKnowledge(h, cfg, m); err != nil || heal != HealMoved || !cfg.HasKnowledge(moved) || cfg.HasKnowledge(kb.Path) {
+		t.Fatalf("moved: %q %v %v", heal, err, cfg.Knowledge)
 	}
 }
 

@@ -27,12 +27,13 @@ func atlas(t *testing.T) (home.Home, *home.Config, string, string) {
 	}
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
-	cfg := h.Default(filepath.Join(root, "Vaults"))
-	if err := h.Save(cfg); err != nil {
+	cfg := h.Default()
+	kb := filepath.Join(root, "Vaults", "ai-ml")
+	if _, err := vault.Init(kb, vault.Options{Name: "ai-ml"}, now); err != nil {
 		t.Fatal(err)
 	}
-	kb := filepath.Join(cfg.VaultsDir, "ai-ml")
-	if _, err := vault.Init(kb, vault.Options{Name: "ai-ml"}, now); err != nil {
+	cfg.AddKnowledge(kb)
+	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
 	work := filepath.Join(root, "Code", "webapp")

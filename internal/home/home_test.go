@@ -29,7 +29,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if _, err := h.Load(); err == nil {
 		t.Fatal("load before setup should fail")
 	}
-	cfg := h.Default("~/Docs/Vaults")
+	cfg := h.Default()
+	cfg.AddKnowledge("~/Docs/notes")
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	userHome, _ := os.UserHomeDir()
-	if back.VaultsDir != filepath.Join(userHome, "Docs", "Vaults") {
+	if len(back.Knowledge) != 1 || back.Knowledge[0] != filepath.Join(userHome, "Docs", "notes") || !back.HasKnowledge("~/Docs/notes") {
 		t.Fatalf("got %+v", back)
 	}
 	if back.Plugin.ID == "" {
@@ -48,7 +49,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 
 func TestConfigV3FieldsAndOlderConfigsUpgrade(t *testing.T) {
 	h := Home{Root: t.TempDir()}
-	cfg := h.Default("~/Vaults")
+	cfg := h.Default()
 	cfg.Schema = ConfigSchemaV1
 	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
@@ -75,9 +76,6 @@ func TestConfigV3FieldsAndOlderConfigsUpgrade(t *testing.T) {
 	}
 	if !again.HasProject("~/Code/webapp") || again.HasProject("~/Code/other") {
 		t.Fatal("HasProject")
-	}
-	if !again.Inside(filepath.Join(again.VaultsDir, "x")) || again.Inside(again.Knowledge[0]) {
-		t.Fatal("Inside")
 	}
 	if !again.RemoveKnowledge(again.Knowledge[0]) || again.RemoveKnowledge("~/nope") || len(again.Knowledge) != 0 {
 		t.Fatalf("knowledge removal %+v", again)
@@ -120,7 +118,7 @@ func TestV2ConfigVaultsBecomeKnowledge(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(h.ConfigPath())
-	for _, gone := range []string{"repos", "default_repo_changes", `"vaults"`} {
+	for _, gone := range []string{"repos", "default_repo_changes", `"vaults"`, "vaults_dir"} {
 		if strings.Contains(string(data), gone) {
 			t.Fatalf("%s should not survive a save:\n%s", gone, data)
 		}

@@ -138,13 +138,14 @@ func ForgetProject(h home.Home, cfg *home.Config, work string) error {
 	return h.Save(cfg)
 }
 
-// Heal is what Register did to the config for a project a session started in.
+// Heal is what RegisterProject or RegisterKnowledge did to the config for the place a
+// session started in.
 type Heal string
 
 const (
-	HealNone  Heal = ""      // the config listed the project at this path already
-	HealMoved Heal = "moved" // the config listed the project's id at another path
-	HealAdded Heal = "added" // the config did not list the project
+	HealNone  Heal = ""      // the config listed it at this path already
+	HealMoved Heal = "moved" // the config listed its id, or its gone folder, at another path
+	HealAdded Heal = "added" // the config did not list it
 )
 
 // RegisterProject makes sure the config lists the project at p.Root: it adds one the
@@ -157,24 +158,38 @@ func RegisterProject(h home.Home, cfg *home.Config, p *project.Project) (Heal, e
 	if cfg.HasProject(p.Root) {
 		return HealNone, nil
 	}
-	heal := HealAdded
-	var gone []string
-	for _, work := range append([]string(nil), cfg.Projects...) {
-		if other, ok := project.ReadConfig(work); ok {
-			if other.ID == p.Config.ID {
-				cfg.RemoveProject(work)
-				heal = HealMoved
-			}
-			continue
-		}
-		if _, err := os.Stat(work); err != nil {
-			gone = append(gone, work)
-		}
-	}
-	if heal == HealAdded && len(gone) == 1 {
-		cfg.RemoveProject(gone[0])
-		heal = HealMoved
+	drop, heal := healPaths(cfg.Projects, p.Config.ID, func(path string) (string, bool) {
+		c, ok := project.ReadConfig(path)
+		return c.ID, ok
+	})
+	for _, path := range drop {
+		cfg.RemoveProject(path)
 	}
 	cfg.AddProject(p.Root)
 	return heal, h.Save(cfg)
+}
+
+// healPaths decides which listed paths an entry with id, found at a path the list does
+// not hold, replaces: every path whose identity carries the id, else the one path that
+// is gone when exactly one is.
+func healPaths(listed []string, id string, readID func(string) (string, bool)) ([]string, Heal) {
+	var same, gone []string
+	for _, path := range listed {
+		if other, ok := readID(path); ok {
+			if other == id {
+				same = append(same, path)
+			}
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			gone = append(gone, path)
+		}
+	}
+	switch {
+	case len(same) > 0:
+		return same, HealMoved
+	case len(gone) == 1:
+		return gone, HealMoved
+	}
+	return nil, HealAdded
 }

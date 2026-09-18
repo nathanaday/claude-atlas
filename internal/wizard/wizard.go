@@ -3,7 +3,6 @@ package wizard
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -20,8 +19,7 @@ import (
 // Options come from setup's flags.
 type Options struct {
 	Version      string
-	VaultsDir    string
-	FirstVault   string
+	FirstVault   string // a name, a folder in the current directory, or a path
 	PluginSource string // marketplace source override, e.g. a local checkout
 	WithPlugin   bool
 }
@@ -35,20 +33,13 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	fresh := !h.Exists()
 	var cfg *home.Config
 	if fresh {
-		dir := opts.VaultsDir
-		if dir == "" {
-			dir = c.Ask("Where should your vaults live?", home.DefaultVaults)
-		}
-		cfg = h.Default(dir)
+		cfg = h.Default()
 	} else {
 		loaded, err := h.Load()
 		if err != nil {
 			return 1, err
 		}
 		cfg = loaded
-		if opts.VaultsDir != "" {
-			cfg.VaultsDir = home.Expand(opts.VaultsDir)
-		}
 	}
 	if opts.PluginSource != "" {
 		cfg.Plugin.Source = home.Expand(opts.PluginSource)
@@ -65,16 +56,16 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	}
 	firstPath := ""
 	if len(ix.Knowledge()) == 0 {
-		name := opts.FirstVault
-		if name == "" {
-			name = c.Ask("Name for your first knowledge base", "notes")
+		arg := opts.FirstVault
+		if arg == "" {
+			arg = c.Ask("Your first knowledge base: a path, or a name for a folder here", "notes")
 		}
-		path, err := vaults.ResolvePath(name, cfg.VaultsDir)
+		path, err := vaults.ResolvePath(arg)
 		if err != nil {
 			return 1, err
 		}
-		if _, err := os.Stat(path); err == nil {
-			return 1, fmt.Errorf("%s already exists; choose another name or adopt it with `claude-atlas adopt`", home.Display(path))
+		if err := vaults.CheckNewPath(path); err != nil {
+			return 1, err
 		}
 		firstPath = path
 	}
@@ -93,24 +84,20 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	default:
 		plan(c, "plugin", "install", fmt.Sprintf("%s from %s via `claude plugin`", cfg.Plugin.ID, cfg.Plugin.Source))
 	}
-	plan(c, "vaults dir", "use", home.Display(cfg.VaultsDir))
 	if firstPath != "" {
 		plan(c, "knowledge base", "create", home.Display(firstPath))
 	} else {
-		found, needAdopting := 0, 0
+		needAdopting := 0
 		for _, e := range ix.Entries {
-			switch {
-			case e.Reason == registry.ReasonV1:
+			if e.Reason == registry.ReasonV1 {
 				needAdopting++
-			case e.Error == "":
-				found++
 			}
 		}
-		note := fmt.Sprintf("%d found", found)
+		note := fmt.Sprintf("%d listed", len(ix.Knowledge()))
 		if needAdopting > 0 {
 			note += fmt.Sprintf(", %d need adopting", needAdopting)
 		}
-		plan(c, "vaults", "keep", note)
+		plan(c, "knowledge", "keep", note)
 	}
 	c.Say("")
 	ok, err := c.Confirm("Proceed?", true)
@@ -151,15 +138,10 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 		if _, err := vaults.Create(firstPath, vault.Options{Name: filepath.Base(firstPath)}, c, false); err != nil {
 			return 1, err
 		}
-		registered, err := vaults.Register(h, cfg, firstPath)
-		if err != nil {
+		if _, err := vaults.Register(h, cfg, firstPath); err != nil {
 			return 1, err
 		}
-		note := home.Display(firstPath)
-		if registered {
-			note += "; recorded in the config, since it is outside " + home.Display(cfg.VaultsDir)
-		}
-		c.Step(console.OK, "knowledge base", note)
+		c.Step(console.OK, "knowledge base", home.Display(firstPath))
 	}
 	entries, _, err := refresh.Registry(h, cfg, h.StateDir(), time.Now())
 	if err != nil {
@@ -178,7 +160,6 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	c.Say("")
 	c.Say("Setup complete.")
 	c.Say("")
-	c.Say("  Vaults          %s", home.Display(cfg.VaultsDir))
 	if firstPath != "" {
 		c.Say("  Knowledge base  %s", home.Display(firstPath))
 	}
@@ -187,7 +168,7 @@ func Run(h home.Home, c *console.Console, opts Options) (int, error) {
 	c.Say("")
 	c.Say("Next:")
 	c.Say("  cd <your work> && claude-atlas init   make a folder or repository a project")
-	c.Say("  claude-atlas new-knowledge NAME       create another knowledge base")
+	c.Say("  claude-atlas new-knowledge PATH       create another knowledge base")
 	c.Say("  claude-atlas open-claude NAME         start Claude Code in a knowledge base or project")
 	c.Say("  claude-atlas refresh                  read everything again")
 	if installed == nil {

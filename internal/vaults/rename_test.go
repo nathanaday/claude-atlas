@@ -70,24 +70,17 @@ func TestRenameCleansANameThatCannotBeAFolder(t *testing.T) {
 	}
 }
 
-func TestRenameRewritesAConfigEntryForAVaultOutsideTheVaultsDir(t *testing.T) {
-	cfg, h, _, _ := fixtureEntries(t)
-	outside := filepath.Join(t.TempDir(), "side")
-	if _, err := vault.Init(outside, vault.Options{Name: "side"}, identityNow); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Register(h, cfg, outside); err != nil {
-		t.Fatal(err)
-	}
-	path, err := EditIdentity(h, cfg, *entryAt(t, cfg, outside), Edit{Name: "sideways"}, identityNow)
+func TestRenameRewritesTheConfigEntry(t *testing.T) {
+	cfg, h, kb, _ := fixtureEntries(t)
+	path, err := EditIdentity(h, cfg, kb, Edit{Name: "sideways"}, identityNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Knowledge) != 1 || cfg.Knowledge[0] != path {
+	if !cfg.HasKnowledge(path) || cfg.HasKnowledge(kb.Path) {
 		t.Fatalf("the config should point at the new folder: %+v", cfg.Knowledge)
 	}
 	saved, err := h.Load()
-	if err != nil || len(saved.Knowledge) != 1 || saved.Knowledge[0] != path {
+	if err != nil || !saved.HasKnowledge(path) || saved.HasKnowledge(kb.Path) {
 		t.Fatalf("and it should be saved: %+v %v", saved, err)
 	}
 }

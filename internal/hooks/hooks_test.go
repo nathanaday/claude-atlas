@@ -51,12 +51,13 @@ func atlas(t *testing.T, now time.Time) (home.Home, string, string) {
 	}
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
-	cfg := h.Default(filepath.Join(root, "Vaults"))
-	if err := h.Save(cfg); err != nil {
+	cfg := h.Default()
+	kb := filepath.Join(root, "Vaults", "ai-ml")
+	if _, err := vault.Init(kb, vault.Options{Name: "ai-ml", Scope: "Machine learning."}, now); err != nil {
 		t.Fatal(err)
 	}
-	kb := vaults.PathFor(cfg.VaultsDir, "ai-ml")
-	if _, err := vault.Init(kb, vault.Options{Name: "ai-ml", Scope: "Machine learning."}, now); err != nil {
+	cfg.AddKnowledge(kb)
+	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
 	work := filepath.Join(root, "code")
@@ -256,6 +257,35 @@ func TestSessionStartHealsTheConfigAndNamesAMissingKnowledgeBase(t *testing.T) {
 	project.Init(solo, project.Options{}, now)
 	if text = run(t, solo, e, false, now); !strings.Contains(text, "Knowledge: none; link one with `claude-atlas link KB`.") {
 		t.Errorf("missing the no-knowledge line:\n%s", text)
+	}
+}
+
+func TestSessionStartHealsAKnowledgeBase(t *testing.T) {
+	now := time.Now()
+	h, kb, work := atlas(t, now)
+	e := env(t, map[string]string{home.EnvHome: h.Root})
+	if text := run(t, kb, e, false, now); strings.Contains(text, "atlas config") {
+		t.Fatalf("a listed knowledge base needs no heal:\n%s", text)
+	}
+	moved := filepath.Join(t.TempDir(), "ai-ml")
+	if err := os.Rename(kb, moved); err != nil {
+		t.Fatal(err)
+	}
+	if text := run(t, filepath.Join(moved, "wiki"), e, false, now); !strings.Contains(text, "The atlas config listed this knowledge base at another path; it now points here.") {
+		t.Fatalf("missing the moved line:\n%s", text)
+	}
+	if cfg, _ := h.Load(); !cfg.HasKnowledge(moved) || cfg.HasKnowledge(kb) {
+		t.Fatalf("the config follows the folder: %+v", cfg.Knowledge)
+	}
+	if text := run(t, work, e, false, now); !strings.Contains(text, "Knowledge: ai-ml") {
+		t.Fatalf("the project reaches its moved knowledge base:\n%s", text)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	if _, err := vault.Init(other, vault.Options{Name: "other"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if text := run(t, other, e, false, now); !strings.Contains(text, "The atlas config did not list this knowledge base; it does now.") {
+		t.Fatalf("missing the added line:\n%s", text)
 	}
 }
 

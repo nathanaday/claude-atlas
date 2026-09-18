@@ -17,7 +17,7 @@ one tool from a Claude Code session, so scripts, muscle memory, and the
 | `p` plant a task on a project | `plant PROJECT TEXT` | `plant` |
 | `R` refresh | `refresh` | `atlas` with `refresh` |
 | `←` `→` switch tabs; `h` shows every key; `q` quits | — | — |
-| — | `new-knowledge NAME`, `adopt PATH`, `edit KB`, `remove KB` | `vault` |
+| — | `new-knowledge PATH`, `adopt PATH`, `edit KB`, `remove KB` | `vault` |
 | — | `init`, `link KB`, `unlink`, `forget PROJECT` | `project` |
 | — | `describe PROJECT` | `stage`, then the `describe` skill |
 | — | `ingest KB [PATH...]` | `stage`, then the `wiki-ingest` skill |
@@ -25,7 +25,7 @@ one tool from a Claude Code session, so scripts, muscle memory, and the
 | — | `config new-days N` | `settings` |
 | — | `stub KB [TITLE...]` | `stub` |
 | — | `lint`, `history`, `undo`, `mode`, `recover`, `upgrade`, `apply` | `lint`, `history`, `undo`, `mode` |
-| — | `relocate PATH`, `setup`, `doctor`, `info`, `version` | — |
+| — | `setup`, `doctor`, `info`, `version` | — |
 
 ## Two things
 
@@ -38,15 +38,16 @@ project uses one knowledge base; a knowledge base serves many projects.
 ## Create a knowledge base
 
 ```bash
-claude-atlas new-knowledge product-x --scope "The thermal fire-detection product line: cameras, firmware, alarm pipeline, false-alarm sources and mitigations."
-claude-atlas new-knowledge reading --mode lyt
+claude-atlas new-knowledge ~/Vaults/product-x --scope "The thermal fire-detection product line: cameras, firmware, alarm pipeline, false-alarm sources and mitigations."
+cd ~/Vaults && claude-atlas new-knowledge reading --mode lyt
 claude-atlas new-knowledge ~/Desktop/notes --name Notes
 ```
 
-A new knowledge base goes to `<vaults dir>/<name>`, `~/Vaults/product-x` by
-default. To put it somewhere else, give a path instead of a name. The atlas
-lists a knowledge base outside the vaults directory in its config, because
-the scan cannot find it there. Nothing else depends on where it is.
+A knowledge base goes where you say. A path is used as given; a bare name is
+a folder in the current directory, as `init` treats its path. The atlas
+lists the folder in its config; nothing else depends on where it is.
+`new-knowledge` refuses a folder that exists, and a folder inside another
+knowledge base or inside a project.
 
 The scope is one or two sentences: what the knowledge base holds and what it
 does not. A project session reads it to know what belongs there. Split a
@@ -67,9 +68,8 @@ parent stays; the folder takes the name cleaned for a path, so `Product X:
 Notes` files as `Product X- Notes` while the name keeps the colon. A taken
 folder refuses the whole edit.
 
-`remove` drops a knowledge base from the config; the folder stays. A
-knowledge base inside the vaults directory cannot be forgotten: the scan
-finds it there, so move or delete the folder.
+`remove` drops a knowledge base from the config; the folder stays. A session
+started in the folder lists it again.
 
 ## Make a project
 
@@ -386,14 +386,14 @@ claude-atlas view
 
 ### How the atlas finds things
 
-The atlas walks the vaults directory for knowledge base identity files
-(`.claude-atlas.json`), at most five levels deep, skipping folders whose name
-starts with a dot and folders named `node_modules`, and never looking inside
-a vault it has found. To that it adds the knowledge bases listed under
-`knowledge` in the config. Projects are never scanned for: every project's
-work folder is listed under `projects`, because projects live wherever your
-work lives. `init` writes the entry, `forget` removes it, and a session in a
-moved or cloned project heals it. Every command scans afresh before it acts.
+The atlas never searches your disk. The config lists every knowledge base's
+folder under `knowledge` and every project's work folder under `projects`,
+and the scan reads the identity file in each listed folder. `new-knowledge`
+and `adopt` write a knowledge base's entry and `remove` drops it; `init`
+writes a project's entry and `forget` drops it. A session started in a
+knowledge base or a project the config does not list adds it, and one
+started in a folder that moved heals the entry by id. Every command scans
+afresh before it acts.
 
 `refresh` runs the scan, reads each entry, and rewrites
 `~/.claude-atlas/state/registry.json`: every knowledge base with its page
@@ -418,36 +418,12 @@ A command names a knowledge base or a project by its name, by its id or an id
 prefix of eight characters or more, or by its path. Two entries with one name
 make the command ask for the path or the id instead.
 
-### Move the vaults somewhere else
-
-`relocate` moves the whole vaults directory and makes everything that points
-at it follow.
-
-```bash
-claude-atlas relocate ~/Documents/Vaults
-```
-
-It shows what moves, what `config.json` will say afterwards, and what holds
-the old path that the atlas will not change; then it asks. On the same volume
-the move is a rename. On another volume it copies, checks every file arrived,
-saves the config, and only then removes the old folder. Afterwards it
-refreshes. Projects live in your work, never under the vaults directory, so
-their entries stand.
-
-It refuses a target inside the vaults directory or holding it, a target
-inside a knowledge base, a folder that already holds files, and a move while
-a knowledge base has an interrupted operation to recover. Two kinds of state
-it reports rather than repairs: Obsidian's vault list, which drops a missing
-entry at its next launch and which `open-vault` fills again, and Claude
-Code's per-folder session history, permissions, and memory, which it keys by
-absolute path.
-
 ## Adopt an existing vault
 
 Turn a folder into a knowledge base: an Obsidian vault, a vault made with
 claude-obsidian, or a knowledge base from v1 or v2. It gains an identity file
-and git history; nothing in it is replaced. A vault outside the vaults
-directory is listed in the config, so the atlas finds it again.
+and git history; nothing in it is replaced. The config lists it, so the
+atlas finds it again.
 
 ```bash
 claude-atlas adopt ~/Documents/MyKnowledgeVault
@@ -461,7 +437,7 @@ A v2 project vault is refused. v3 projects are folders in the work: run
 
 ```bash
 claude-atlas setup
-claude-atlas setup --vaults-dir ~/Vaults --first-vault notes
+claude-atlas setup --first-vault ~/Vaults/notes
 claude-atlas setup --plugin-source ~/projects/software/claude-atlas   # install the plugin from a checkout
 claude-atlas setup --no-plugin
 claude-atlas doctor
@@ -470,9 +446,10 @@ claude-atlas version
 ```
 
 Setup shows its plan and asks before it acts: the atlas home, the plugin in
-Claude Code, and your first knowledge base. `doctor` checks git, Claude Code,
-the plugin's version against the binary's, every knowledge base the scan
-found, and every project the config lists, naming the ones whose folder is
+Claude Code, and your first knowledge base, at the path you give or in a
+folder named after it in the current directory. `doctor` checks git, Claude
+Code, the plugin's version against the binary's, and every knowledge base and
+project the config lists, naming the ones whose folder is
 gone or whose knowledge base is not on this machine.
 
 ## Scripts
@@ -491,8 +468,7 @@ claude-atlas apply product-x plan.json
 ```json
 {
   "schema": "claude-atlas.config.v3",
-  "vaults_dir": "/Users/you/Vaults",
-  "knowledge": ["/Users/you/elsewhere/papers"],
+  "knowledge": ["/Users/you/Vaults/product-x", "/Users/you/elsewhere/papers"],
   "projects": ["/Users/you/code/webapp", "/Users/you/code/fw"],
   "plugin": {
     "id": "claude-atlas@nathanaday-claude-atlas",
@@ -513,8 +489,7 @@ sets one and refreshes.
 
 | Setting | Effect |
 |---|---|
-| `vaults_dir` | the folder the scan walks, and where a new knowledge base goes. `claude-atlas relocate PATH` moves the vaults and changes it; `config` only prints it |
-| `knowledge` | knowledge bases outside `vaults_dir`; the scan cannot find them, so they are listed. `new-knowledge`, `adopt`, `remove`, and a rename that moves a folder keep this list |
+| `knowledge` | every knowledge base's folder. `new-knowledge`, `adopt`, `remove`, a rename that moves a folder, and the session hook keep this list |
 | `projects` | every project's work folder. `init`, `forget`, and the session hook keep this list |
 | `claude_code.prompt` | a first message sent on every `open-claude`, for example `/claude-atlas:wiki` |
 | `claude_code.args` | flags for `claude`, such as `--model` |

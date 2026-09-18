@@ -84,16 +84,18 @@ func TestTaskSummaryText(t *testing.T) {
 }
 
 func TestProblemFixNamesTheCommand(t *testing.T) {
-	cases := map[string]string{
-		registry.ReasonV1:         "claude-atlas adopt",
-		registry.ReasonV2Project:  "claude-atlas init",
-		registry.ReasonMissing:    "claude-atlas forget",
-		registry.ReasonNotProject: "claude-atlas init",
-		registry.ReasonSchema:     "update the binary",
+	cases := []struct{ reason, err, want string }{
+		{registry.ReasonV1, "e", "claude-atlas adopt"},
+		{registry.ReasonV2Project, "e", "claude-atlas init"},
+		{registry.ReasonMissing, "not found; work in it again to heal the path, or run claude-atlas forget", "claude-atlas forget"},
+		{registry.ReasonMissing, "not found; work in it again to heal the path, or run claude-atlas remove", "claude-atlas remove"},
+		{registry.ReasonNotProject, "e", "claude-atlas init"},
+		{registry.ReasonNotVault, "e", "claude-atlas adopt"},
+		{registry.ReasonSchema, "e", "update the binary"},
 	}
-	for reason, want := range cases {
-		if got := problemFix(registry.Entry{Path: "/x", Reason: reason, Error: "e"}); !strings.Contains(got, want) {
-			t.Errorf("%s: %q lacks %q", reason, got, want)
+	for _, tc := range cases {
+		if got := problemFix(registry.Entry{Path: "/x", Reason: tc.reason, Error: tc.err}); !strings.Contains(got, tc.want) || strings.HasPrefix(got, "not found") {
+			t.Errorf("%s: %q lacks %q", tc.reason, got, tc.want)
 		}
 	}
 }

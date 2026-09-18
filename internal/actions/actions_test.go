@@ -27,15 +27,13 @@ func atlas(t *testing.T) (home.Home, *home.Config, registry.Entry) {
 	}
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
-	cfg := h.Default(filepath.Join(root, "Vaults"))
-	if err := os.MkdirAll(h.Root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Save(cfg); err != nil {
-		t.Fatal(err)
-	}
-	kbPath := vaults.PathFor(cfg.VaultsDir, "kb")
+	cfg := h.Default()
+	kbPath := filepath.Join(root, "Vaults", "kb")
 	if _, err := vault.Init(kbPath, vault.Options{Name: "kb"}, now); err != nil {
+		t.Fatal(err)
+	}
+	cfg.AddKnowledge(kbPath)
+	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
 	ix, err := registry.Scan(cfg)
@@ -76,10 +74,7 @@ func TestBindSetsEveryField(t *testing.T) {
 func TestKnowledgeBasesCreateEditAndForget(t *testing.T) {
 	h, cfg, _ := atlas(t)
 	a := Bind(h, cfg, nil)
-	if a.VaultsDir != cfg.VaultsDir {
-		t.Fatal("VaultsDir")
-	}
-	path, err := a.CreateKnowledge(AddKnowledge{Name: "papers", Path: vaults.PathFor(cfg.VaultsDir, "papers"), Mode: "lyt", Scope: "Papers."})
+	path, err := a.CreateKnowledge(AddKnowledge{Name: "papers", Path: filepath.Join(t.TempDir(), "papers"), Mode: "lyt", Scope: "Papers."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,22 +89,18 @@ func TestKnowledgeBasesCreateEditAndForget(t *testing.T) {
 	if err != nil || filepath.Base(moved) != "Papers" {
 		t.Fatalf("rename: %q %v", moved, err)
 	}
-	// An adopted vault outside the vaults directory is registered and can be forgotten;
-	// one inside cannot.
+	// An adopted vault is registered, and any listed knowledge base can be forgotten.
 	outside := filepath.Join(t.TempDir(), "outside")
 	os.MkdirAll(filepath.Join(outside, "wiki"), 0o755)
 	adopted, err := a.CreateKnowledge(AddKnowledge{Path: outside, Adopt: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg2, _ := h.Load(); len(cfg2.Knowledge) != 1 || cfg2.Knowledge[0] != adopted {
+	if cfg2, _ := h.Load(); len(cfg2.Knowledge) != 3 || !cfg2.HasKnowledge(adopted) || !cfg2.HasKnowledge(moved) {
 		t.Fatalf("registered: %+v", cfg2.Knowledge)
 	}
 	if err := a.ForgetKnowledge(entry(t, a, adopted)); err != nil {
-		t.Fatalf("forget outside: %v", err)
-	}
-	if err := a.ForgetKnowledge(entry(t, a, moved)); err == nil || !strings.Contains(err.Error(), "vaults directory") {
-		t.Fatalf("forget inside: %v", err)
+		t.Fatalf("forget: %v", err)
 	}
 	if ix, err := a.Refresh(); err != nil || len(ix.Knowledge()) != 2 {
 		t.Fatalf("refresh: %v %v", ix, err)

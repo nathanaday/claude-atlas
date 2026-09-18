@@ -10,23 +10,28 @@ import (
 
 	"github.com/nathanaday/claude-atlas/internal/console"
 	"github.com/nathanaday/claude-atlas/internal/home"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
 var ErrCancelled = errors.New("cancelled")
 
 // CheckNewPath says why a new vault cannot go at path: something is there already, or
-// the path is inside another vault, whose git would take in the new vault's files.
+// the path is inside another vault, whose git would take in the new vault's files, or
+// inside a project, whose work is no place for a knowledge base.
 func CheckNewPath(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%s already exists; adopt it if it is a vault", home.Display(path))
 	}
-	return checkNotInsideVault(path)
+	return checkPlace(path)
 }
 
-func checkNotInsideVault(path string) error {
+func checkPlace(path string) error {
 	if outer := vault.FindAbove(filepath.Dir(path)); outer != "" {
-		return fmt.Errorf("%s is inside the vault %s; choose another category or path", home.Display(path), home.Display(outer))
+		return fmt.Errorf("%s is inside the knowledge base %s; choose another path", home.Display(path), home.Display(outer))
+	}
+	if work := project.FindAbove(filepath.Dir(path)); work != "" {
+		return fmt.Errorf("%s is inside the project %s; choose another path", home.Display(path), home.Display(work))
 	}
 	return nil
 }

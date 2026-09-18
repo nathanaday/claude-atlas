@@ -1,14 +1,13 @@
-// Package registry knows every knowledge base and project on the machine: it scans the
-// vaults directory for identity files, reads the projects the config lists, and resolves
-// each project's knowledge base. Nothing here is stored beyond what Write derives, and
-// Scan rebuilds the whole picture from the folders themselves every time.
+// Package registry knows every knowledge base and project the atlas config lists: it
+// reads each one's identity file and resolves each project's knowledge base. Nothing
+// here is stored beyond what Write derives, and Scan rebuilds the whole picture from the
+// folders themselves every time.
 package registry
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -46,6 +45,7 @@ const (
 	ReasonSchema     = "schema"      // an identity file from a later version
 	ReasonMissing    = "missing"     // a registered path whose folder is gone
 	ReasonNotProject = "not-project" // a registered work folder with no atlas/project.json
+	ReasonNotVault   = "not-vault"   // a registered knowledge base folder with no identity file
 )
 
 // Ref names an entry another entry refers to: a project's knowledge base, or one of a
@@ -227,55 +227,12 @@ var ErrNotFound = errors.New("no such vault or project")
 // schema, or not JSON. The file is derived, so a refresh replaces it.
 var ErrStale = errors.New("stale registry")
 
-// Scan walks cfg.VaultsDir for knowledge base identity files, adds the knowledge bases
-// cfg.Knowledge names outside that directory, reads every project cfg.Projects names,
-// and resolves each project's knowledge base against the whole set.
+// Scan reads every knowledge base cfg.Knowledge lists and every project cfg.Projects
+// lists, and resolves each project's knowledge base against the whole set. It searches
+// no folder: a knowledge base or a project the config does not list is not in the atlas.
 func Scan(cfg *home.Config) (*Index, error) {
 	ix := &Index{}
 	found := map[string]bool{}
-
-	if cfg.VaultsDir != "" {
-		err := filepath.WalkDir(cfg.VaultsDir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				if path == cfg.VaultsDir {
-					return filepath.SkipAll
-				}
-				return err
-			}
-			if !d.IsDir() {
-				return nil
-			}
-			if path != cfg.VaultsDir {
-				name := d.Name()
-				if strings.HasPrefix(name, ".") || name == "node_modules" {
-					return fs.SkipDir
-				}
-			}
-			if markerFileExists(path) {
-				abs, aerr := filepath.Abs(path)
-				if aerr != nil {
-					abs = path
-				}
-				found[realPath(abs)] = true
-				scanRoot(ix, abs)
-				return fs.SkipDir
-			}
-			if path == cfg.VaultsDir {
-				return nil
-			}
-			rel, rerr := filepath.Rel(cfg.VaultsDir, path)
-			if rerr == nil {
-				depth := strings.Count(filepath.ToSlash(rel), "/") + 1
-				if depth >= maxDepth {
-					return fs.SkipDir
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	for _, v := range cfg.Knowledge {
 		abs, err := filepath.Abs(v)
@@ -289,7 +246,7 @@ func Scan(cfg *home.Config) (*Index, error) {
 		found[key] = true
 		info, err := os.Stat(abs)
 		if err != nil || !info.IsDir() {
-			fail(ix, abs, "not found; run claude-atlas remove PATH to forget it", ReasonMissing)
+			fail(ix, abs, "not found; work in it again to heal the path, or run claude-atlas remove", ReasonMissing)
 			continue
 		}
 		scanRoot(ix, abs)
@@ -313,10 +270,6 @@ func Scan(cfg *home.Config) (*Index, error) {
 	return ix, nil
 }
 
-// maxDepth is the deepest directory level Scan searches below the vaults directory: a
-// vault root at this level is found, one past it is not.
-const maxDepth = 5
-
 // realPath is the dedupe key of a root: two spellings of one folder, one of them through
 // a symlink, resolve to the same key and yield one entry. A path that cannot be resolved,
 // such as a registered folder that is gone, keeps its own spelling.
@@ -333,15 +286,14 @@ func markerFileExists(root string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// scanRoot reads the identity file at root and records an Entry: a full one when it is
-// a knowledge base, an Entry{Path, Error} alongside a matching Problem when the scan
-// found a vault but could not use it. A path with no identity file at all is a Problem
-// only.
+// scanRoot reads the identity file at a listed knowledge base's root and records an
+// Entry: a full one when it is a knowledge base, an Entry{Path, Error} alongside a
+// matching Problem when the atlas could not use it.
 func scanRoot(ix *Index, root string) {
 	cfg, ok := vault.ReadConfig(root)
 	if !ok {
 		if !markerFileExists(root) {
-			ix.Problems = append(ix.Problems, Problem{Path: root, Reason: "not found"})
+			fail(ix, root, fmt.Sprintf("no %s; run claude-atlas adopt %s, or claude-atlas remove", vault.Marker, root), ReasonNotVault)
 			return
 		}
 		fail(ix, root, "identity file is not JSON; run claude-atlas adopt", ReasonUnreadable)

@@ -13,23 +13,16 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
-// PathFor is where a new knowledge base goes by default: straight under the vaults
-// directory.
-func PathFor(vaultsDir, name string) string {
-	return filepath.Join(vaultsDir, name)
-}
-
-// ResolvePath takes anything path-like as the vault's path and puts a bare name at
-// PathFor.
-func ResolvePath(arg, vaultsDir string) (string, error) {
-	if strings.Contains(arg, string(filepath.Separator)) || strings.HasPrefix(arg, "~") || strings.HasPrefix(arg, ".") {
-		return filepath.Abs(home.Expand(arg))
+// ResolvePath is the absolute path a knowledge base argument names. A bare name is a
+// folder in the current directory, as for any other command that takes a path.
+func ResolvePath(arg string) (string, error) {
+	if strings.TrimSpace(arg) == "" {
+		return "", fmt.Errorf("a knowledge base needs a name or a path")
 	}
-	return PathFor(vaultsDir, arg), nil
+	return filepath.Abs(home.Expand(arg))
 }
 
-// Register lists a vault outside the vaults directory in the config; it reports whether
-// the config changed. A vault inside the vaults directory needs no entry.
+// Register lists a knowledge base in the config; it reports whether the config changed.
 func Register(h home.Home, cfg *home.Config, root string) (bool, error) {
 	abs, err := filepath.Abs(home.Expand(root))
 	if err != nil {
@@ -37,9 +30,6 @@ func Register(h home.Home, cfg *home.Config, root string) (bool, error) {
 	}
 	if !vault.IsVault(abs) {
 		return false, fmt.Errorf("%s is not a claude-atlas vault (no %s)", home.Display(abs), vault.Marker)
-	}
-	if cfg.Inside(abs) {
-		return false, nil
 	}
 	if !cfg.AddKnowledge(abs) {
 		return false, nil
@@ -50,33 +40,35 @@ func Register(h home.Home, cfg *home.Config, root string) (bool, error) {
 	return true, nil
 }
 
-// CheckForget reports why a vault cannot be forgotten. A vault inside the vaults directory
-// cannot: the scan finds it; the error says to move or delete the folder. The folder
-// itself need not exist; a registered path outlives it.
-func CheckForget(cfg *home.Config, root string) error {
-	abs, err := filepath.Abs(home.Expand(root))
-	if err != nil {
-		return err
-	}
-	if cfg.Inside(abs) {
-		return fmt.Errorf("%s is inside the vaults directory; the scan finds it there, so move or delete the folder to forget it", home.Display(abs))
-	}
-	return nil
-}
-
-// Unregister removes a vault from the config.
+// Unregister removes a knowledge base from the config. The folder stays.
 func Unregister(h home.Home, cfg *home.Config, root string) error {
 	abs, err := filepath.Abs(home.Expand(root))
 	if err != nil {
 		return err
 	}
-	if err := CheckForget(cfg, abs); err != nil {
-		return err
-	}
 	if !cfg.RemoveKnowledge(abs) {
-		return fmt.Errorf("%s is not registered", home.Display(abs))
+		return fmt.Errorf("%s is not a registered knowledge base", home.Display(abs))
 	}
 	return h.Save(cfg)
+}
+
+// RegisterKnowledge makes sure the config lists the knowledge base at v.Root, by the
+// same rule RegisterProject heals a project: it adds one the config does not know, and
+// moves one whose id the config knows at another path or, failing that, the only listed
+// knowledge base whose folder is gone.
+func RegisterKnowledge(h home.Home, cfg *home.Config, v *vault.Vault) (Heal, error) {
+	if cfg.HasKnowledge(v.Root) {
+		return HealNone, nil
+	}
+	drop, heal := healPaths(cfg.Knowledge, v.Config.ID, func(path string) (string, bool) {
+		c, ok := vault.ReadConfig(path)
+		return c.ID, ok
+	})
+	for _, path := range drop {
+		cfg.RemoveKnowledge(path)
+	}
+	cfg.AddKnowledge(v.Root)
+	return heal, h.Save(cfg)
 }
 
 // Edit changes a knowledge base's own facts. Nil means unchanged.
@@ -140,12 +132,10 @@ func renameFolder(h home.Home, cfg *home.Config, e registry.Entry, name string) 
 	return target, nil
 }
 
-// moveConfigPath points a config entry for a vault outside the vaults directory at
-// the folder it moved to. A vault inside the vaults directory has no entry to fix.
+// moveConfigPath points the config's entry for a knowledge base at the folder it moved
+// to.
 func moveConfigPath(h home.Home, cfg *home.Config, from, to string) error {
-	if !cfg.RemoveKnowledge(from) {
-		return nil
-	}
+	cfg.RemoveKnowledge(from)
 	cfg.AddKnowledge(to)
 	return h.Save(cfg)
 }

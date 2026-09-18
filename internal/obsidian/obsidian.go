@@ -18,7 +18,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 )
@@ -279,22 +278,4 @@ func RegisterAndOpen(vault string) error {
 		}
 	}
 	return Open(vault)
-}
-
-// Under lists the registered vault paths at or below root, sorted. Obsidian drops an
-// entry whose folder is gone at its next launch, so a caller reports these rather than
-// changing them.
-func (r *Registry) Under(root string) []string {
-	root = filepath.Clean(root)
-	var out []string
-	for _, p := range r.paths {
-		clean := filepath.Clean(p)
-		rel, err := filepath.Rel(root, clean)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
-		}
-		out = append(out, clean)
-	}
-	sort.Strings(out)
-	return out
 }

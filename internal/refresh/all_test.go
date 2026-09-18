@@ -11,10 +11,9 @@ import (
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 	"github.com/nathanaday/claude-atlas/internal/vault"
-	"github.com/nathanaday/claude-atlas/internal/vaults"
 )
 
-// oneVault builds an atlas home whose vaults directory holds one knowledge base.
+// oneVault builds an atlas home whose config lists one knowledge base.
 func oneVault(t *testing.T) (home.Home, *home.Config) {
 	t.Helper()
 	if !gitx.Available() {
@@ -22,15 +21,14 @@ func oneVault(t *testing.T) (home.Home, *home.Config) {
 	}
 	root := t.TempDir()
 	h := home.Home{Root: filepath.Join(root, "home")}
-	cfg := h.Default(filepath.Join(root, "Vaults"))
-	if err := os.MkdirAll(h.Root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Save(cfg); err != nil {
-		t.Fatal(err)
-	}
+	cfg := h.Default()
 	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
-	if _, err := vault.Init(vaults.PathFor(cfg.VaultsDir, "kb"), vault.Options{Name: "kb"}, now); err != nil {
+	kb := filepath.Join(root, "Vaults", "kb")
+	if _, err := vault.Init(kb, vault.Options{Name: "kb"}, now); err != nil {
+		t.Fatal(err)
+	}
+	cfg.AddKnowledge(kb)
+	if err := h.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
 	return h, cfg

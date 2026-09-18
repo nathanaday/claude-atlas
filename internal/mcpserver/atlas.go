@@ -72,12 +72,11 @@ func anyEntryOf(ix *registry.Index, arg string, kind registry.Kind) (registry.En
 
 // Settings are the atlas settings a session may read and set.
 type Settings struct {
-	VaultsDir string `json:"vaults_dir"`
-	NewDays   int    `json:"new_days"`
+	NewDays int `json:"new_days"`
 }
 
 func settingsOf(cfg *home.Config) Settings {
-	return Settings{VaultsDir: cfg.VaultsDir, NewDays: cfg.NewDays()}
+	return Settings{NewDays: cfg.NewDays()}
 }
 
 type AtlasArgs struct {
@@ -124,7 +123,7 @@ type VaultToolArgs struct {
 	Action string  `json:"action" jsonschema:"create, adopt, edit, or forget"`
 	Target string  `json:"target,omitempty" jsonschema:"edit, forget: the knowledge base, by name, id, or path"`
 	Name   string  `json:"name,omitempty" jsonschema:"create: the knowledge base's name; adopt: its display name, default the folder's; edit: the new name, which renames the folder too"`
-	Path   string  `json:"path,omitempty" jsonschema:"create: where it goes, default <vaults dir>/<name>; adopt: the folder to adopt"`
+	Path   string  `json:"path,omitempty" jsonschema:"create: the new folder, an absolute or ~ path; adopt: the folder to adopt"`
 	Mode   string  `json:"mode,omitempty" jsonschema:"create, adopt: the filing mode, generic (default) or lyt"`
 	Scope  *string `json:"scope,omitempty" jsonschema:"create, adopt, edit: what the knowledge base covers, one or two sentences; on edit an empty string clears it"`
 }
@@ -137,7 +136,7 @@ type VaultToolOut struct {
 }
 
 func (s *Server) vaultTool(ctx context.Context, req *mcp.CallToolRequest, a VaultToolArgs) (*mcp.CallToolResult, VaultToolOut, error) {
-	acts, cfg, err := s.bind()
+	acts, _, err := s.bind()
 	if err != nil {
 		return nil, VaultToolOut{}, err
 	}
@@ -147,7 +146,7 @@ func (s *Server) vaultTool(ctx context.Context, req *mcp.CallToolRequest, a Vaul
 	}
 	switch a.Action {
 	case "create", "adopt":
-		choice, err := knowledgeChoice(cfg, a)
+		choice, err := knowledgeChoice(a)
 		if err != nil {
 			return nil, VaultToolOut{}, err
 		}
@@ -186,7 +185,7 @@ func (s *Server) vaultTool(ctx context.Context, req *mcp.CallToolRequest, a Vaul
 }
 
 // knowledgeChoice turns the create and adopt arguments into what CreateKnowledge takes.
-func knowledgeChoice(cfg *home.Config, a VaultToolArgs) (actions.AddKnowledge, error) {
+func knowledgeChoice(a VaultToolArgs) (actions.AddKnowledge, error) {
 	choice := actions.AddKnowledge{Name: a.Name, Mode: a.Mode, Adopt: a.Action == "adopt"}
 	if a.Scope != nil {
 		choice.Scope = *a.Scope
@@ -208,11 +207,10 @@ func knowledgeChoice(cfg *home.Config, a VaultToolArgs) (actions.AddKnowledge, e
 	if a.Name == "" {
 		return actions.AddKnowledge{}, errors.New("create needs name")
 	}
-	arg := a.Path
-	if arg == "" {
-		arg = a.Name
+	if !filepath.IsAbs(a.Path) && a.Path != "~" && !strings.HasPrefix(a.Path, "~/") {
+		return actions.AddKnowledge{}, errors.New("create needs path: the new folder, as an absolute or ~ path; ask the user where the knowledge base goes")
 	}
-	path, err := vaults.ResolvePath(arg, cfg.VaultsDir)
+	path, err := vaults.ResolvePath(a.Path)
 	if err != nil {
 		return actions.AddKnowledge{}, err
 	}

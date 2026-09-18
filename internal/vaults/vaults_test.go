@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nathanaday/claude-atlas/internal/console"
 	"github.com/nathanaday/claude-atlas/internal/gitx"
+	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/vault"
 )
 
@@ -45,7 +47,7 @@ func TestCreateListsEveryFileItWrites(t *testing.T) {
 	}
 }
 
-func TestCreateRefusesATakenPathAndAVaultInsideAVault(t *testing.T) {
+func TestCreateRefusesATakenPathAndAVaultInsideAVaultOrAProject(t *testing.T) {
 	if !gitx.Available() {
 		t.Skip("git is not installed")
 	}
@@ -57,10 +59,22 @@ func TestCreateRefusesATakenPathAndAVaultInsideAVault(t *testing.T) {
 		t.Fatalf("taken path: %v", err)
 	}
 	inner := filepath.Join(outer, "notes")
-	if _, err := Create(inner, vault.Options{}, nil, false); err == nil || !strings.Contains(err.Error(), "inside the vault") {
+	if _, err := Create(inner, vault.Options{}, nil, false); err == nil || !strings.Contains(err.Error(), "inside the knowledge base") {
 		t.Fatalf("nested vault: %v", err)
 	}
 	if _, err := os.Stat(inner); err == nil {
 		t.Fatal("the nested vault was created")
+	}
+	work := filepath.Join(t.TempDir(), "webapp")
+	os.MkdirAll(work, 0o755)
+	if _, _, err := project.Init(work, project.Options{}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	inProject := filepath.Join(work, "docs", "notes")
+	if _, err := Create(inProject, vault.Options{}, nil, false); err == nil || !strings.Contains(err.Error(), "inside the project") {
+		t.Fatalf("a vault inside a project: %v", err)
+	}
+	if _, err := os.Stat(inProject); err == nil {
+		t.Fatal("the vault inside a project was created")
 	}
 }
