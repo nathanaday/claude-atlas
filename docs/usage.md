@@ -78,13 +78,15 @@ cd ~/code/webapp
 claude-atlas init                                   # name: the folder's; asks for a description and a knowledge base
 claude-atlas init --name "Web App" --knowledge product-x --description "The customer-facing web application."
 claude-atlas init --no-knowledge                    # ask nothing
+claude-atlas init ~/code/notes --no-git             # another folder, and no repository
 ```
 
 `init` writes `atlas/` in the current folder, with `project.json`, `tasks/`,
 `tasks/archive/`, `phases/`, and `inbox/`, and lists the folder in the atlas
-config. It writes nothing else and never touches git: when the work is a
-repository, the repository tracks `atlas/` like any other folder, on the
-branch you are on. In a terminal with no flags it asks for the description
+config. When the folder is in no git repository, `init` runs `git init` there
+on `main` and commits nothing; `--no-git` skips that. It leaves a repository
+as it is, and it makes no repository in a folder inside another one. The
+repository tracks `atlas/` like any other folder, on the branch you are on. In a terminal with no flags it asks for the description
 and offers the knowledge bases the atlas knows, with none as a choice. It
 refuses a folder that already has `atlas/` without a `project.json`, and a
 folder inside another project or inside a knowledge base.

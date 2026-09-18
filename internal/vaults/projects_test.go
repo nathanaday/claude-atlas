@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 )
@@ -16,18 +17,22 @@ func TestInitProjectRegistersAndLinks(t *testing.T) {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := InitProject(h, cfg, work, project.Options{}, "nope", identityNow); err == nil {
+	if _, err := InitProject(h, cfg, work, project.Options{}, "nope", true, identityNow); err == nil {
 		t.Fatal("an unknown knowledge base refuses the init")
 	}
-	if project.IsProject(work) || cfg.HasProject(work) {
+	if project.IsProject(work) || cfg.HasProject(work) || exists(filepath.Join(work, ".git")) {
 		t.Fatal("a refused init writes nothing")
 	}
-	p, written, err := InitProject(h, cfg, work, project.Options{Description: "The firmware."}, "AI-ML", identityNow)
+	made, err := InitProject(h, cfg, work, project.Options{Description: "The firmware."}, "AI-ML", false, identityNow)
 	if err != nil {
 		t.Fatal(err)
 	}
+	p, written := made.Project, made.Written
 	if p.Name() != "firmware" || p.Config.Knowledge == nil || p.Config.Knowledge.ID != kb.ID || p.Config.Knowledge.Name != "ai-ml" || len(written) != 5 {
 		t.Fatalf("project %+v written %v", p.Config, written)
+	}
+	if made.Git != GitSkipped || exists(filepath.Join(work, ".git")) {
+		t.Fatalf("without git, init makes no repository: %s", made.Git)
 	}
 	if !cfg.HasProject(work) {
 		t.Fatal("the config lists the project")
@@ -44,10 +49,11 @@ func TestInitProjectRegistersAndLinks(t *testing.T) {
 	// A project without a knowledge base, then link and unlink.
 	solo := filepath.Join(t.TempDir(), "solo")
 	os.MkdirAll(solo, 0o755)
-	q, _, err := InitProject(h, cfg, solo, project.Options{}, "", identityNow)
-	if err != nil || q.Config.Knowledge != nil {
-		t.Fatalf("solo %+v %v", q.Config, err)
+	soloMade, err := InitProject(h, cfg, solo, project.Options{}, "", false, identityNow)
+	if err != nil || soloMade.Project.Config.Knowledge != nil {
+		t.Fatalf("solo %+v %v", soloMade, err)
 	}
+	q := soloMade.Project
 	if err := UnlinkKnowledge(q); err == nil {
 		t.Fatal("nothing to unlink")
 	}
@@ -138,4 +144,51 @@ func TestRegisterProjectHeals(t *testing.T) {
 	if heal, err := RegisterProject(h, cfg, f); err != nil || heal != HealAdded || len(cfg.Projects) != before+1 {
 		t.Fatalf("two gone paths stay: %q %v %v", heal, err, cfg.Projects)
 	}
+}
+
+func TestInitProjectMakesARepository(t *testing.T) {
+	if !gitx.Available() {
+		t.Skip("git is not installed")
+	}
+	cfg, h, _, _ := fixtureEntries(t)
+	root := t.TempDir()
+
+	plain := filepath.Join(root, "plain")
+	os.MkdirAll(plain, 0o755)
+	made, err := InitProject(h, cfg, plain, project.Options{}, "", true, identityNow)
+	if err != nil || made.Git != GitCreated {
+		t.Fatalf("a plain folder becomes a repository: %+v %v", made, err)
+	}
+	repo := gitx.Repo{Dir: plain}
+	if !repo.IsRepo() || repo.HasHead() {
+		t.Fatal("the repository is at the work's top, with no commit")
+	}
+	if head, err := os.ReadFile(filepath.Join(plain, ".git", "HEAD")); err != nil || strings.TrimSpace(string(head)) != "ref: refs/heads/main" {
+		t.Fatalf("its branch is main: %q %v", head, err)
+	}
+
+	existing := filepath.Join(root, "existing")
+	os.MkdirAll(existing, 0o755)
+	if err := (gitx.Repo{Dir: existing}).Init(); err != nil {
+		t.Fatal(err)
+	}
+	if made, err := InitProject(h, cfg, existing, project.Options{}, "", true, identityNow); err != nil || made.Git != GitExisting {
+		t.Fatalf("a repository stays as it is: %+v %v", made, err)
+	}
+
+	monorepo := filepath.Join(root, "monorepo")
+	inner := filepath.Join(monorepo, "tools", "cli")
+	os.MkdirAll(inner, 0o755)
+	if err := (gitx.Repo{Dir: monorepo}).Init(); err != nil {
+		t.Fatal(err)
+	}
+	made, err = InitProject(h, cfg, inner, project.Options{}, "", true, identityNow)
+	if err != nil || made.Git != GitEnclosed || exists(filepath.Join(inner, ".git")) {
+		t.Fatalf("a folder inside a repository gets no repository of its own: %+v %v", made, err)
+	}
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

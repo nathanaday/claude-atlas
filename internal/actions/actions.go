@@ -32,6 +32,7 @@ type InitProject struct {
 	Name        string
 	Description string
 	Knowledge   string // a knowledge base by name, id, or path; "" for none
+	NoGit       bool   // leave a work folder that is in no repository without one
 }
 
 // Atlas is every action the CLI, the view, and the tools reach. Each field is one
@@ -52,7 +53,7 @@ type Atlas struct {
 	ForgetKnowledge func(registry.Entry) error
 	// The project calls: init a folder, set or clear its knowledge base, change its name
 	// or description, forget it.
-	InitProject   func(InitProject) (*project.Project, []string, error)
+	InitProject   func(InitProject) (*vaults.ProjectInit, error)
 	LinkProject   func(registry.Entry, string) (*registry.Entry, error)
 	UnlinkProject func(registry.Entry) error
 	EditProject   func(registry.Entry, vaults.ProjectEdit) error
@@ -95,9 +96,9 @@ func Bind(h home.Home, cfg *home.Config, c *console.Console) Atlas {
 			return vaults.EditIdentity(h, cfg, en, edit, time.Now())
 		},
 		ForgetKnowledge: func(en registry.Entry) error { return vaults.Unregister(h, cfg, en.Path) },
-		InitProject: func(choice InitProject) (*project.Project, []string, error) {
+		InitProject: func(choice InitProject) (*vaults.ProjectInit, error) {
 			opts := project.Options{Name: choice.Name, Description: choice.Description}
-			return vaults.InitProject(h, cfg, choice.Work, opts, choice.Knowledge, time.Now())
+			return vaults.InitProject(h, cfg, choice.Work, opts, choice.Knowledge, !choice.NoGit, time.Now())
 		},
 		LinkProject: func(en registry.Entry, knowledge string) (*registry.Entry, error) {
 			p, err := openProject(en)

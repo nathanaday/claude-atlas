@@ -773,3 +773,25 @@ func TestShellArg(t *testing.T) {
 		}
 	}
 }
+
+func TestInitMakesAGitRepository(t *testing.T) {
+	h, _ := setup(t)
+	plain := work(t, "plain", false)
+	if code := h.run("init", plain, "--no-knowledge"); code != 0 || !strings.Contains(h.out.String(), "initialized a repository on main") {
+		t.Fatalf("init exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if !(gitx.Repo{Dir: plain}).IsRepo() {
+		t.Fatal("the folder is a repository")
+	}
+	repo := work(t, "repo", true)
+	if code := h.run("init", repo, "--no-knowledge"); code != 0 || !strings.Contains(h.out.String(), "a repository already") {
+		t.Fatalf("init exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	none := work(t, "none", false)
+	if code := h.run("init", none, "--no-knowledge", "--no-git"); code != 0 || !strings.Contains(h.out.String(), "none; --no-git") {
+		t.Fatalf("init exit %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(none, ".git")); err == nil {
+		t.Fatal("--no-git makes no repository")
+	}
+}

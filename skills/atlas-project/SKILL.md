@@ -29,12 +29,15 @@ Ask one question at a time. Offer the default; accept a yes.
    fits. None is a valid answer; the task skills work without one, and
    `link` adds one later.
 
-State the whole change in one line:
+State the whole change in one line. When the folder is in no git repository,
+init makes it one, with no commit; say so in the line:
 
 > Make `~/code/webapp` the project `webapp`, "The customer-facing web application for the fire-detection product", using `product-x`?
 
 On yes: `project` with `action: init`, `work`, `name`, `description`, and
-`knowledge`. It writes `atlas/` and lists the folder in the atlas config.
+`knowledge`; add `no_git` when the user wants no repository. It writes
+`atlas/`, lists the folder in the atlas config, and reports `git`: created,
+existing, or enclosed.
 Report the result, then offer `describe`, which writes the project's page in
 the knowledge base, and say how to work: a session anywhere inside the work
 is the project's session.

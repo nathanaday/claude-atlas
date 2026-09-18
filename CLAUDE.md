@@ -193,7 +193,9 @@ list (`obsidian.Registry.Under`) and Claude Code's path-keyed folders
 - A project's identity is `atlas/project.json` (`project.Config`: schema, id,
   name, description, created, and the one `knowledge` it uses, by id and
   name). `project.Init` writes it and the folders and nothing else;
-  `project.Save` is the only other writer, for link, unlink, and edit. A
+  `project.Save` is the only other writer, for link, unlink, and edit.
+  `vaults.InitProject` also runs `git init` in a work folder that is in no
+  repository (on `main`, no commit), unless the caller asks for none. A
   project session heals the config (`vaults.RegisterProject`): an unknown
   project is added, one whose id sits at another path is moved, and one
   listed at a path that is gone is taken for the moved one only when it is the

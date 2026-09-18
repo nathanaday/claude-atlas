@@ -7,35 +7,74 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nathanaday/claude-atlas/internal/gitx"
 	"github.com/nathanaday/claude-atlas/internal/home"
 	"github.com/nathanaday/claude-atlas/internal/project"
 	"github.com/nathanaday/claude-atlas/internal/registry"
 )
 
+// Git says what InitProject found or did about the work's repository.
+type Git string
+
+const (
+	GitCreated  Git = "created"  // init made the work a repository
+	GitExisting Git = "existing" // the work is a repository already
+	GitEnclosed Git = "enclosed" // the work sits inside another repository, which holds its history
+	GitSkipped  Git = "skipped"  // the caller asked for no repository
+)
+
+// ProjectInit is what InitProject made.
+type ProjectInit struct {
+	Project *project.Project
+	Written []string // what it wrote under atlas/
+	Git     Git
+}
+
 // InitProject makes work a project and lists it in the config. knowledge, when given,
-// names the knowledge base the project uses; it must be one the scan knows.
-func InitProject(h home.Home, cfg *home.Config, work string, opts project.Options, knowledge string, now time.Time) (*project.Project, []string, error) {
+// names the knowledge base the project uses; it must be one the scan knows. With git,
+// a work folder that is in no repository becomes one, with no commit.
+func InitProject(h home.Home, cfg *home.Config, work string, opts project.Options, knowledge string, git bool, now time.Time) (*ProjectInit, error) {
 	abs, err := filepath.Abs(home.Expand(work))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if knowledge != "" {
 		kb, err := findKnowledge(cfg, knowledge)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		opts.Knowledge = &project.Knowledge{ID: kb.ID, Name: kb.Name}
 	}
-	p, written, err := project.Init(abs, opts, now)
+	if err := project.CheckNew(abs); err != nil {
+		return nil, err
+	}
+	res := &ProjectInit{Git: GitSkipped}
+	repo := gitx.Repo{Dir: abs}
+	switch {
+	case !git:
+	case repo.IsRepo():
+		res.Git = GitExisting
+	case repo.InsideOtherRepo():
+		res.Git = GitEnclosed
+	default:
+		if err := repo.Init(); err != nil {
+			return nil, fmt.Errorf("git init %s: %w", abs, err)
+		}
+		res.Git = GitCreated
+	}
+	res.Project, res.Written, err = project.Init(abs, opts, now)
 	if err != nil {
-		return nil, nil, err
+		if res.Git == GitCreated {
+			os.RemoveAll(filepath.Join(abs, ".git"))
+		}
+		return nil, err
 	}
 	if cfg.AddProject(abs) {
 		if err := h.Save(cfg); err != nil {
-			return p, written, err
+			return res, err
 		}
 	}
-	return p, written, nil
+	return res, nil
 }
 
 // findKnowledge resolves a knowledge base by name, id, or path against a fresh scan.

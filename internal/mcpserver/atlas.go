@@ -240,6 +240,7 @@ type ProjectToolArgs struct {
 	Name        string  `json:"name,omitempty" jsonschema:"init: the project's name, default the folder's; edit: the new name"`
 	Description *string `json:"description,omitempty" jsonschema:"init, edit: one sentence saying what the project is; on edit an empty string clears it"`
 	Knowledge   string  `json:"knowledge,omitempty" jsonschema:"init, link: the knowledge base the project uses, by name, id, or path"`
+	NoGit       bool    `json:"no_git,omitempty" jsonschema:"init: leave a folder that is in no git repository without one"`
 }
 
 // ProjectToolOut is the project as the atlas sees it after the change, the files init
@@ -247,6 +248,7 @@ type ProjectToolArgs struct {
 type ProjectToolOut struct {
 	Project   *registry.Entry `json:"project,omitempty"`
 	Written   []string        `json:"written,omitempty" jsonschema:"init: what was written under atlas/"`
+	Git       string          `json:"git,omitempty" jsonschema:"init: created (the work is now a repository with no commit), existing, or enclosed (the work sits inside another repository)"`
 	Forgotten string          `json:"forgotten,omitempty" jsonschema:"the path the atlas no longer lists; the folder and its atlas/ stay"`
 }
 
@@ -263,16 +265,16 @@ func (s *Server) projectTool(ctx context.Context, req *mcp.CallToolRequest, a Pr
 		if work == "" {
 			return nil, ProjectToolOut{}, errors.New("init needs work: the folder that becomes a project")
 		}
-		choice := actions.InitProject{Work: home.Expand(work), Name: a.Name, Knowledge: a.Knowledge}
+		choice := actions.InitProject{Work: home.Expand(work), Name: a.Name, Knowledge: a.Knowledge, NoGit: a.NoGit}
 		if a.Description != nil {
 			choice.Description = *a.Description
 		}
-		p, written, err := acts.InitProject(choice)
+		made, err := acts.InitProject(choice)
 		if err != nil {
 			return nil, ProjectToolOut{}, err
 		}
-		res, out, err := s.projectOut(acts, p.Root)
-		out.Written = written
+		res, out, err := s.projectOut(acts, made.Project.Root)
+		out.Written, out.Git = made.Written, string(made.Git)
 		return res, out, err
 	}
 	ix, err := acts.Scan()

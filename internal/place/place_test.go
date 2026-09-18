@@ -39,7 +39,7 @@ func atlas(t *testing.T) (home.Home, *home.Config, string, string) {
 	if err := os.MkdirAll(filepath.Join(work, "src", "deep"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := vaults.InitProject(h, cfg, work, project.Options{}, "ai-ml", now); err != nil {
+	if _, err := vaults.InitProject(h, cfg, work, project.Options{}, "ai-ml", false, now); err != nil {
 		t.Fatal(err)
 	}
 	return h, cfg, kb, work
@@ -106,7 +106,7 @@ func TestResolveWithoutAnAtlasOrAKnowledgeBase(t *testing.T) {
 	h, cfg, _, _ := atlas(t)
 	solo := filepath.Join(t.TempDir(), "solo")
 	os.MkdirAll(solo, 0o755)
-	if _, _, err := vaults.InitProject(h, cfg, solo, project.Options{}, "", now); err != nil {
+	if _, err := vaults.InitProject(h, cfg, solo, project.Options{}, "", false, now); err != nil {
 		t.Fatal(err)
 	}
 	if pl, err := Resolve(h, "", "", solo, false); err != nil || pl.Vault != nil || pl.KnowledgeError != "" || pl.Entry == nil {

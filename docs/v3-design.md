@@ -148,7 +148,8 @@ claude-atlas init --no-knowledge                 # ask nothing
 ```
 
 `init` writes `atlas/` with its four entries, adds the folder to the atlas
-config, and prints what it did and what comes next: describe the project in
+config, runs `git init` when the folder is in no repository (no commit;
+`--no-git` skips it), and prints what it did and what comes next: describe the project in
 the knowledge base, plant a task. In a terminal with no flags it asks for the
 description and offers the knowledge bases the atlas knows, with none as a
 choice. It refuses a folder that already has `atlas/` without a
@@ -406,7 +407,7 @@ today.
 
 | Command | Does |
 |---|---|
-| `init [--name] [--description] [--knowledge KB \| --no-knowledge]` | make the current folder a project |
+| `init [--name] [--description] [--knowledge KB \| --no-knowledge] [--no-git]` | make the current folder a project, and a git repository when it is in none |
 | `link KB`, `unlink` | set or clear the project's knowledge base, from inside it or with `--project NAME` |
 | `forget PROJECT` | drop it from the config |
 | `describe PROJECT` | stage a snapshot into the knowledge base inbox; the skill writes the page |

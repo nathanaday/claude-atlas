@@ -52,7 +52,8 @@ Getting started:
   new-knowledge NAME|PATH   create a knowledge base: an Obsidian vault with an inbox and a wiki
   adopt PATH                make an existing Obsidian or claude-obsidian vault a knowledge base
   init [PATH]               make the current folder (or PATH) a project: an atlas/ folder inside your work
-                            --name N, --description TEXT, --knowledge KB or --no-knowledge
+                            --name N, --description TEXT, --knowledge KB or --no-knowledge;
+                            a folder in no git repository becomes one unless --no-git
 
 Projects (PROJECT is a name, a path, or nothing for the project you are in):
   link KB                   set the knowledge base a project uses; --project P names one
@@ -683,12 +684,13 @@ func (e *env) initProject(args []string) (int, error) {
 	description := fs.String("description", "", "one sentence saying what the project is")
 	knowledge := fs.String("knowledge", "", "the knowledge base the project uses, by name or path")
 	noKnowledge := fs.Bool("no-knowledge", false, "use no knowledge base, and ask nothing")
+	noGit := fs.Bool("no-git", false, "leave a folder that is in no git repository without one")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return 2, nil
 	}
 	if len(positional) > 1 || (*knowledge != "" && *noKnowledge) {
-		return 2, errors.New("usage: claude-atlas init [PATH] [--name N] [--description TEXT] [--knowledge KB | --no-knowledge]")
+		return 2, errors.New("usage: claude-atlas init [PATH] [--name N] [--description TEXT] [--knowledge KB | --no-knowledge] [--no-git]")
 	}
 	work := cwd()
 	if len(positional) == 1 {
@@ -736,13 +738,24 @@ func (e *env) initProject(args []string) (int, error) {
 		}
 	}
 	acts := actions.Bind(e.home, cfg, c)
-	p, written, err := acts.InitProject(actions.InitProject{Work: work, Name: *name, Description: *description, Knowledge: *knowledge})
+	made, err := acts.InitProject(actions.InitProject{Work: work, Name: *name, Description: *description, Knowledge: *knowledge, NoGit: *noGit})
 	if err != nil {
 		return 1, err
 	}
+	p := made.Project
 	c.Say("")
 	c.Step(console.OK, "project", fmt.Sprintf("%s at %s", p.Name(), home.Display(p.Root)))
-	c.Step(console.OK, "wrote", project.Dir+"/: "+strings.Join(written, ", "))
+	c.Step(console.OK, "wrote", project.Dir+"/: "+strings.Join(made.Written, ", "))
+	switch made.Git {
+	case vaults.GitCreated:
+		c.Step(console.OK, "git", "initialized a repository on main; nothing committed")
+	case vaults.GitExisting:
+		c.Step(console.Skip, "git", "a repository already")
+	case vaults.GitEnclosed:
+		c.Step(console.Skip, "git", "inside another repository, which keeps its history")
+	case vaults.GitSkipped:
+		c.Step(console.Skip, "git", "none; --no-git")
+	}
 	if p.Config.Knowledge != nil {
 		c.Step(console.OK, "knowledge", p.Config.Knowledge.Name)
 	} else {

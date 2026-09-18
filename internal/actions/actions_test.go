@@ -124,9 +124,9 @@ func TestProjectsInitLinkTasksAndPhases(t *testing.T) {
 	a := Bind(h, cfg, nil)
 	work := filepath.Join(t.TempDir(), "webapp")
 	os.MkdirAll(work, 0o755)
-	p, written, err := a.InitProject(InitProject{Work: work, Description: "The web app.", Knowledge: "kb"})
-	if err != nil || p.Config.Knowledge == nil || p.Config.Knowledge.ID != kb.ID || len(written) != 5 {
-		t.Fatalf("init: %+v %v %v", p, written, err)
+	made, err := a.InitProject(InitProject{Work: work, Description: "The web app.", Knowledge: "kb"})
+	if err != nil || made.Project.Config.Knowledge == nil || made.Project.Config.Knowledge.ID != kb.ID || len(made.Written) != 5 || made.Git != vaults.GitCreated {
+		t.Fatalf("init: %+v %v", made, err)
 	}
 	e := entry(t, a, work)
 	if e.Kind != registry.Project || e.KnowledgePath() != kb.Path || e.State == nil || e.State.Tasks == nil {

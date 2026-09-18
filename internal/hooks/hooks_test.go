@@ -70,7 +70,7 @@ func atlas(t *testing.T, now time.Time) (home.Home, string, string) {
 	if _, err := r.Commit("initial"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := vaults.InitProject(h, cfg, work, project.Options{Description: "The web app."}, "ai-ml", now); err != nil {
+	if _, err := vaults.InitProject(h, cfg, work, project.Options{Description: "The web app."}, "ai-ml", true, now); err != nil {
 		t.Fatal(err)
 	}
 	return h, kb, work
