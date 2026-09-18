@@ -749,20 +749,65 @@ func (e *env) initProject(args []string) (int, error) {
 		c.Step(console.Skip, "knowledge", "none; `claude-atlas link KB` sets one")
 	}
 	c.Step(console.OK, "registered", "in "+home.Display(e.home.ConfigPath()))
-	entries, _, err := e.refreshAll(cfg)
+	entries, ix, err := e.refreshAll(cfg)
 	if err != nil {
 		return 1, err
 	}
 	c.Step(console.OK, "refreshed", refreshed(entries))
+	ref, here := ".", work == cwd()
+	if !here {
+		ref = entryArg(ix, p.Root, registry.Project)
+	}
+	var next [][2]string
+	if p.Config.Knowledge != nil {
+		next = append(next, [2]string{"claude-atlas describe " + entryArg(ix, p.Root, registry.Project), "a page about this project in " + p.Config.Knowledge.Name})
+	}
+	next = append(next, [2]string{"claude-atlas plant " + ref + ` "..."`, "or a note in " + project.Dir + "/" + project.InboxDir + "/"})
+	if here {
+		next = append(next, [2]string{"claude", "Claude Code here sees the project and its tasks"})
+	} else {
+		next = append(next, [2]string{"claude-atlas open-claude " + entryArg(ix, p.Root, ""), "Claude Code in the project sees it and its tasks"})
+	}
 	c.Say("")
 	c.Say("  Next:")
-	if p.Config.Knowledge != nil {
-		c.Say("  %-32s # a page about this project in %s", "claude-atlas describe "+p.Name(), p.Config.Knowledge.Name)
-	}
-	c.Say("  %-32s # or a note in %s/%s/", "claude-atlas plant . \"...\"", project.Dir, project.InboxDir)
-	c.Say("  %-32s # Claude Code here sees the project and its tasks", "claude")
+	sayCommands(c, next)
 	c.Say("")
 	return 0, nil
+}
+
+// sayCommands prints commands with their comments in one column.
+func sayCommands(c *console.Console, lines [][2]string) {
+	width := 0
+	for _, l := range lines {
+		width = max(width, len(l[0]))
+	}
+	for _, l := range lines {
+		c.Say("  %-*s  # %s", width, l[0], l[1])
+	}
+}
+
+// entryArg is the shortest command argument that names the entry at path: its name
+// when the name finds it, else its path. It comes quoted for a shell when it must be.
+func entryArg(ix *registry.Index, path string, kind registry.Kind) string {
+	en := ix.ByPath(path)
+	if en != nil && en.Error == "" {
+		if found, err := ix.Find(en.Name, kind); err == nil && found.Path == path {
+			return shellArg(en.Name)
+		}
+	}
+	display := home.Display(path)
+	if rest, ok := strings.CutPrefix(display, "~/"); ok {
+		return "~/" + shellArg(rest)
+	}
+	return shellArg(display)
+}
+
+// shellArg quotes s for a POSIX shell unless every byte is safe bare.
+func shellArg(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+/=:@,%") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func (e *env) link(args []string) (int, error) {

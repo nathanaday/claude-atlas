@@ -727,3 +727,49 @@ func TestRelocateRefusesABadTargetAndChangesNothing(t *testing.T) {
 		t.Fatalf("relocate with no path is a usage error, got exit %d", code)
 	}
 }
+
+func TestInitNextHintNamesTheProject(t *testing.T) {
+	h, _ := setup(t)
+	dir := work(t, "webapp", false)
+	if code := h.run("init", dir, "--no-knowledge"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
+	}
+	out := h.out.String()
+	if strings.Contains(out, "plant .") || !strings.Contains(out, `claude-atlas plant webapp "..."`) || !strings.Contains(out, "claude-atlas open-claude webapp") {
+		t.Fatalf("init from elsewhere should name the project:\n%s", out)
+	}
+
+	here := work(t, "api", false)
+	t.Chdir(here)
+	if code := h.run("init", "--no-knowledge"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
+	}
+	out = h.out.String()
+	if !strings.Contains(out, `claude-atlas plant . "..."`) || strings.Contains(out, "open-claude") {
+		t.Fatalf("init in the folder should use . and claude:\n%s", out)
+	}
+
+	same := work(t, "welcome", false)
+	if code := h.run("init", same, "--knowledge", "welcome"); code != 0 {
+		t.Fatalf("init exit %d %s", code, h.err.String())
+	}
+	out = h.out.String()
+	if !strings.Contains(out, "claude-atlas describe welcome ") || !strings.Contains(out, "claude-atlas open-claude "+home.Display(same)) {
+		t.Fatalf("a name the knowledge base shares should give the path to open-claude:\n%s", out)
+	}
+}
+
+func TestShellArg(t *testing.T) {
+	for in, want := range map[string]string{
+		"webapp":    "webapp",
+		"my app":    "'my app'",
+		"it's":      `'it'\''s'`,
+		"":          "''",
+		"a/b-c_d.e": "a/b-c_d.e",
+		"$HOME":     "'$HOME'",
+	} {
+		if got := shellArg(in); got != want {
+			t.Errorf("shellArg(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
